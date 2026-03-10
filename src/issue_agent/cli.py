@@ -1,6 +1,6 @@
 from typing import List, Optional
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -8,8 +8,8 @@ import sys
 
 # Constants
 USV_DELIM = '\x1f'
-MISSION_PATH = Path("docs/issues/mission.usv")
-ISSUES_DIR = Path("docs/issues/pending")
+ISSUES_ROOT = Path("docs/issues")
+MISSION_PATH = ISSUES_ROOT / "mission.usv"
 
 class Issue(BaseModel):
     slug: str
@@ -29,13 +29,30 @@ def load_mission() -> List[Issue]:
                 continue
             parts = line.split(USV_DELIM)
             if len(parts) >= 4:
-                issues.append(Issue(
-                    slug=parts[0],
-                    priority=int(parts[1]),
-                    status=parts[2],
-                    branch=parts[3]
-                ))
+                try:
+                    issues.append(Issue(
+                        slug=parts[0],
+                        priority=int(parts[1]),
+                        status=parts[2],
+                        branch=parts[3]
+                    ))
+                except (ValueError, IndexError):
+                    continue
     return issues
+
+def find_issue_file(slug: str) -> Optional[Path]:
+    """Find the issue markdown file by slug in docs/issues/ excluding completed/."""
+    # We check subdirectories like pending/, draft/, active/
+    # but explicitly skip completed/
+    search_dirs = [d for d in ISSUES_ROOT.iterdir() if d.is_dir() and d.name != "completed"]
+    
+    for directory in search_dirs:
+        # Check if the file exists in this directory
+        issue_file = directory / f"{slug}.md"
+        if issue_file.exists():
+            return issue_file
+            
+    return None
 
 def main():
     console = Console()
@@ -48,9 +65,10 @@ def main():
     # Top issue is the first one
     next_issue = issues[0]
     
-    issue_file = ISSUES_DIR / f"{next_issue.slug}.md"
-    if not issue_file.exists():
-        console.print(f"[red]Issue file not found: {issue_file}[/red]")
+    issue_file = find_issue_file(next_issue.slug)
+    if not issue_file:
+        console.print(f"[red]Issue file not found for slug: {next_issue.slug}[/red]")
+        console.print(f"[yellow]Searched in subdirectories of {ISSUES_ROOT} (excluding 'completed/')[/yellow]")
         sys.exit(1)
         
     with issue_file.open("r", encoding="utf-8") as f:
@@ -60,7 +78,9 @@ def main():
     console.print(Panel(
         f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
         f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-        f"[bold blue]BRANCH:[/bold blue] {next_issue.branch}",
+        f"[bold blue]STATUS:[/bold blue] {next_issue.status} | "
+        f"[bold blue]BRANCH:[/bold blue] {next_issue.branch}\n"
+        f"[bold blue]FILE:[/bold blue] {issue_file}",
         title="Issue Agent",
         expand=False
     ))
