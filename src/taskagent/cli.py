@@ -62,9 +62,12 @@ def load_mission(mission_path: Path) -> List[Issue]:
 def save_mission(mission_path: Path, issues: List[Issue]):
     """Save the list of issues back to mission.usv."""
     mission_path.parent.mkdir(parents=True, exist_ok=True)
-    with mission_path.open("w", encoding="utf-8", newline='\r\n') as f:
+    # Using newline='' and explicitly writing \n lets the OS or specific string handle it correctly
+    # or just use \n and let Python's default newline translation (to \r\n on some platforms) work.
+    # To be safe and consistent with previous USV requirements:
+    with mission_path.open("w", encoding="utf-8", newline='\n') as f:
         for issue in issues:
-            f.write(issue.to_usv() + "\r\n")
+            f.write(issue.to_usv() + "\n")
 
 def find_issue_file(issues_root: Path, slug: str) -> Optional[Path]:
     """Find the issue markdown file by slug in issues_root excluding completed/."""

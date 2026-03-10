@@ -11,7 +11,7 @@
           { "name": "slug", "type": "string" },
           { "name": "priority", "type": "integer" },
           { "name": "status", "type": "string" },
-          { "name": "dependency", "type": "string" }
+          { "name": "dependencies", "type": "string" }
         ]
       }
     }
