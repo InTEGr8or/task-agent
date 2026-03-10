@@ -28,6 +28,12 @@ def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path]:
     return issues_root, mission_path
 
 
+def ensure_issues_dir(issues_root: Path):
+    """Ensure the issues directory and its subdirectories exist."""
+    for subdir in ["pending", "draft", "active", "completed"]:
+        (issues_root / subdir).mkdir(parents=True, exist_ok=True)
+
+
 def slugify(text: str) -> str:
     """Convert text to a slug."""
     text = text.lower()
@@ -298,11 +304,7 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
 
 def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
     """Ingest existing markdown files into mission.usv and create datapackage.json."""
-    if not issues_root.exists():
-        console.print(
-            f"[red]Error: Issues directory {issues_root} does not exist.[/red]"
-        )
-        return
+    ensure_issues_dir(issues_root)
 
     issues = []
 
