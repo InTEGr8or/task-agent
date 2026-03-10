@@ -10,6 +10,7 @@ from datetime import datetime
 import re
 import subprocess
 import os
+import json
 
 from taskagent.models.issue import Issue, USV_DELIM
 
@@ -68,9 +69,6 @@ def load_mission(mission_path: Path) -> List[Issue]:
 def save_mission(mission_path: Path, issues: List[Issue]):
     """Save the list of issues back to mission.usv."""
     mission_path.parent.mkdir(parents=True, exist_ok=True)
-    # Using newline='' and explicitly writing \n lets the OS or specific string handle it correctly
-    # or just use \n and let Python's default newline translation (to \r\n on some platforms) work.
-    # To be safe and consistent with previous USV requirements:
     with mission_path.open("w", encoding="utf-8", newline="\n") as f:
         for issue in issues:
             f.write(issue.to_usv() + "\n")
@@ -106,7 +104,7 @@ def get_git_commit() -> str:
 
 
 def get_current_version() -> str:
-    """Read the current version from pyproject.toml."""
+    """Read the current version."""
     try:
         import importlib.metadata
 
@@ -302,6 +300,73 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
     console.print(table)
 
 
+def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
+    """Ingest existing markdown files into mission.usv and create datapackage.json."""
+    if not issues_root.exists():
+        console.print(
+            f"[red]Error: Issues directory {issues_root} does not exist.[/red]"
+        )
+        return
+
+    issues = []
+    priority = 1
+
+    # Status directories to scan
+    for status in ["pending", "draft", "active"]:
+        status_dir = issues_root / status
+        if not status_dir.exists():
+            continue
+
+        for issue_file in sorted(status_dir.glob("*.md")):
+            slug = issue_file.stem
+
+            # Extract dependencies from content
+            deps = []
+            with issue_file.open("r", encoding="utf-8") as f:
+                content = f.read()
+                # Look for **Depends on:** task-a, task-b
+                match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
+                if match:
+                    deps = [d.strip() for d in match.group(1).split(",") if d.strip()]
+
+            issues.append(
+                Issue(slug=slug, priority=priority, status=status, dependencies=deps)
+            )
+            priority += 1
+
+    # Save mission.usv
+    save_mission(mission_path, issues)
+    console.print(
+        f"[bold green]Ingested {len(issues)} issues into {mission_path}[/bold green]"
+    )
+
+    # Create datapackage.json
+    datapackage = {
+        "name": "mission-control",
+        "resources": [
+            {
+                "name": "mission",
+                "path": "mission.usv",
+                "format": "csv",
+                "delimiter": "\u001f",
+                "schema": {
+                    "fields": [
+                        {"name": "slug", "type": "string"},
+                        {"name": "priority", "type": "integer"},
+                        {"name": "status", "type": "string"},
+                        {"name": "dependencies", "type": "string"},
+                    ]
+                },
+            }
+        ],
+    }
+
+    dp_path = issues_root / "datapackage.json"
+    with dp_path.open("w", encoding="utf-8") as f:
+        json.dump(datapackage, f, indent=2)
+    console.print(f"[bold green]Created {dp_path}[/bold green]")
+
+
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
     """Show version, promote it, or tag it."""
     try:
@@ -340,7 +405,6 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
                 check=True,
             )
 
-            # Sync uv.lock with the new version
             console.print("[blue]Syncing uv.lock...[/blue]")
             subprocess.run(["uv", "lock"], check=True)
 
@@ -371,6 +435,11 @@ def main():
 
     # list
     subparsers.add_parser("list", help="List all issues")
+
+    # ingest
+    subparsers.add_parser(
+        "ingest", help="Ingest existing markdown files into mission.usv"
+    )
 
     # done
     done_parser = subparsers.add_parser("done", help="Mark an issue as done")
@@ -413,6 +482,8 @@ def main():
         cmd_next(console, issues_root, mission_path)
     elif args.command == "list":
         cmd_list(console, issues_root, mission_path)
+    elif args.command == "ingest":
+        cmd_ingest(console, issues_root, mission_path)
     elif args.command == "done":
         cmd_done(console, issues_root, mission_path, args.slug)
     elif args.command == "new":
