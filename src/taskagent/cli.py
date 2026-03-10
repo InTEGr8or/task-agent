@@ -1,6 +1,5 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional
 from pathlib import Path
-from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -10,19 +9,11 @@ import argparse
 from datetime import datetime
 import re
 
+from taskagent.models.issue import Issue, USV_DELIM
+
 # Constants
-USV_DELIM = '\x1f'
 ISSUES_ROOT = Path("docs/issues")
 MISSION_PATH = ISSUES_ROOT / "mission.usv"
-
-class Issue(BaseModel):
-    slug: str
-    priority: int
-    status: str
-    branch: str
-
-    def to_usv(self) -> str:
-        return f"{self.slug}{USV_DELIM}{self.priority}{USV_DELIM}{self.status}{USV_DELIM}{self.branch}"
 
 def slugify(text: str) -> str:
     """Convert text to a slug."""
@@ -42,13 +33,12 @@ def load_mission() -> List[Issue]:
             if not line:
                 continue
             parts = line.split(USV_DELIM)
-            if len(parts) >= 4:
+            if len(parts) >= 3:
                 try:
                     issues.append(Issue(
                         slug=parts[0],
                         priority=int(parts[1]),
-                        status=parts[2],
-                        branch=parts[3]
+                        status=parts[2]
                     ))
                 except (ValueError, IndexError):
                     continue
@@ -91,8 +81,7 @@ def cmd_next(console: Console):
     console.print(Panel(
         f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
         f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-        f"[bold blue]STATUS:[/bold blue] {next_issue.status} | "
-        f"[bold blue]BRANCH:[/bold blue] {next_issue.branch}\n"
+        f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
         f"[bold blue]FILE:[/bold blue] {issue_file}",
         title="Task Agent",
         expand=False
@@ -162,8 +151,7 @@ def cmd_new(console: Console, title: str, body: str, draft: bool):
     new_issue = Issue(
         slug=slug,
         priority=new_priority,
-        status=status,
-        branch=f"task/{slug}"
+        status=status
     )
     
     issues.append(new_issue)
@@ -181,14 +169,12 @@ def cmd_list(console: Console):
         return
 
     # Sort: pending first, then by priority
-    # status == "pending" will be False (0) or True (1), so we sort by status != "pending"
     sorted_issues = sorted(issues, key=lambda x: (x.status != "pending", x.priority))
 
     table = Table(title="Task Queue")
     table.add_column("Priority", justify="right", style="cyan")
     table.add_column("Status", style="magenta")
     table.add_column("Slug", style="green")
-    table.add_column("Branch", style="blue")
     table.add_column("Location", style="dim")
 
     for issue in sorted_issues:
@@ -208,7 +194,6 @@ def cmd_list(console: Console):
             str(issue.priority),
             status_str,
             issue.slug,
-            issue.branch,
             location
         )
 

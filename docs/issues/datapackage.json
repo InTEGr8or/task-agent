@@ -10,8 +10,7 @@
         "fields": [
           { "name": "slug", "type": "string" },
           { "name": "priority", "type": "integer" },
-          { "name": "status", "type": "string" },
-          { "name": "branch", "type": "string" }
+          { "name": "status", "type": "string" }
         ]
       }
     }
