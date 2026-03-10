@@ -11,6 +11,7 @@ import re
 import subprocess
 import os
 import json
+import importlib.metadata
 
 from taskagent.models.issue import Issue, USV_DELIM
 
@@ -111,14 +112,38 @@ def get_git_commit() -> str:
         return "unknown"
 
 
-def get_current_version() -> str:
-    """Read the current version."""
+def get_tool_version() -> str:
+    """Read the task-agent tool version."""
     try:
-        import importlib.metadata
-
         return importlib.metadata.version("task-agent")
     except Exception:
         return "unknown"
+
+
+def get_project_version() -> Tuple[str, Optional[str]]:
+    """Read the current project version from pyproject.toml or package.json."""
+    # Check pyproject.toml
+    if Path("pyproject.toml").exists():
+        try:
+            with open("pyproject.toml", "r") as f:
+                content = f.read()
+                match = re.search(r'version\s*=\s*"(.*?)"', content)
+                if match:
+                    return match.group(1), "pyproject.toml"
+        except Exception:
+            pass
+
+    # Check package.json
+    if Path("package.json").exists():
+        try:
+            with open("package.json", "r") as f:
+                data = json.load(f)
+                if "version" in data:
+                    return data["version"], "package.json"
+        except Exception:
+            pass
+
+    return "unknown", None
 
 
 def cmd_next(console: Console, issues_root: Path, mission_path: Path):
@@ -211,11 +236,16 @@ def cmd_done(
         f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]"
     )
 
-    console.print("[blue]Auto-promoting patch version...[/blue]")
-    try:
-        cmd_version(console, promote="patch")
-    except Exception as e:
-        console.print(f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]")
+    # Auto-promote patch version if we are in a repo that supports it
+    ver, source = get_project_version()
+    if source == "pyproject.toml" and Path("pyproject.toml").exists():
+        console.print("[blue]Auto-promoting project patch version...[/blue]")
+        try:
+            cmd_version(console, promote="patch")
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]"
+            )
 
 
 def cmd_new(
@@ -303,7 +333,7 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
 
 
 def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
-    """Ingest existing markdown files into mission.usv: preserve order, add new, remove missing."""
+    """Ingest existing markdown files into mission.usv."""
     ensure_issues_dir(issues_root)
 
     # 1. Load existing issues (preserving order)
@@ -370,10 +400,16 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
 
 
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
-    """Show version, promote it, or tag it."""
+    """Show project version, promote it, or tag it."""
     try:
+        v, source = get_project_version()
+
         if tag:
-            v = get_current_version()
+            if v == "unknown":
+                console.print(
+                    "[red]Error: Could not determine project version to tag.[/red]"
+                )
+                return
             tag_name = f"v{v}"
             console.print(f"[blue]Tagging current commit as {tag_name}...[/blue]")
             subprocess.run(["git", "tag", tag_name], check=True)
@@ -388,36 +424,57 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
                 return
 
             console.print(f"[blue]Promoting {promote} version...[/blue]")
-            if not Path("pyproject.toml").exists():
+
+            if source == "pyproject.toml":
+                # Check for bump-my-version in pyproject.toml
+                with open("pyproject.toml", "r") as f:
+                    if "tool.bumpversion" in f.read():
+                        subprocess.run(
+                            [
+                                "uv",
+                                "run",
+                                "bump-my-version",
+                                "bump",
+                                promote,
+                                "--no-commit",
+                                "--no-tag",
+                            ],
+                            check=True,
+                        )
+                        # Sync uv.lock
+                        if Path("uv.lock").exists():
+                            console.print("[blue]Syncing uv.lock...[/blue]")
+                            subprocess.run(["uv", "lock"], check=True)
+                    else:
+                        console.print(
+                            "[yellow]Warning: pyproject.toml found but [tool.bumpversion] is not configured.[/yellow]"
+                        )
+                        return
+            elif source == "package.json":
+                # Use npm version
+                subprocess.run(
+                    ["npm", "version", promote, "--no-git-tag-version"], check=True
+                )
+            else:
                 console.print(
-                    "[red]Error: pyproject.toml not found. Version promotion only works within the task-agent repository.[/red]"
+                    "[red]Error: Could not find a version file to promote (pyproject.toml or package.json).[/red]"
                 )
                 return
 
-            subprocess.run(
-                [
-                    "uv",
-                    "run",
-                    "bump-my-version",
-                    "bump",
-                    promote,
-                    "--no-commit",
-                    "--no-tag",
-                ],
-                check=True,
-            )
-
-            console.print("[blue]Syncing uv.lock...[/blue]")
-            subprocess.run(["uv", "lock"], check=True)
-
-            new_v = get_current_version()
+            new_v, _ = get_project_version()
             console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
         else:
-            v = get_current_version()
-            console.print(f"[bold blue]Current Version:[/bold blue] [cyan]{v}[/cyan]")
-            console.print("\nSubcommands:")
-            console.print("  [bold]ta version promote [major|minor|patch][/bold]")
-            console.print("  [bold]ta version tag[/bold]")
+            if source:
+                console.print(
+                    f"[bold blue]Project Version ({source}):[/bold blue] [cyan]{v}[/cyan]"
+                )
+                console.print("\nSubcommands:")
+                console.print("  [bold]ta version promote [major|minor|patch][/bold]")
+                console.print("  [bold]ta version tag[/bold]")
+            else:
+                console.print(
+                    "[yellow]No project version file found (pyproject.toml or package.json).[/yellow]"
+                )
 
     except Exception as e:
         console.print(f"[red]Error managing version: {e}[/red]")
@@ -425,6 +482,9 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
 
 def main():
     parser = argparse.ArgumentParser(description="Task Agent CLI")
+    parser.add_argument(
+        "-V", "--version", action="store_true", help="Show task-agent tool version"
+    )
     parser.add_argument(
         "-C",
         "--config-dir",
@@ -463,7 +523,9 @@ def main():
     )
 
     # version
-    version_parser = subparsers.add_parser("version", help="Show or promote version")
+    version_parser = subparsers.add_parser(
+        "version", help="Show or promote project version"
+    )
     version_subparsers = version_parser.add_subparsers(dest="version_command")
     promote_parser = version_subparsers.add_parser(
         "promote", help="Promote semantic version"
@@ -477,6 +539,10 @@ def main():
 
     args = parser.parse_args()
     console = Console()
+
+    if args.version:
+        console.print(f"task-agent version {get_tool_version()}")
+        return
 
     issues_root, mission_path = get_config_paths(args.config_dir)
 
