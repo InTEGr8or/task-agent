@@ -28,6 +28,7 @@ dev = [
     "mypy>=1.15.0",
     "ruff>=0.9.7",
     "bump-my-version==1.2.7",
+    "pre-commit>=4.5.1",
 ]
 
 [tool.bumpversion]
