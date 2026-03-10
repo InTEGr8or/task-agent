@@ -12,6 +12,7 @@ import subprocess
 import os
 import json
 import importlib.metadata
+import shutil
 
 from taskagent.models.issue import Issue, USV_DELIM
 
@@ -44,7 +45,9 @@ def slugify(text: str) -> str:
 
 
 def find_issue_file(issues_root: Path, slug: str) -> Optional[Path]:
-    """Find the issue markdown file by slug in issues_root excluding completed/."""
+    """Find the issue markdown file by slug.
+    Checks for slug.md OR slug/README.md.
+    """
     if not issues_root.exists():
         return None
 
@@ -53,9 +56,15 @@ def find_issue_file(issues_root: Path, slug: str) -> Optional[Path]:
     ]
 
     for directory in search_dirs:
+        # 1. Check for file-based issue: slug.md
         issue_file = directory / f"{slug}.md"
         if issue_file.exists():
             return issue_file
+
+        # 2. Check for directory-based issue: slug/README.md
+        issue_dir_file = directory / slug / "README.md"
+        if issue_dir_file.exists():
+            return issue_dir_file
 
     return None
 
@@ -82,7 +91,11 @@ def load_mission(issues_root: Path, mission_path: Path) -> List[Issue]:
                     issue_file = find_issue_file(issues_root, slug)
                     status = "unknown"
                     if issue_file:
-                        status = issue_file.parent.name
+                        # If it's slug/README.md, status is parent of parent
+                        if issue_file.name == "README.md":
+                            status = issue_file.parent.parent.name
+                        else:
+                            status = issue_file.parent.name
 
                     issues.append(
                         Issue(slug=slug, dependencies=deps, priority=i, status=status)
@@ -209,15 +222,21 @@ def cmd_done(
         console.print(f"[red]Issue file not found for slug: {target_issue.slug}[/red]")
         sys.exit(1)
 
+    # Detect if directory-based
+    is_dir_based = issue_file.name == "README.md"
+    source_to_move = issue_file.parent if is_dir_based else issue_file
+
     commit_hash = get_git_commit()
     year = datetime.now().year
     completed_dir = issues_root / "completed" / str(year)
     completed_dir.mkdir(parents=True, exist_ok=True)
 
-    dest_path = completed_dir / f"{target_issue.slug}.md"
+    dest_path = completed_dir / source_to_move.name
 
-    console.print(f"[green]Moving {issue_file} to {dest_path}...[/green]")
+    console.print(f"[green]Moving {source_to_move} to {dest_path}...[/green]")
 
+    # If it's a file, we can append the commit hash easily.
+    # If it's a directory, we append it to the README.md.
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
 
@@ -225,10 +244,18 @@ def cmd_done(
         content += "\n"
     content += f"\n---\n**Completed in commit:** `{commit_hash}`\n"
 
-    with dest_path.open("w", encoding="utf-8") as f:
-        f.write(content)
-
-    issue_file.unlink()
+    if is_dir_based:
+        # Move directory then write updated README
+        if dest_path.exists():
+            shutil.rmtree(dest_path)
+        shutil.move(str(source_to_move), str(dest_path))
+        with (dest_path / "README.md").open("w", encoding="utf-8") as f:
+            f.write(content)
+    else:
+        # Just write to destination and unlink source
+        with dest_path.open("w", encoding="utf-8") as f:
+            f.write(content)
+        issue_file.unlink()
 
     new_issues = [i for i in issues if i.slug != target_issue.slug]
     save_mission(mission_path, new_issues)
@@ -256,6 +283,7 @@ def cmd_new(
     body: str,
     draft: bool,
     depends_on: Optional[str] = None,
+    as_dir: bool = False,
 ):
     """Create a new issue."""
     slug = slugify(title)
@@ -263,7 +291,13 @@ def cmd_new(
     target_dir = issues_root / status
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    issue_file = target_dir / f"{slug}.md"
+    if as_dir:
+        issue_container = target_dir / slug
+        issue_container.mkdir(parents=True, exist_ok=True)
+        issue_file = issue_container / "README.md"
+    else:
+        issue_file = target_dir / f"{slug}.md"
+
     if issue_file.exists():
         console.print(f"[red]Error: Issue file already exists: {issue_file}[/red]")
         sys.exit(1)
@@ -350,20 +384,21 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
         if not status_dir.exists():
             continue
 
+        # File-based
         for issue_file in sorted(status_dir.glob("*.md")):
             slug = issue_file.stem
             if slug not in existing_slugs:
-                # Extract dependencies from content
-                deps = []
-                with issue_file.open("r", encoding="utf-8") as f:
-                    content = f.read()
-                    match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
-                    if match:
-                        deps = [
-                            d.strip() for d in match.group(1).split(",") if d.strip()
-                        ]
-
+                deps = extract_deps(issue_file)
                 new_issues.append(Issue(slug=slug, dependencies=deps, status=status))
+                existing_slugs.add(slug)
+
+        # Directory-based
+        for readme_file in sorted(status_dir.glob("*/README.md")):
+            slug = readme_file.parent.name
+            if slug not in existing_slugs:
+                deps = extract_deps(readme_file)
+                new_issues.append(Issue(slug=slug, dependencies=deps, status=status))
+                existing_slugs.add(slug)
 
     # 4. Combine: Existing ordered items + newly found items at the end
     final_issues = present_issues + new_issues
@@ -397,6 +432,19 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
     with dp_path.open("w", encoding="utf-8") as f:
         json.dump(datapackage, f, indent=2)
     console.print(f"[bold green]Updated {dp_path}[/bold green]")
+
+
+def extract_deps(file_path: Path) -> List[str]:
+    """Helper to extract dependencies from a markdown file."""
+    try:
+        with file_path.open("r", encoding="utf-8") as f:
+            content = f.read()
+            match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
+            if match:
+                return [d.strip() for d in match.group(1).split(",") if d.strip()]
+    except Exception:
+        pass
+    return []
 
 
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
@@ -519,6 +567,9 @@ def main():
         "-d", "--draft", action="store_true", help="Create as a draft"
     )
     new_parser.add_argument(
+        "--dir", action="store_true", help="Create as a directory-based issue"
+    )
+    new_parser.add_argument(
         "--depends-on", help="Comma separated list of issue slugs this issue depends on"
     )
 
@@ -563,6 +614,7 @@ def main():
             args.body,
             args.draft,
             args.depends_on,
+            args.dir,
         )
     elif args.command == "version":
         if args.version_command == "promote":
