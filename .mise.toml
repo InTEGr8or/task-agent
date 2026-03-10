@@ -1,0 +1,14 @@
+[env]
+_.path = [".venv/bin"]
+
+[tasks.next]
+run = "ta next"
+description = "Show the top issue"
+
+[tasks.done]
+run = "ta done"
+description = "Mark the current issue as done"
+
+[tasks.new]
+run = "ta new"
+description = "Create a new issue"

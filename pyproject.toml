@@ -1,5 +1,5 @@
 [project]
-name = "issue-agent"
+name = "taskagent"
 version = "0.1.0"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ia = "issue_agent.cli:main"
+ta = "taskagent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

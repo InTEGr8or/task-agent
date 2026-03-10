@@ -93,7 +93,7 @@ def cmd_next(console: Console):
         f"[bold blue]STATUS:[/bold blue] {next_issue.status} | "
         f"[bold blue]BRANCH:[/bold blue] {next_issue.branch}\n"
         f"[bold blue]FILE:[/bold blue] {issue_file}",
-        title="Issue Agent",
+        title="Task Agent",
         expand=False
     ))
     
@@ -171,7 +171,7 @@ def cmd_new(console: Console, title: str, body: str, draft: bool):
     console.print(f"Priority: {new_priority}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Issue Agent CLI")
+    parser = argparse.ArgumentParser(description="Task Agent CLI")
     subparsers = parser.add_subparsers(dest="command")
 
     # next
