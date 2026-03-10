@@ -13,6 +13,7 @@ import os
 
 from taskagent.models.issue import Issue, USV_DELIM
 
+
 def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path]:
     """Get the issues root and mission path based on config or environment."""
     if config_dir:
@@ -21,21 +22,23 @@ def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path]:
         # Check environment variable, then default to docs/issues
         env_dir = os.environ.get("TA_CONFIG_DIR")
         issues_root = Path(env_dir) if env_dir else Path("docs/issues")
-        
+
     mission_path = issues_root / "mission.usv"
     return issues_root, mission_path
+
 
 def slugify(text: str) -> str:
     """Convert text to a slug."""
     text = text.lower()
-    text = re.sub(r'[^\w\s-]', '', text)
-    text = re.sub(r'[\s_-]+', '-', text)
-    return text.strip('-')
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_-]+", "-", text)
+    return text.strip("-")
+
 
 def load_mission(mission_path: Path) -> List[Issue]:
     if not mission_path.exists():
         return []
-    
+
     issues = []
     with mission_path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -48,16 +51,19 @@ def load_mission(mission_path: Path) -> List[Issue]:
                     deps = []
                     if len(parts) >= 4 and parts[3]:
                         deps = [d.strip() for d in parts[3].split(",") if d.strip()]
-                        
-                    issues.append(Issue(
-                        slug=parts[0],
-                        priority=int(parts[1]),
-                        status=parts[2],
-                        dependencies=deps
-                    ))
+
+                    issues.append(
+                        Issue(
+                            slug=parts[0],
+                            priority=int(parts[1]),
+                            status=parts[2],
+                            dependencies=deps,
+                        )
+                    )
                 except (ValueError, IndexError):
                     continue
     return issues
+
 
 def save_mission(mission_path: Path, issues: List[Issue]):
     """Save the list of issues back to mission.usv."""
@@ -65,42 +71,49 @@ def save_mission(mission_path: Path, issues: List[Issue]):
     # Using newline='' and explicitly writing \n lets the OS or specific string handle it correctly
     # or just use \n and let Python's default newline translation (to \r\n on some platforms) work.
     # To be safe and consistent with previous USV requirements:
-    with mission_path.open("w", encoding="utf-8", newline='\n') as f:
+    with mission_path.open("w", encoding="utf-8", newline="\n") as f:
         for issue in issues:
             f.write(issue.to_usv() + "\n")
+
 
 def find_issue_file(issues_root: Path, slug: str) -> Optional[Path]:
     """Find the issue markdown file by slug in issues_root excluding completed/."""
     if not issues_root.exists():
         return None
-        
-    search_dirs = [d for d in issues_root.iterdir() if d.is_dir() and d.name != "completed"]
-    
+
+    search_dirs = [
+        d for d in issues_root.iterdir() if d.is_dir() and d.name != "completed"
+    ]
+
     for directory in search_dirs:
         issue_file = directory / f"{slug}.md"
         if issue_file.exists():
             return issue_file
-            
+
     return None
+
 
 def get_git_commit() -> str:
     """Get the short git commit hash."""
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], 
+            ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
-            text=True
+            text=True,
         ).strip()
     except subprocess.CalledProcessError:
         return "unknown"
+
 
 def get_current_version() -> str:
     """Read the current version from pyproject.toml."""
     try:
         import importlib.metadata
+
         return importlib.metadata.version("task-agent")
     except Exception:
         return "unknown"
+
 
 def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     """Show the top issue."""
@@ -108,35 +121,40 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     if not issues:
         console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
-        
+
     next_issue = issues[0]
     issue_file = find_issue_file(issues_root, next_issue.slug)
-    
+
     if not issue_file:
         console.print(f"[red]Issue file not found for slug: {next_issue.slug}[/red]")
         sys.exit(1)
-        
+
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
-        
+
     deps_info = ""
     if next_issue.dependencies:
         deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
 
-    console.print(Panel(
-        f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
-        f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-        f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
-        f"{deps_info}"
-        f"[bold blue]FILE:[/bold blue] {issue_file}",
-        title="Task Agent",
-        expand=False
-    ))
-    
+    console.print(
+        Panel(
+            f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
+            f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
+            f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
+            f"{deps_info}"
+            f"[bold blue]FILE:[/bold blue] {issue_file}",
+            title="Task Agent",
+            expand=False,
+        )
+    )
+
     md = Markdown(content)
     console.print(md)
 
-def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Optional[str] = None):
+
+def cmd_done(
+    console: Console, issues_root: Path, mission_path: Path, slug: Optional[str] = None
+):
     """Mark an issue as done."""
     issues = load_mission(mission_path)
     if not issues:
@@ -150,7 +168,9 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
 
     if not target_issue:
         if slug:
-            console.print(f"[red]Issue with slug '{slug}' not found in mission.usv[/red]")
+            console.print(
+                f"[red]Issue with slug '{slug}' not found in mission.usv[/red]"
+            )
         sys.exit(1)
 
     issue_file = find_issue_file(issues_root, target_issue.slug)
@@ -162,26 +182,28 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
     year = datetime.now().year
     completed_dir = issues_root / "completed" / str(year)
     completed_dir.mkdir(parents=True, exist_ok=True)
-    
+
     dest_path = completed_dir / f"{target_issue.slug}.md"
-    
+
     console.print(f"[green]Moving {issue_file} to {dest_path}...[/green]")
-    
+
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
-    
+
     if not content.endswith("\n"):
         content += "\n"
     content += f"\n---\n**Completed in commit:** `{commit_hash}`\n"
-    
+
     with dest_path.open("w", encoding="utf-8") as f:
         f.write(content)
-        
+
     issue_file.unlink()
 
     new_issues = [i for i in issues if i.slug != target_issue.slug]
     save_mission(mission_path, new_issues)
-    console.print(f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]")
+    console.print(
+        f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]"
+    )
 
     console.print("[blue]Auto-promoting patch version...[/blue]")
     try:
@@ -189,18 +211,27 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
     except Exception as e:
         console.print(f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]")
 
-def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str, body: str, draft: bool, depends_on: Optional[str] = None):
+
+def cmd_new(
+    console: Console,
+    issues_root: Path,
+    mission_path: Path,
+    title: str,
+    body: str,
+    draft: bool,
+    depends_on: Optional[str] = None,
+):
     """Create a new issue."""
     slug = slugify(title)
     status = "draft" if draft else "pending"
     target_dir = issues_root / status
     target_dir.mkdir(parents=True, exist_ok=True)
-    
+
     issue_file = target_dir / f"{slug}.md"
     if issue_file.exists():
         console.print(f"[red]Error: Issue file already exists: {issue_file}[/red]")
         sys.exit(1)
-        
+
     deps = []
     if depends_on:
         deps = [d.strip() for d in depends_on.split(",") if d.strip()]
@@ -211,28 +242,26 @@ def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str,
         if deps:
             f.write(f"**Depends on:** {', '.join(deps)}\n\n")
         f.write(f"{body}\n")
-    
+
     # Update mission.usv
     issues = load_mission(mission_path)
-    
+
     max_priority = max([i.priority for i in issues], default=0)
     new_priority = max_priority + 1
-    
+
     new_issue = Issue(
-        slug=slug,
-        priority=new_priority,
-        status=status,
-        dependencies=deps
+        slug=slug, priority=new_priority, status=status, dependencies=deps
     )
-    
+
     issues.append(new_issue)
     save_mission(mission_path, issues)
-    
+
     console.print(f"[bold green]Created new issue: {slug}[/bold green]")
     console.print(f"File: {issue_file}")
     console.print(f"Priority: {new_priority}")
     if deps:
         console.print(f"Depends on: {', '.join(deps)}")
+
 
 def cmd_list(console: Console, issues_root: Path, mission_path: Path):
     """List all issues in mission.usv, sorted by status (pending first) then priority."""
@@ -253,7 +282,7 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
     for issue in sorted_issues:
         issue_file = find_issue_file(issues_root, issue.slug)
         location = str(issue_file) if issue_file else "[red]MISSING[/red]"
-        
+
         status_str = issue.status
         if status_str == "pending":
             status_str = f"[bold yellow]{status_str}[/bold yellow]"
@@ -267,10 +296,11 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
             status_str,
             issue.slug,
             ", ".join(issue.dependencies),
-            location
+            location,
         )
 
     console.print(table)
+
 
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
     """Show version, promote it, or tag it."""
@@ -285,16 +315,31 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
 
         if promote:
             if promote not in ["major", "minor", "patch"]:
-                console.print(f"[red]Invalid version part: {promote}. Use major, minor, or patch.[/red]")
-                return
-            
-            console.print(f"[blue]Promoting {promote} version...[/blue]")
-            if not Path("pyproject.toml").exists():
-                console.print("[red]Error: pyproject.toml not found. Version promotion only works within the task-agent repository.[/red]")
+                console.print(
+                    f"[red]Invalid version part: {promote}. Use major, minor, or patch.[/red]"
+                )
                 return
 
-            subprocess.run(["uv", "run", "bump-my-version", "bump", promote, "--no-commit", "--no-tag"], check=True)
-            
+            console.print(f"[blue]Promoting {promote} version...[/blue]")
+            if not Path("pyproject.toml").exists():
+                console.print(
+                    "[red]Error: pyproject.toml not found. Version promotion only works within the task-agent repository.[/red]"
+                )
+                return
+
+            subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "bump-my-version",
+                    "bump",
+                    promote,
+                    "--no-commit",
+                    "--no-tag",
+                ],
+                check=True,
+            )
+
             new_v = get_current_version()
             console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
         else:
@@ -307,38 +352,57 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
     except Exception as e:
         console.print(f"[red]Error managing version: {e}[/red]")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Task Agent CLI")
-    parser.add_argument("-C", "--config-dir", help="Path to the issues directory (default: docs/issues or TA_CONFIG_DIR)")
+    parser.add_argument(
+        "-C",
+        "--config-dir",
+        help="Path to the issues directory (default: docs/issues or TA_CONFIG_DIR)",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     # next
     subparsers.add_parser("next", help="Show the top issue")
-    
+
     # list
     subparsers.add_parser("list", help="List all issues")
-    
+
     # done
     done_parser = subparsers.add_parser("done", help="Mark an issue as done")
-    done_parser.add_argument("slug", nargs="?", help="Slug of the issue to mark as done (defaults to top issue)")
+    done_parser.add_argument(
+        "slug",
+        nargs="?",
+        help="Slug of the issue to mark as done (defaults to top issue)",
+    )
 
     # new
     new_parser = subparsers.add_parser("new", help="Create a new issue")
     new_parser.add_argument("-t", "--title", required=True, help="Title of the issue")
     new_parser.add_argument("-b", "--body", default="", help="Body of the issue")
-    new_parser.add_argument("-d", "--draft", action="store_true", help="Create as a draft")
-    new_parser.add_argument("--depends-on", help="Comma separated list of issue slugs this issue depends on")
+    new_parser.add_argument(
+        "-d", "--draft", action="store_true", help="Create as a draft"
+    )
+    new_parser.add_argument(
+        "--depends-on", help="Comma separated list of issue slugs this issue depends on"
+    )
 
     # version
     version_parser = subparsers.add_parser("version", help="Show or promote version")
     version_subparsers = version_parser.add_subparsers(dest="version_command")
-    promote_parser = version_subparsers.add_parser("promote", help="Promote semantic version")
-    promote_parser.add_argument("part", choices=["major", "minor", "patch"], help="Part of the version to promote")
+    promote_parser = version_subparsers.add_parser(
+        "promote", help="Promote semantic version"
+    )
+    promote_parser.add_argument(
+        "part",
+        choices=["major", "minor", "patch"],
+        help="Part of the version to promote",
+    )
     version_subparsers.add_parser("tag", help="Tag current commit with current version")
 
     args = parser.parse_args()
     console = Console()
-    
+
     issues_root, mission_path = get_config_paths(args.config_dir)
 
     if args.command == "next":
@@ -348,7 +412,15 @@ def main():
     elif args.command == "done":
         cmd_done(console, issues_root, mission_path, args.slug)
     elif args.command == "new":
-        cmd_new(console, issues_root, mission_path, args.title, args.body, args.draft, args.depends_on)
+        cmd_new(
+            console,
+            issues_root,
+            mission_path,
+            args.title,
+            args.body,
+            args.draft,
+            args.depends_on,
+        )
     elif args.command == "version":
         if args.version_command == "promote":
             cmd_version(console, args.part)
@@ -358,6 +430,7 @@ def main():
             cmd_version(console)
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()
