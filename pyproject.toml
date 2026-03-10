@@ -1,0 +1,23 @@
+[project]
+name = "issue-agent"
+version = "0.1.0"
+description = "A prioritized, file-based task queue for autonomous agentic workers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.10.6",
+    "rich>=13.9.4",
+]
+
+[project.scripts]
+ia = "issue_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15.0",
+    "ruff>=0.9.7",
+]
