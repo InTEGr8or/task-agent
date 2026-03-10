@@ -45,10 +45,15 @@ def load_mission(mission_path: Path) -> List[Issue]:
             parts = line.split(USV_DELIM)
             if len(parts) >= 3:
                 try:
+                    deps = []
+                    if len(parts) >= 4 and parts[3]:
+                        deps = [d.strip() for d in parts[3].split(",") if d.strip()]
+                        
                     issues.append(Issue(
                         slug=parts[0],
                         priority=int(parts[1]),
-                        status=parts[2]
+                        status=parts[2],
+                        dependencies=deps
                     ))
                 except (ValueError, IndexError):
                     continue
@@ -89,10 +94,6 @@ def get_git_commit() -> str:
 def get_current_version() -> str:
     """Read the current version from pyproject.toml."""
     try:
-        # This will only work if running from the task-agent repo itself
-        # or if we bundle the version in the package.
-        # For a tool installed via uv, we might need a different approach.
-        # But for now, let's just use a hardcoded fallback.
         import importlib.metadata
         return importlib.metadata.version("task-agent")
     except Exception:
@@ -115,10 +116,15 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
         
+    deps_info = ""
+    if next_issue.dependencies:
+        deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
+
     console.print(Panel(
         f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
         f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
         f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
+        f"{deps_info}"
         f"[bold blue]FILE:[/bold blue] {issue_file}",
         title="Task Agent",
         expand=False
@@ -149,10 +155,7 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
         console.print(f"[red]Issue file not found for slug: {target_issue.slug}[/red]")
         sys.exit(1)
 
-    # Get git commit hash
     commit_hash = get_git_commit()
-
-    # Move to completed/{year}/
     year = datetime.now().year
     completed_dir = issues_root / "completed" / str(year)
     completed_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +164,6 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
     
     console.print(f"[green]Moving {issue_file} to {dest_path}...[/green]")
     
-    # Read, append commit hash, and write to destination
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
     
@@ -172,21 +174,19 @@ def cmd_done(console: Console, issues_root: Path, mission_path: Path, slug: Opti
     with dest_path.open("w", encoding="utf-8") as f:
         f.write(content)
         
-    # Remove original file
     issue_file.unlink()
 
     new_issues = [i for i in issues if i.slug != target_issue.slug]
     save_mission(mission_path, new_issues)
     console.print(f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]")
 
-    # Auto-promote patch version
     console.print("[blue]Auto-promoting patch version...[/blue]")
     try:
         cmd_version(console, promote="patch")
     except Exception as e:
         console.print(f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]")
 
-def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str, body: str, draft: bool):
+def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str, body: str, draft: bool, depends_on: Optional[str] = None):
     """Create a new issue."""
     slug = slugify(title)
     status = "draft" if draft else "pending"
@@ -198,21 +198,28 @@ def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str,
         console.print(f"[red]Error: Issue file already exists: {issue_file}[/red]")
         sys.exit(1)
         
+    deps = []
+    if depends_on:
+        deps = [d.strip() for d in depends_on.split(",") if d.strip()]
+
     # Write the markdown file
     with issue_file.open("w", encoding="utf-8") as f:
-        f.write(f"# {title}\n\n{body}\n")
+        f.write(f"# {title}\n\n")
+        if deps:
+            f.write(f"**Depends on:** {', '.join(deps)}\n\n")
+        f.write(f"{body}\n")
     
     # Update mission.usv
     issues = load_mission(mission_path)
     
-    # Determine priority: max + 1
     max_priority = max([i.priority for i in issues], default=0)
     new_priority = max_priority + 1
     
     new_issue = Issue(
         slug=slug,
         priority=new_priority,
-        status=status
+        status=status,
+        dependencies=deps
     )
     
     issues.append(new_issue)
@@ -221,6 +228,8 @@ def cmd_new(console: Console, issues_root: Path, mission_path: Path, title: str,
     console.print(f"[bold green]Created new issue: {slug}[/bold green]")
     console.print(f"File: {issue_file}")
     console.print(f"Priority: {new_priority}")
+    if deps:
+        console.print(f"Depends on: {', '.join(deps)}")
 
 def cmd_list(console: Console, issues_root: Path, mission_path: Path):
     """List all issues in mission.usv, sorted by status (pending first) then priority."""
@@ -229,20 +238,19 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
         console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
 
-    # Sort: pending first, then by priority
     sorted_issues = sorted(issues, key=lambda x: (x.status != "pending", x.priority))
 
     table = Table(title="Task Queue")
     table.add_column("Priority", justify="right", style="cyan")
     table.add_column("Status", style="magenta")
     table.add_column("Slug", style="green")
+    table.add_column("Depends On", style="yellow")
     table.add_column("Location", style="dim")
 
     for issue in sorted_issues:
         issue_file = find_issue_file(issues_root, issue.slug)
         location = str(issue_file) if issue_file else "[red]MISSING[/red]"
         
-        # Color code status
         status_str = issue.status
         if status_str == "pending":
             status_str = f"[bold yellow]{status_str}[/bold yellow]"
@@ -255,6 +263,7 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
             str(issue.priority),
             status_str,
             issue.slug,
+            ", ".join(issue.dependencies),
             location
         )
 
@@ -272,13 +281,11 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
             return
 
         if promote:
-            # Validate promote part
             if promote not in ["major", "minor", "patch"]:
                 console.print(f"[red]Invalid version part: {promote}. Use major, minor, or patch.[/red]")
                 return
             
             console.print(f"[blue]Promoting {promote} version...[/blue]")
-            # Check if pyproject.toml exists (we only promote if in the repo)
             if not Path("pyproject.toml").exists():
                 console.print("[red]Error: pyproject.toml not found. Version promotion only works within the task-agent repository.[/red]")
                 return
@@ -317,6 +324,7 @@ def main():
     new_parser.add_argument("-t", "--title", required=True, help="Title of the issue")
     new_parser.add_argument("-b", "--body", default="", help="Body of the issue")
     new_parser.add_argument("-d", "--draft", action="store_true", help="Create as a draft")
+    new_parser.add_argument("--depends-on", help="Comma separated list of issue slugs this issue depends on")
 
     # version
     version_parser = subparsers.add_parser("version", help="Show or promote version")
@@ -337,7 +345,7 @@ def main():
     elif args.command == "done":
         cmd_done(console, issues_root, mission_path, args.slug)
     elif args.command == "new":
-        cmd_new(console, issues_root, mission_path, args.title, args.body, args.draft)
+        cmd_new(console, issues_root, mission_path, args.title, args.body, args.draft, args.depends_on)
     elif args.command == "version":
         if args.version_command == "promote":
             cmd_version(console, args.part)
