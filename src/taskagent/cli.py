@@ -303,12 +303,18 @@ def cmd_list(console: Console, issues_root: Path, mission_path: Path):
 
 
 def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
-    """Ingest existing markdown files into mission.usv and create datapackage.json."""
+    """Ingest existing markdown files into mission.usv: preserve order, add new, remove missing."""
     ensure_issues_dir(issues_root)
 
-    issues = []
+    # 1. Load existing issues (preserving order)
+    existing_issues = load_mission(issues_root, mission_path)
+    existing_slugs = {i.slug for i in existing_issues}
 
-    # Status directories to scan
+    # 2. Identify removed issues (those in USV but missing from disk)
+    present_issues = [i for i in existing_issues if i.status != "unknown"]
+
+    # 3. Scan disk for new files
+    new_issues = []
     for status in ["pending", "draft", "active"]:
         status_dir = issues_root / status
         if not status_dir.exists():
@@ -316,24 +322,29 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
 
         for issue_file in sorted(status_dir.glob("*.md")):
             slug = issue_file.stem
+            if slug not in existing_slugs:
+                # Extract dependencies from content
+                deps = []
+                with issue_file.open("r", encoding="utf-8") as f:
+                    content = f.read()
+                    match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
+                    if match:
+                        deps = [
+                            d.strip() for d in match.group(1).split(",") if d.strip()
+                        ]
 
-            # Extract dependencies from content
-            deps = []
-            with issue_file.open("r", encoding="utf-8") as f:
-                content = f.read()
-                match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
-                if match:
-                    deps = [d.strip() for d in match.group(1).split(",") if d.strip()]
+                new_issues.append(Issue(slug=slug, dependencies=deps, status=status))
 
-            issues.append(Issue(slug=slug, dependencies=deps, status=status))
+    # 4. Combine: Existing ordered items + newly found items at the end
+    final_issues = present_issues + new_issues
 
-    # Save mission.usv
-    save_mission(mission_path, issues)
+    # 5. Save mission.usv
+    save_mission(mission_path, final_issues)
     console.print(
-        f"[bold green]Ingested {len(issues)} issues into {mission_path}[/bold green]"
+        f"[bold green]Ingested {len(new_issues)} new issues, removed {len(existing_issues) - len(present_issues)} missing ones.[/bold green]"
     )
 
-    # Create datapackage.json
+    # 6. Create/Update datapackage.json
     datapackage = {
         "name": "mission-control",
         "resources": [
@@ -355,7 +366,7 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
     dp_path = issues_root / "datapackage.json"
     with dp_path.open("w", encoding="utf-8") as f:
         json.dump(datapackage, f, indent=2)
-    console.print(f"[bold green]Created {dp_path}[/bold green]")
+    console.print(f"[bold green]Updated {dp_path}[/bold green]")
 
 
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
