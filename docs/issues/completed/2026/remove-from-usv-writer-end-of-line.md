@@ -3,4 +3,4 @@
 The USV writer is adding a `^M` to the end of the line
 
 ---
-**Completed in commit:** `<pending-commit-id>`
+**Completed in commit:** `1776b92`
