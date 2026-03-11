@@ -703,7 +703,7 @@ def main():
 
     # new
     new_parser = subparsers.add_parser("new", help="Create a new issue")
-    new_parser.add_argument("-t", "--title", required=True, help="Title of the issue")
+    new_parser.add_argument("title", help="Title of the issue")
     new_parser.add_argument("-b", "--body", default="", help="Body of the issue")
     new_parser.add_argument(
         "-d", "--draft", action="store_true", help="Create as a draft"
