@@ -398,13 +398,51 @@ def cmd_new(
         console.print(f"Depends on: {', '.join(deps)}")
 
 
-def cmd_list(console: Console, issues_root: Path, mission_path: Path):
+def cmd_list(
+    console: Console,
+    issues_root: Path,
+    mission_path: Path,
+    output_format: str = "table",
+):
     """List all issues in mission.usv."""
     issues = load_mission(issues_root, mission_path)
     if not issues:
-        console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
+        if output_format == "json":
+            print("[]")
+        else:
+            console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
 
+    if output_format == "json":
+        # Convert issues to list of dicts
+        data = []
+        for i in issues:
+            issue_file = find_issue_file(issues_root, i.slug)
+            location = str(issue_file) if issue_file else None
+            data.append(
+                {
+                    "priority": i.priority,
+                    "status": i.status,
+                    "slug": i.slug,
+                    "dependencies": i.dependencies,
+                    "location": location,
+                }
+            )
+        print(json.dumps(data, indent=2))
+        return
+
+    if output_format == "text":
+        # No borders, simple columns
+        for i in issues:
+            issue_file = find_issue_file(issues_root, i.slug)
+            location = str(issue_file) if issue_file else "MISSING"
+            deps = ",".join(i.dependencies)
+            console.print(
+                f"{i.priority:<3} {i.status:<8} {i.slug:<30} {deps:<20} {location}"
+            )
+        return
+
+    # Default table format
     table = Table(title="Task Queue")
     table.add_column("Priority", justify="right", style="cyan")
     table.add_column("Status", style="magenta")
@@ -687,7 +725,13 @@ def main():
     subparsers.add_parser("next", help="Show the top issue")
 
     # list
-    subparsers.add_parser("list", help="List all issues")
+    list_parser = subparsers.add_parser("list", help="List all issues")
+    list_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format"
+    )
+    list_parser.add_argument(
+        "--text", action="store_true", help="Output in plain text format (no borders)"
+    )
 
     # ingest
     subparsers.add_parser(
@@ -773,7 +817,12 @@ def main():
     if args.command == "next":
         cmd_next(console, issues_root, mission_path)
     elif args.command == "list":
-        cmd_list(console, issues_root, mission_path)
+        output_format = "table"
+        if args.json:
+            output_format = "json"
+        elif args.text:
+            output_format = "text"
+        cmd_list(console, issues_root, mission_path, output_format=output_format)
     elif args.command == "ingest":
         cmd_ingest(console, issues_root, mission_path)
     elif args.command == "self-up":
