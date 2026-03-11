@@ -257,11 +257,16 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     if next_issue.dependencies:
         deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
 
-    # Ensure the pager (usually 'less') supports ANSI colors
+    # Ensure the pager (usually 'less') supports ANSI colors and quits if one screen
+    # -R: RAW-CONTROL-CHARS (ANSI colors)
+    # -F: quit-if-one-screen
+    # -X: no-init (don't clear screen on exit)
     if "LESS" not in os.environ:
-        os.environ["LESS"] = "RX"
-    elif "R" not in os.environ["LESS"]:
-        os.environ["LESS"] += "R"
+        os.environ["LESS"] = "RFX"
+    else:
+        for flag in ["R", "F", "X"]:
+            if flag not in os.environ["LESS"]:
+                os.environ["LESS"] += flag
 
     with console.pager(styles=True):
         console.print(
