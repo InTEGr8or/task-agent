@@ -13,6 +13,7 @@ import os
 import json
 import importlib.metadata
 import shutil
+import questionary
 
 from taskagent.models.issue import Issue, USV_DELIM
 
@@ -159,6 +160,51 @@ def get_project_version() -> Tuple[str, Optional[str]]:
     return "unknown", None
 
 
+def select_issue(
+    console: Console,
+    issues: List[Issue],
+    slug_part: Optional[str],
+    status_filter: Optional[List[str]] = None,
+) -> Optional[Issue]:
+    """Helper to select an issue based on partial slug and status filter."""
+    if not issues:
+        return None
+
+    # Apply status filter if provided
+    filtered = issues
+    if status_filter:
+        filtered = [i for i in issues if i.status in status_filter]
+
+    if not filtered:
+        return None
+
+    # If no slug_part provided, and we only want one, maybe return top one?
+    # For 'done' or 'active', if no slug given, we often default to top.
+    if slug_part is None:
+        return filtered[0]
+
+    # Find matches
+    matches = [i for i in filtered if i.slug.startswith(slug_part)]
+
+    if not matches:
+        return None
+
+    if len(matches) == 1:
+        return matches[0]
+
+    # Interactive selection
+    choices = [f"{i.slug} ({i.status})" for i in matches]
+    selection = questionary.select(
+        "Multiple issues match. Select one:", choices=choices, use_jk_keys=True
+    ).ask()
+
+    if selection is None:
+        return None
+
+    selected_slug = selection.split(" (")[0]
+    return next(i for i in matches if i.slug == selected_slug)
+
+
 def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     """Show the top issue."""
     issues = load_mission(issues_root, mission_path)
@@ -197,7 +243,10 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
 
 
 def cmd_done(
-    console: Console, issues_root: Path, mission_path: Path, slug: Optional[str] = None
+    console: Console,
+    issues_root: Path,
+    mission_path: Path,
+    slug_part: Optional[str] = None,
 ):
     """Mark an issue as done."""
     issues = load_mission(issues_root, mission_path)
@@ -205,16 +254,13 @@ def cmd_done(
         console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
 
-    if slug is None:
-        target_issue: Optional[Issue] = issues[0] if issues else None
-    else:
-        target_issue = next((i for i in issues if i.slug == slug), None)
+    target_issue = select_issue(console, issues, slug_part)
 
     if not target_issue:
-        if slug:
-            console.print(
-                f"[red]Issue with slug '{slug}' not found in mission.usv[/red]"
-            )
+        if slug_part:
+            console.print(f"[red]No issue found matching '{slug_part}'.[/red]")
+        else:
+            console.print("[yellow]No issues to mark as done.[/yellow]")
         sys.exit(1)
 
     issue_file = find_issue_file(issues_root, target_issue.slug)
@@ -235,8 +281,6 @@ def cmd_done(
 
     console.print(f"[green]Moving {source_to_move} to {dest_path}...[/green]")
 
-    # If it's a file, we can append the commit hash easily.
-    # If it's a directory, we append it to the README.md.
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
 
@@ -245,14 +289,12 @@ def cmd_done(
     content += f"\n---\n**Completed in commit:** `{commit_hash}`\n"
 
     if is_dir_based:
-        # Move directory then write updated README
         if dest_path.exists():
             shutil.rmtree(dest_path)
         shutil.move(str(source_to_move), str(dest_path))
         with (dest_path / "README.md").open("w", encoding="utf-8") as f:
             f.write(content)
     else:
-        # Just write to destination and unlink source
         with dest_path.open("w", encoding="utf-8") as f:
             f.write(content)
         issue_file.unlink()
@@ -263,7 +305,6 @@ def cmd_done(
         f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]"
     )
 
-    # Auto-promote patch version if we are in a repo that supports it
     ver, source = get_project_version()
     if source == "pyproject.toml" and Path("pyproject.toml").exists():
         console.print("[blue]Auto-promoting project patch version...[/blue]")
@@ -439,27 +480,12 @@ def cmd_promote(
 ):
     """Promote an issue from draft to pending."""
     issues = load_mission(issues_root, mission_path)
+    target = select_issue(console, issues, slug_part, status_filter=["draft"])
 
-    # Filter for drafts
-    drafts = [i for i in issues if i.status == "draft"]
-    if not drafts:
-        console.print("[yellow]No issues found in 'draft' status.[/yellow]")
-        return
-
-    # Try to find a match
-    matches = [i for i in drafts if i.slug.startswith(slug_part)]
-
-    if not matches:
+    if not target:
         console.print(f"[red]No draft issue found matching '{slug_part}'.[/red]")
         return
 
-    if len(matches) > 1:
-        console.print(f"[yellow]Multiple drafts match '{slug_part}':[/yellow]")
-        for m in matches:
-            console.print(f"  - {m.slug}")
-        return
-
-    target = matches[0]
     issue_file = find_issue_file(issues_root, target.slug)
     if not issue_file:
         console.print(f"[red]Issue file not found for '{target.slug}'.[/red]")
@@ -472,11 +498,45 @@ def cmd_promote(
 
     console.print(f"[green]Promoting {target.slug} to pending...[/green]")
     shutil.move(str(source), str(dest))
-
-    # No need to rewrite mission.usv manually as status is derived from location
     console.print(
         f"[bold green]Issue '{target.slug}' promoted to pending.[/bold green]"
     )
+
+
+def cmd_active(
+    console: Console,
+    issues_root: Path,
+    mission_path: Path,
+    slug_part: Optional[str] = None,
+):
+    """Move an issue to active status."""
+    issues = load_mission(issues_root, mission_path)
+    target = select_issue(
+        console, issues, slug_part, status_filter=["pending", "draft"]
+    )
+
+    if not target:
+        if slug_part:
+            console.print(
+                f"[red]No pending/draft issue found matching '{slug_part}'.[/red]"
+            )
+        else:
+            console.print("[yellow]No issues available to mark as active.[/yellow]")
+        return
+
+    issue_file = find_issue_file(issues_root, target.slug)
+    if not issue_file:
+        console.print(f"[red]Issue file not found for '{target.slug}'.[/red]")
+        return
+
+    # Determine paths
+    is_dir_based = issue_file.name == "README.md"
+    source = issue_file.parent if is_dir_based else issue_file
+    dest = issues_root / "active" / source.name
+
+    console.print(f"[green]Marking {target.slug} as active...[/green]")
+    shutil.move(str(source), str(dest))
+    console.print(f"[bold green]Issue '{target.slug}' is now active.[/bold green]")
 
 
 def extract_deps(file_path: Path) -> List[str]:
@@ -604,12 +664,16 @@ def main():
         "slug", help="Slug (or partial slug) of the draft issue"
     )
 
+    # active
+    active_parser = subparsers.add_parser("active", help="Mark an issue as active")
+    active_parser.add_argument(
+        "slug", nargs="?", help="Slug (or partial slug) of the issue"
+    )
+
     # done
     done_parser = subparsers.add_parser("done", help="Mark an issue as done")
     done_parser.add_argument(
-        "slug",
-        nargs="?",
-        help="Slug of the issue to mark as done (defaults to top issue)",
+        "slug", nargs="?", help="Slug (or partial slug) of the issue"
     )
 
     # new
@@ -658,6 +722,8 @@ def main():
         cmd_ingest(console, issues_root, mission_path)
     elif args.command == "promote":
         cmd_promote(console, issues_root, mission_path, args.slug)
+    elif args.command == "active":
+        cmd_active(console, issues_root, mission_path, args.slug)
     elif args.command == "done":
         cmd_done(console, issues_root, mission_path, args.slug)
     elif args.command == "new":

@@ -22,5 +22,8 @@ next: ## Display the top issue from the queue
 list: ## List all issues in the queue
 	@uv run python -m taskagent list
 
+active: ## Mark an issue as active (usage: make active [SLUG=slug])
+	@uv run python -m taskagent active $(SLUG)
+
 done: ## Mark an issue as done (usage: make done [SLUG=slug])
 	@uv run python -m taskagent done $(SLUG)
