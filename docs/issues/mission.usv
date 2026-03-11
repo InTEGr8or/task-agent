@@ -1,3 +1,5 @@
 fix-uv-lock
 remove-from-usv-writer-end-of-line
 draft-to-promote
+add-json-switch-to-output-to-json-for-integrations-such-as-nvim
+nest-dependent-tasks-under-their-parent-in-list-view
