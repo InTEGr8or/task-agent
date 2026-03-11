@@ -413,10 +413,17 @@ def cmd_list(
             console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
 
+    # Sort: pending -> draft -> active -> unknown/others
+    status_order = {"active": 0, "pending": 1, "draft": 2}
+    # We use a high value for unknown statuses to put them at the end
+    sorted_issues = sorted(
+        issues, key=lambda x: (status_order.get(x.status, 99), x.priority)
+    )
+
     if output_format == "json":
         # Convert issues to list of dicts
         data = []
-        for i in issues:
+        for i in sorted_issues:
             issue_file = find_issue_file(issues_root, i.slug)
             location = str(issue_file) if issue_file else None
             data.append(
@@ -433,7 +440,7 @@ def cmd_list(
 
     if output_format == "text":
         # No borders, simple columns
-        for i in issues:
+        for i in sorted_issues:
             issue_file = find_issue_file(issues_root, i.slug)
             location = str(issue_file) if issue_file else "MISSING"
             deps = ",".join(i.dependencies)
@@ -450,7 +457,7 @@ def cmd_list(
     table.add_column("Depends On", style="yellow")
     table.add_column("Location", style="dim")
 
-    for issue in issues:
+    for issue in sorted_issues:
         issue_file = find_issue_file(issues_root, issue.slug)
         location = str(issue_file) if issue_file else "[red]MISSING[/red]"
 
