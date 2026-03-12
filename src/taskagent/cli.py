@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Set
 from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
@@ -257,32 +257,20 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     if next_issue.dependencies:
         deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
 
-    panel = Panel(
-        f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
-        f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-        f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
-        f"{deps_info}"
-        f"[bold blue]FILE:[/bold blue] {issue_file}",
-        title="Task Agent",
-        expand=False,
-    )
-    md = Markdown(content)
+    with console.pager(styles=True):
+        console.print(
+            Panel(
+                f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
+                f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
+                f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
+                f"{deps_info}"
+                f"[bold blue]FILE:[/bold blue] {issue_file}",
+                title="Task Agent",
+                expand=False,
+            )
+        )
 
-    # Determine if we should use a pager
-    # We estimate the lines: Panel (5-6) + Markdown content + padding
-    total_lines = 6 + content.count("\n")
-    terminal_height = console.size.height
-
-    if total_lines > terminal_height:
-        # Use pager
-        if "LESS" not in os.environ:
-            os.environ["LESS"] = "RFX"
-        with console.pager(styles=True):
-            console.print(panel)
-            console.print(md)
-    else:
-        # Direct print
-        console.print(panel)
+        md = Markdown(content)
         console.print(md)
 
 
@@ -470,10 +458,47 @@ def cmd_list(
             console.print(f"[yellow]No issues found in {mission_path}[/yellow]")
         return
 
+    # Build hierarchy
+    slug_to_issue = {i.slug: i for i in issues}
+    children_map: Dict[str, List[str]] = {}
+    for i in issues:
+        for dep in i.dependencies:
+            if dep in slug_to_issue:
+                if dep not in children_map:
+                    children_map[dep] = []
+                children_map[dep].append(i.slug)
+
+    visited: Set[str] = set()
+    rows_to_display: List[Tuple[Issue, int]] = []
+
+    def build_rows(issue: Issue, depth: int):
+        if issue.slug in visited:
+            return
+        visited.add(issue.slug)
+        rows_to_display.append((issue, depth))
+
+        # Add children
+        if issue.slug in children_map:
+            # Sort children by original priority order
+            child_issues = [slug_to_issue[s] for s in children_map[issue.slug]]
+            # child_issues are already from 'issues' which is synced/sorted
+            for child in child_issues:
+                build_rows(child, depth + 1)
+
+    for issue in issues:
+        # Start from issues that don't depend on something else in the list
+        has_internal_dep = any(dep in slug_to_issue for dep in issue.dependencies)
+        if not has_internal_dep:
+            build_rows(issue, 0)
+
+    # Add any leftover items (e.g. if there's a cycle)
+    for issue in issues:
+        if issue.slug not in visited:
+            build_rows(issue, 0)
+
     if output_format == "json":
-        # Convert issues to list of dicts
         data = []
-        for i in issues:
+        for i, depth in rows_to_display:
             issue_file = find_issue_file(issues_root, i.slug)
             location = str(issue_file) if issue_file else None
             data.append(
@@ -483,19 +508,21 @@ def cmd_list(
                     "slug": i.slug,
                     "dependencies": i.dependencies,
                     "location": location,
+                    "depth": depth,
                 }
             )
         print(json.dumps(data, indent=2))
         return
 
     if output_format == "text":
-        # No borders, simple columns
-        for i in issues:
+        for i, depth in rows_to_display:
             issue_file = find_issue_file(issues_root, i.slug)
             location = str(issue_file) if issue_file else "MISSING"
             deps = ",".join(i.dependencies)
+            indent = "  " * depth
+            prefix = "└─ " if depth > 0 else ""
             console.print(
-                f"{i.priority:<3} {i.status:<8} {i.slug:<30} {deps:<20} {location}"
+                f"{i.priority:<3} {i.status:<8} {indent}{prefix}{i.slug:<30} {deps:<20} {location}"
             )
         return
 
@@ -507,7 +534,7 @@ def cmd_list(
     table.add_column("Depends On", style="yellow")
     table.add_column("Location", style="dim")
 
-    for issue in issues:
+    for issue, depth in rows_to_display:
         issue_file = find_issue_file(issues_root, issue.slug)
         location = str(issue_file) if issue_file else "[red]MISSING[/red]"
 
@@ -519,10 +546,14 @@ def cmd_list(
         elif status_str == "active":
             status_str = f"[bold green]{status_str}[/bold green]"
 
+        indent = "  " * depth
+        prefix = "└─ " if depth > 0 else ""
+        display_slug = f"{indent}{prefix}{issue.slug}"
+
         table.add_row(
             str(issue.priority),
             status_str,
-            issue.slug,
+            display_slug,
             ", ".join(issue.dependencies),
             location,
         )
