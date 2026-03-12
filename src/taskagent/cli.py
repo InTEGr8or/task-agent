@@ -257,27 +257,20 @@ def cmd_next(console: Console, issues_root: Path, mission_path: Path):
     if next_issue.dependencies:
         deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
 
-    panel = Panel(
-        f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
-        f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-        f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
-        f"{deps_info}"
-        f"[bold blue]FILE:[/bold blue] {issue_file}",
-        title="Task Agent",
-        expand=False,
-    )
-    md = Markdown(content)
+    with console.pager(styles=True):
+        console.print(
+            Panel(
+                f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
+                f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
+                f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
+                f"{deps_info}"
+                f"[bold blue]FILE:[/bold blue] {issue_file}",
+                title="Task Agent",
+                expand=False,
+            )
+        )
 
-    # Estimate lines: Panel (~6) + Markdown content + some buffer
-    total_lines = 8 + content.count("\n")
-    terminal_height = console.size.height
-
-    if total_lines > terminal_height:
-        with console.pager(styles=True):
-            console.print(panel)
-            console.print(md)
-    else:
-        console.print(panel)
+        md = Markdown(content)
         console.print(md)
 
 
@@ -579,7 +572,7 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
     # 2. Identify removed issues (those in USV but missing from disk)
     present_issues = [i for i in existing_issues if i.status != "unknown"]
 
-    # 3. Scan disk for new files
+    # 3. Scan disk for new files and fix non-slug filenames
     new_issues = []
     for status in ["pending", "draft", "active"]:
         status_dir = issues_root / status
@@ -587,16 +580,44 @@ def cmd_ingest(console: Console, issues_root: Path, mission_path: Path):
             continue
 
         # File-based
-        for issue_file in sorted(status_dir.glob("*.md")):
-            slug = issue_file.stem
+        for issue_file in list(status_dir.glob("*.md")):
+            stem = issue_file.stem
+            slug = slugify(stem)
+
+            if stem != slug:
+                new_path = issue_file.with_name(f"{slug}.md")
+                if new_path.exists():
+                    console.print(
+                        f"[yellow]Skipping rename of {issue_file} to {new_path}: target exists.[/yellow]"
+                    )
+                else:
+                    console.print(f"[blue]Renaming {issue_file} to {new_path}[/blue]")
+                    issue_file.rename(new_path)
+                    issue_file = new_path
+
             if slug not in existing_slugs:
                 deps = extract_deps(issue_file)
                 new_issues.append(Issue(slug=slug, dependencies=deps, status=status))
                 existing_slugs.add(slug)
 
         # Directory-based
-        for readme_file in sorted(status_dir.glob("*/README.md")):
-            slug = readme_file.parent.name
+        for readme_file in list(status_dir.glob("*/README.md")):
+            stem = readme_file.parent.name
+            slug = slugify(stem)
+
+            if stem != slug:
+                new_dir = readme_file.parent.parent / slug
+                if new_dir.exists():
+                    console.print(
+                        f"[yellow]Skipping rename of {readme_file.parent} to {new_dir}: target exists.[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"[blue]Renaming {readme_file.parent} to {new_dir}[/blue]"
+                    )
+                    readme_file.parent.rename(new_dir)
+                    readme_file = new_dir / "README.md"
+
             if slug not in existing_slugs:
                 deps = extract_deps(readme_file)
                 new_issues.append(Issue(slug=slug, dependencies=deps, status=status))
