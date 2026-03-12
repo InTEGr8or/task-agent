@@ -1,6 +1,6 @@
 [project]
 name = "task-agent"
-version = "0.1.56"
+version = "0.1.58"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,10 +31,14 @@ dev = [
     "bump-my-version==1.2.7",
     "pre-commit>=4.5.1",
     "pytest>=9.0.2",
+    "google-adk>=1.26.0",
+    "google-genai>=1.66.0",
+    "python-dotenv>=1.2.2",
+    "onepassword-sdk>=0.4.0",
 ]
 
 [tool.bumpversion]
-current_version = "0.1.56"
+current_version = "0.1.58"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 search = "version = \"{current_version}\""

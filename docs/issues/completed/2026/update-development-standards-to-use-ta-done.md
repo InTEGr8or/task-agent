@@ -3,4 +3,4 @@
 Update project documentation and standards to recommend using 'ta done' for completing tasks, leveraging the auto-commit and commit-hash-recording features.
 
 ---
-**Completed in commit:** `<pending-commit-id>`
+**Completed in commit:** `95484c5`
