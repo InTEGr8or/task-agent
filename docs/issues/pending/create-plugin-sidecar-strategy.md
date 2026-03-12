@@ -21,3 +21,5 @@ To get the power without the bloat, I suggest an Interface-first approach:
   build a Reference Worker. This keeps your CLI simple for the two apps you're already
   using, but allows you to point an agent at a pending task and say "Go" via the ta run
   command.
+
+[Gemini ADK Sample - Python](https://github.com/google/adk-samples/tree/main/python)
