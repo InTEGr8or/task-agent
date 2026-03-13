@@ -355,7 +355,9 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         console.print(
             "\n[yellow]Recommended:[/yellow] Add the following to your main .gitignore:"
         )
-        console.print(f"  [cyan]{source_dir.relative_to(project_root)}[/cyan]")
+        # Use absolute paths for relative calculation to avoid subpath errors
+        rel_path = source_dir.absolute().relative_to(project_root.absolute())
+        console.print(f"  [cyan]{rel_path}[/cyan]")
 
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Command failed: {e}[/red]")
