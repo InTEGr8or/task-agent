@@ -774,7 +774,9 @@ def cmd_triage(console: Console, manager: TaskAgent):
             # Input
             key = get_key()
 
-            if key in ["q", "\x1b", "\r", "\n"]:  # q, esc, enter
+            if key in ["q", "\x1b"]:  # q, esc
+                break
+            elif key == "\r":  # enter (return)
                 break
             elif key in ["k", "\x1b[A"]:  # up
                 cursor = max(0, cursor - 1)
@@ -788,7 +790,7 @@ def cmd_triage(console: Console, manager: TaskAgent):
                     cursor = max(0, cursor - 1)
                 except Exception:
                     pass
-            elif key == "\x0a":  # ctrl+j
+            elif key == "\x0a":  # ctrl+j (often \n)
                 slug = issues[cursor].slug
                 try:
                     manager.prioritize_issue(slug, "down")
