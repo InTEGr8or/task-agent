@@ -343,25 +343,50 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         # 4. Remove old dir and Symlink
         shutil.rmtree(str(source_dir))
 
-        # Create a relative symlink for portability across different machines/clones
-        # We need the path from the 'docs/' folder up to the parent and into target_name
-        rel_target = os.path.relpath(target_path, source_dir.parent)
-        os.symlink(rel_target, str(source_dir))
+        # Use an absolute symlink for maximum local robustness
+        os.symlink(str(target_path.absolute()), str(source_dir))
+
+        # 5. Update .gitignore
+        gitignore = project_root / ".gitignore"
+        # Calculate relative path for the gitignore entry
+        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
+        ignore_line = f"\n{git_rel_path}\n"
+
+        if gitignore.exists():
+            content = gitignore.read_text()
+            if str(git_rel_path) not in content:
+                with gitignore.open("a") as f:
+                    f.write(ignore_line)
+        else:
+            gitignore.write_text(ignore_line)
+
+        # 6. Update .env
+        env_file = project_root / ".env"
+        env_lines = [
+            "\nTA_EJECT_ISSUES=true\n",
+            f"TA_EJECTED_ISSUES_PATH={target_path.absolute()}\n",
+        ]
+        if env_file.exists():
+            content = env_file.read_text()
+            with env_file.open("a") as f:
+                if "TA_EJECT_ISSUES" not in content:
+                    f.write(env_lines[0])
+                if "TA_EJECTED_ISSUES_PATH" not in content:
+                    f.write(env_lines[1])
+        else:
+            env_file.write_text("".join(env_lines))
 
         console.print(
             "[bold green]Successfully ejected mission repository![/bold green]"
         )
         console.print(f"Mission Repo: [cyan]{target_path.absolute()}[/cyan]")
         console.print(
-            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{rel_target}[/cyan]"
+            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_path.absolute()}[/cyan]"
         )
-        console.print(
-            "\n[yellow]Recommended:[/yellow] Commit the symlink to your repository so it persists across branches:"
-        )
-        console.print(f"  [cyan]git add {source_dir.relative_to(project_root)}[/cyan]")
-        console.print(
-            '  [cyan]git commit -m "chore: link docs/issues to mission repo"[/cyan]'
-        )
+        console.print("\n[bold green]Environment updated:[/bold green]")
+        console.print(f"  - Added [cyan]{git_rel_path}[/cyan] to .gitignore")
+        console.print("  - Configured [cyan]TA_EJECTED_ISSUES_PATH[/cyan] in .env")
+        console.print("\n[dim]The symlink will now 'auto-heal' in new worktrees.[/dim]")
 
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Command failed: {e}[/red]")

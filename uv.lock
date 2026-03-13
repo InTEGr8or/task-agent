@@ -983,11 +983,12 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "0.1.88"
+version = "0.1.89"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "questionary" },
     { name = "rich" },
 ]
@@ -1005,6 +1006,7 @@ dev = [
 requires-dist = [
     { name = "mcp", specifier = ">=1.26.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "questionary", specifier = ">=2.1.1" },
     { name = "rich", specifier = ">=13.9.4" },
 ]
