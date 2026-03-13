@@ -13,6 +13,9 @@ import urllib.request
 import questionary
 import subprocess
 import shutil
+import tty
+import termios
+from rich.live import Live
 
 from taskagent.models.issue import Issue
 from taskagent.manager import TaskManager
@@ -63,6 +66,25 @@ def get_project_version() -> Tuple[str, Optional[str]]:
             pass
 
     return "unknown", None
+
+
+def get_key() -> str:
+    """Read a single key or escape sequence from stdin."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\x1b":
+            # Start of an escape sequence
+            # We want to read more if it's an arrow key
+            import select
+
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                ch += sys.stdin.read(2)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
 
 
 def select_issue(
@@ -614,6 +636,89 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
         console.print(f"[red]Error: {e}[/red]")
 
 
+def cmd_triage(console: Console, manager: TaskManager):
+    """Interactively reorder and promote tasks."""
+    issues = manager.sync_mission()
+    if not issues:
+        console.print("[yellow]No issues to triage.[/yellow]")
+        return
+
+    cursor = 0
+    with Live(auto_refresh=False, console=console, screen=True) as live:
+        while True:
+            # Render
+            table = Table(
+                title="[bold blue]Triage Mode[/bold blue]",
+                box=None,
+                show_header=True,
+                padding=(0, 2),
+            )
+            table.add_column("Pos", justify="right", style="dim")
+            table.add_column("Status", width=10)
+            table.add_column("Slug")
+
+            for i, issue in enumerate(issues):
+                style = "bold cyan" if i == cursor else "white"
+                if i == cursor:
+                    display_slug = f"> [reverse]{issue.slug}[/reverse]"
+                else:
+                    display_slug = f"  {issue.slug}"
+
+                status_style = "white"
+                if issue.status == "active":
+                    status_style = "bold green"
+                elif issue.status == "pending":
+                    status_style = "bold yellow"
+                elif issue.status == "draft":
+                    status_style = "dim"
+
+                table.add_row(
+                    str(i + 1),
+                    f"[{status_style}]{issue.status.upper()}[/{status_style}]",
+                    display_slug,
+                    style=style,
+                )
+
+            help_text = "\n[dim]j/k: move cursor | ctrl+k/j: change priority | p: promote | q: exit[/dim]"
+            live.update(
+                Panel(table, subtitle=help_text, border_style="blue"), refresh=True
+            )
+
+            # Input
+            key = get_key()
+
+            if key in ["q", "\x1b", "\r", "\n"]:  # q, esc, enter
+                break
+            elif key in ["k", "\x1b[A"]:  # up
+                cursor = max(0, cursor - 1)
+            elif key in ["j", "\x1b[B"]:  # down
+                cursor = min(len(issues) - 1, cursor + 1)
+            elif key == "\x0b":  # ctrl+k
+                slug = issues[cursor].slug
+                try:
+                    manager.prioritize_issue(slug, "up")
+                    issues = manager.load_mission()
+                    cursor = max(0, cursor - 1)
+                except Exception:
+                    pass
+            elif key == "\x0a":  # ctrl+j
+                slug = issues[cursor].slug
+                try:
+                    manager.prioritize_issue(slug, "down")
+                    issues = manager.load_mission()
+                    cursor = min(len(issues) - 1, cursor + 1)
+                except Exception:
+                    pass
+            elif key == "p":  # promote
+                issue = issues[cursor]
+                if issue.status == "draft":
+                    try:
+                        manager.promote_issue(issue.slug)
+                        issues = manager.load_mission()
+                    except Exception:
+                        pass
+
+
 def display_overview(console: Console, manager: TaskManager):
     """Display a rich overview of the task agent state and available commands."""
     v = get_tool_version()
@@ -645,6 +750,7 @@ def display_overview(console: Console, manager: TaskManager):
 
     commands = [
         ("next", "Show the highest priority task"),
+        ("triage", "Interactively reorder and promote tasks"),
         ("list", "List all tasks in the queue (try --json or --text)"),
         ("new", "Create a new task"),
         ("start", "Start a task (creates branch & worktree)"),
@@ -679,6 +785,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("next")
+    subparsers.add_parser("triage", help="Interactively reorder and promote tasks")
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
@@ -740,6 +847,8 @@ def main():
 
     if args.command == "next":
         cmd_next(console, manager)
+    elif args.command == "triage":
+        cmd_triage(console, manager)
     elif args.command == "list":
         fmt = "table"
         if args.json:
