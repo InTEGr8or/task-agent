@@ -535,6 +535,47 @@ def cmd_init_worker(console: Console, template: str = "adk"):
     )
 
 
+def cmd_mcp():
+    """Launch the Model Context Protocol server."""
+    from taskagent.mcp import run_mcp_server
+
+    run_mcp_server()
+
+
+def cmd_init_mcp(console: Console, scope: str = "project"):
+    """Register the Task Agent as an MCP server in Gemini CLI."""
+    console.print(
+        f"[blue]Registering Task Agent as an MCP server ({scope} scope)...[/blue]"
+    )
+
+    # We assume 'ta' is in the path.
+    command = [
+        "gemini",
+        "mcp",
+        "add",
+        "task-agent",
+        "ta",
+        "mcp",
+        "--trust",
+        "--scope",
+        scope,
+    ]
+
+    try:
+        subprocess.run(command, check=True)
+        console.print(
+            "[bold green]Successfully registered Task Agent MCP server![/bold green]"
+        )
+        console.print(
+            f"You can now use task-related tools in any Gemini CLI session within this {scope}."
+        )
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to register MCP server: {e}[/red]")
+        console.print(
+            "[yellow]Ensure you have 'gemini-cli' installed and 'ta' in your PATH.[/yellow]"
+        )
+
+
 def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = False):
     """Show project version, promote it, or tag it."""
     try:
@@ -601,7 +642,23 @@ def main():
     run_parser.add_argument("slug", nargs="?")
     init_parser = subparsers.add_parser("init-worker")
     init_parser.add_argument("--template", default="adk")
+
+    # mcp
+    subparsers.add_parser("mcp", help="Run the Model Context Protocol server")
+
+    # init-mcp
+    init_mcp_parser = subparsers.add_parser(
+        "init-mcp", help="Register as an MCP server in Gemini CLI"
+    )
+    init_mcp_parser.add_argument(
+        "--scope",
+        choices=["project", "user"],
+        default="project",
+        help="Registration scope (default: project)",
+    )
+
     done_parser = subparsers.add_parser("done")
+
     done_parser.add_argument("slug", nargs="?")
     done_parser.add_argument("-m", "--message")
     done_parser.add_argument("--no-commit", action="store_true")
@@ -652,6 +709,10 @@ def main():
         cmd_run(console, manager, args.slug)
     elif args.command == "init-worker":
         cmd_init_worker(console, args.template)
+    elif args.command == "mcp":
+        cmd_mcp()
+    elif args.command == "init-mcp":
+        cmd_init_mcp(console, scope=args.scope)
     elif args.command == "done":
         cmd_done(console, manager, args.slug, args.message, not args.no_commit)
     elif args.command == "new":

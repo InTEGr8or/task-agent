@@ -85,5 +85,10 @@ def get_task_details(slug: str) -> str:
     return issue_file.read_text(encoding="utf-8")
 
 
-if __name__ == "__main__":
+def run_mcp_server():
+    """Main entry point to run the MCP server."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    run_mcp_server()
