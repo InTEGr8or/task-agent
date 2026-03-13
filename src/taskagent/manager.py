@@ -13,6 +13,35 @@ class TaskAgent:
     def __init__(self, config_dir: Optional[str] = None):
         self.issues_root, self.mission_path = self.get_config_paths(config_dir)
         self.ensure_issues_dir()
+        self.code_root = self._get_git_root(Path.cwd())
+        self.mission_root = self._get_git_root(self.issues_root)
+
+    @staticmethod
+    def _get_git_root(path: Path) -> Optional[Path]:
+        """Get the root of the git repository for the given path."""
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(res.stdout.strip())
+        except subprocess.CalledProcessError:
+            return None
+
+    @property
+    def is_dual_repo(self) -> bool:
+        """Check if mission files live in a different repo than the code."""
+        if not self.code_root or not self.mission_root:
+            return False
+        return self.code_root.resolve() != self.mission_root.resolve()
+
+    def push_mission_repo(self):
+        """Push changes in the mission repository."""
+        if not self.mission_root:
+            return
+        subprocess.run(["git", "-C", str(self.mission_root), "push"], check=True)
 
     @staticmethod
     def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path]:
@@ -255,11 +284,51 @@ class TaskAgent:
         target.status = "active"
         return target
 
+    def _git_commit(
+        self,
+        repo_root: Path,
+        message: str,
+        amend: bool = False,
+        files: Optional[List[str]] = None,
+    ) -> str:
+        """Helper to perform a git commit with retry logic for hooks."""
+        if files:
+            for f in files:
+                subprocess.run(["git", "-C", str(repo_root), "add", f], check=False)
+        else:
+            subprocess.run(["git", "-C", str(repo_root), "add", "."], check=False)
+
+        cmd = ["git", "-C", str(repo_root), "commit", "-m", message]
+        if amend:
+            cmd = ["git", "-C", str(repo_root), "commit", "--amend", "--no-edit"]
+
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0 and not amend:
+            # Retry once for pre-commit hooks
+            if files:
+                for f in files:
+                    subprocess.run(["git", "-C", str(repo_root), "add", f], check=False)
+            else:
+                subprocess.run(["git", "-C", str(repo_root), "add", "."], check=False)
+            res = subprocess.run(cmd, capture_output=True, text=True)
+
+        if res.returncode == 0:
+            try:
+                return subprocess.check_output(
+                    ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+            except Exception:
+                return "unknown"
+        return "failed"
+
     def complete_issue(
         self,
         slug: str,
         commit_message: Optional[str] = None,
         should_commit: bool = True,
+        push_mission: bool = False,
     ) -> Tuple[Issue, str]:
         """Mark an issue as done. Returns (issue, commit_hash)."""
         issues = self.load_mission()
@@ -283,7 +352,7 @@ class TaskAgent:
 
         dest_path = completed_dir / source_to_move.name
 
-        # 2. Add placeholder
+        # 2. Add placeholder to content
         with issue_file.open("r", encoding="utf-8") as f:
             content = f.read()
 
@@ -291,7 +360,7 @@ class TaskAgent:
             content += "\n"
         content += "\n---\n**Completed in commit:** `<pending-commit-id>`\n"
 
-        # 3. Execute Move and USV update
+        # 3. Execute Move and USV update (Mission Repo)
         if is_dir_based:
             if dest_path.exists():
                 shutil.rmtree(dest_path)
@@ -308,56 +377,47 @@ class TaskAgent:
         new_issues = [i for i in issues if i.slug != target_issue.slug]
         self.save_mission(new_issues)
 
-        # 4. Commit
-        commit_hash = "unknown"
+        # 4. Commit Logic
+        code_hash = "unknown"
         if should_commit:
-            if not commit_message:
-                commit_message = f"feat: complete {target_issue.slug}"
+            msg = commit_message or f"feat: complete {target_issue.slug}"
 
-            # Initial add
-            subprocess.run(["git", "add", "."], check=False)
+            # A. Commit Code Changes (Main Repo)
+            if self.code_root:
+                code_hash = self._git_commit(self.code_root, msg)
 
-            # Try to commit
-            res = subprocess.run(
-                ["git", "commit", "-m", commit_message], capture_output=True, text=True
-            )
+            # B. Commit Mission Changes (Mission Repo)
+            # If they are different, we perform a second commit
+            if self.is_dual_repo and self.mission_root:
+                mission_msg = f"task: finalize {target_issue.slug}"
+                self._git_commit(self.mission_root, mission_msg)
 
-            if res.returncode != 0:
-                # If it failed, it might be due to pre-commit hooks modifying files.
-                # Try adding and committing one more time.
-                subprocess.run(["git", "add", "."], check=False)
-                res = subprocess.run(
-                    ["git", "commit", "-m", commit_message],
-                    capture_output=True,
-                    text=True,
+        # 5. Update issue file with the code hash
+        # If we didn't commit, we use the current HEAD or 'pending'
+        if code_hash == "unknown" or code_hash == "failed":
+            code_hash = self.get_git_commit()
+
+        file_text = final_file.read_text(encoding="utf-8")
+        file_text = file_text.replace("<pending-commit-id>", code_hash)
+        final_file.write_text(file_text, encoding="utf-8")
+
+        # 6. Amend the mission commit if in dual mode, or the code commit if single mode
+        if should_commit:
+            if self.is_dual_repo and self.mission_root:
+                self._git_commit(
+                    self.mission_root, "", amend=True, files=[str(final_file)]
+                )
+            elif self.code_root:
+                self._git_commit(
+                    self.code_root, "", amend=True, files=[str(final_file)]
                 )
 
-            if res.returncode == 0:
-                commit_hash = self.get_git_commit()
-
-                # 5. Replace placeholder with real hash
-                file_text = final_file.read_text(encoding="utf-8")
-                file_text = file_text.replace("<pending-commit-id>", commit_hash)
-                final_file.write_text(file_text, encoding="utf-8")
-
-                # 6. Amend the commit to include the updated file (the hash replacement)
-                # Note: This changes the commit hash, but it's better than leaving it unstaged.
-                subprocess.run(["git", "add", str(final_file)], check=False)
-                subprocess.run(["git", "commit", "--amend", "--no-edit"], check=False)
-
-                # Get the final hash after amend
-                commit_hash = self.get_git_commit()
-            else:
-                commit_hash = "failed"
-        else:
-            # If not committing, still replace with current head or 'pending'
-            commit_hash = self.get_git_commit()
-            file_text = final_file.read_text(encoding="utf-8")
-            file_text = file_text.replace("<pending-commit-id>", commit_hash)
-            final_file.write_text(file_text, encoding="utf-8")
+        # 7. Optional Push
+        if push_mission and self.mission_root:
+            self.push_mission_repo()
 
         target_issue.status = "completed"
-        return target_issue, commit_hash
+        return target_issue, code_hash
 
     def prioritize_issue(self, slug: str, direction: str) -> Issue:
         """Move an issue up or down in priority."""

@@ -174,6 +174,7 @@ def cmd_done(
     slug_part: Optional[str] = None,
     commit_message: Optional[str] = None,
     should_commit: bool = True,
+    push: bool = False,
 ):
     """Mark an issue as done."""
     issues = manager.load_mission()
@@ -187,15 +188,19 @@ def cmd_done(
         sys.exit(1)
 
     try:
-        commit_hash = manager.complete_issue(
-            target_issue.slug, commit_message, should_commit
+        _, code_hash = manager.complete_issue(
+            target_issue.slug, commit_message, should_commit, push_mission=push
         )
         console.print(
             f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]"
         )
-        if should_commit and commit_hash != "unknown":
+        if should_commit and code_hash not in ["unknown", "failed"]:
             console.print(
-                f"[bold green]Successfully committed work as {commit_hash}.[/bold green]"
+                f"[bold green]Successfully committed work as {code_hash}.[/bold green]"
+            )
+        if push:
+            console.print(
+                "[bold green]Mission repository pushed to origin.[/bold green]"
             )
     except Exception as e:
         console.print(f"[red]Error completing issue: {e}[/red]")
@@ -211,6 +216,24 @@ def cmd_done(
             console.print(
                 f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]"
             )
+
+
+def cmd_push(console: Console, manager: TaskAgent):
+    """Push the mission repository."""
+    if not manager.mission_root:
+        console.print("[red]Mission repository not detected.[/red]")
+        return
+
+    console.print(
+        f"[blue]Pushing mission repository at {manager.mission_root}...[/blue]"
+    )
+    try:
+        manager.push_mission_repo()
+        console.print(
+            "[bold green]Successfully pushed mission repository.[/bold green]"
+        )
+    except Exception as e:
+        console.print(f"[red]Failed to push mission repository: {e}[/red]")
 
 
 def cmd_new(
@@ -754,8 +777,17 @@ def cmd_triage(console: Console, manager: TaskAgent):
 def display_overview(console: Console, manager: TaskAgent):
     """Display a rich overview of the task agent state and available commands."""
     v = get_tool_version()
+    repo_info = ""
+    if manager.is_dual_repo and manager.mission_root:
+        repo_info = (
+            f" [bold magenta](Dual-Repo: {manager.mission_root.name})[/bold magenta]"
+        )
+
     console.print(
-        Panel(f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]", expand=False)
+        Panel(
+            f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
+            expand=False,
+        )
     )
 
     # Task Summary
@@ -787,6 +819,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("new", "Create a new task"),
         ("start", "Start a task (creates branch & worktree)"),
         ("done", "Complete a task (moves file & commits)"),
+        ("push", "Push the mission repository to origin"),
         ("", ""),  # Spacer
         ("active", "Mark a task as active without starting a worktree"),
         ("promote", "Promote a draft task to pending"),
@@ -852,11 +885,17 @@ def main():
         help="Registration scope (default: project)",
     )
 
-    done_parser = subparsers.add_parser("done")
+    # push
+    subparsers.add_parser("push", help="Push the mission repository to origin")
 
+    done_parser = subparsers.add_parser("done")
     done_parser.add_argument("slug", nargs="?")
     done_parser.add_argument("-m", "--message")
     done_parser.add_argument("--no-commit", action="store_true")
+    done_parser.add_argument(
+        "--push", action="store_true", help="Push the mission repo after completion"
+    )
+
     new_parser = subparsers.add_parser("new")
     new_parser.add_argument("title")
     new_parser.add_argument("-b", "--body", default="")
@@ -913,8 +952,17 @@ def main():
         cmd_mcp()
     elif args.command == "init-mcp":
         cmd_init_mcp(console, scope=args.scope)
+    elif args.command == "push":
+        cmd_push(console, manager)
     elif args.command == "done":
-        cmd_done(console, manager, args.slug, args.message, not args.no_commit)
+        cmd_done(
+            console,
+            manager,
+            args.slug,
+            args.message,
+            not args.no_commit,
+            args.push,
+        )
     elif args.command == "new":
         cmd_new(
             console,
