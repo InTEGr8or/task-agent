@@ -2,6 +2,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from taskagent.manager import TaskAgent
+from taskagent.discovery import discover
 
 # Create an MCP server
 mcp = FastMCP("TaskAgent")
@@ -9,7 +10,7 @@ mcp = FastMCP("TaskAgent")
 
 def get_manager() -> TaskAgent:
     """Helper to initialize the manager based on current environment."""
-    return TaskAgent()
+    return discover()
 
 
 @mcp.tool()

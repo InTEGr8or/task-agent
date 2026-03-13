@@ -32,6 +32,7 @@ from rich.live import Live
 
 from taskagent.models.issue import Issue
 from taskagent.manager import TaskAgent
+from taskagent.discovery import discover
 
 
 def get_tool_version() -> str:
@@ -1086,7 +1087,7 @@ def main():
         console.print(f"task-agent version {get_tool_version()}")
         return
 
-    manager = TaskAgent(args.config_dir)
+    manager = discover(Path(args.config_dir) if args.config_dir else None)
 
     if args.command == "next":
         cmd_next(console, manager)

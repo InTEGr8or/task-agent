@@ -44,5 +44,7 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
             break
         current = parent
 
-    # Fallback to default (which will create docs/issues in current dir if not found)
-    return TaskAgent()
+    # Fallback to default (which will create docs/issues in starting search dir if not found)
+    # We use start_path or cwd as the base
+    fallback_base = Path(start_path or Path.cwd()).absolute()
+    return TaskAgent(config_dir=str(fallback_base / "docs" / "issues"))

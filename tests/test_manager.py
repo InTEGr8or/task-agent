@@ -50,3 +50,54 @@ def test_api_demote_issue(manager):
     manager.demote_issue("demote-me")
     assert not (manager.issues_root / "pending" / "demote-me.md").exists()
     assert (manager.issues_root / "draft" / "demote-me.md").exists()
+
+
+def test_api_move_to_active(manager):
+    manager.create_issue("Active Me")
+    manager.move_to_active("active-me")
+
+    assert (manager.issues_root / "active" / "active-me.md").exists()
+    issues = manager.load_mission()
+    assert issues[0].status == "active"
+
+
+def test_api_prioritize_issue(manager):
+    manager.create_issue("Task 1")
+    manager.create_issue("Task 2")
+    manager.create_issue("Task 3")
+
+    # Initial: 1, 2, 3
+    manager.prioritize_issue("task-2", "up")
+    issues = manager.load_mission()
+    assert issues[0].slug == "task-2"
+    assert issues[1].slug == "task-1"
+
+    manager.prioritize_issue("task-2", "down")
+    issues = manager.load_mission()
+    assert issues[1].slug == "task-2"
+
+
+def test_api_ingest_issues(manager, tmp_path):
+    issues_root = manager.issues_root
+    # Create directory-based issue manually
+    dir_task = issues_root / "pending" / "dir-task"
+    dir_task.mkdir()
+    (dir_task / "README.md").write_text("# Dir Task\n**Depends on:** other-task")
+
+    # Create file-based issue manually
+    (issues_root / "draft" / "file-task.md").write_text("# File Task")
+
+    # Wipe mission.usv
+    manager.save_mission([])
+
+    num_new, num_removed = manager.ingest_issues()
+    assert num_new == 2
+
+    issues = manager.load_mission()
+    slugs = [i.slug for i in issues]
+    assert "dir-task" in slugs
+    assert "file-task" in slugs
+
+    # Check dependencies extracted
+    dir_issue = next(i for i in issues if i.slug == "dir-task")
+    assert dir_issue.dependencies == ["other-task"]
