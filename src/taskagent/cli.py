@@ -13,8 +13,21 @@ import urllib.request
 import questionary
 import subprocess
 import shutil
-import tty
-import termios
+
+try:
+    import tty
+    import termios
+
+    HAS_TERMIOS = True
+except ImportError:
+    HAS_TERMIOS = False
+    try:
+        import msvcrt
+
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
+
 from rich.live import Live
 
 from taskagent.models.issue import Issue
@@ -70,21 +83,40 @@ def get_project_version() -> Tuple[str, Optional[str]]:
 
 def get_key() -> str:
     """Read a single key or escape sequence from stdin."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x1b":
-            # Start of an escape sequence
-            # We want to read more if it's an arrow key
-            import select
+    if HAS_TERMIOS:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == "\x1b":
+                # Start of an escape sequence
+                # We want to read more if it's an arrow key
+                import select
 
-            if select.select([sys.stdin], [], [], 0.1)[0]:
-                ch += sys.stdin.read(2)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    ch += sys.stdin.read(2)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+    elif HAS_MSVCRT:
+        # Windows handling
+        ch = msvcrt.getch()  # type: ignore
+        if ch in (b"\x00", b"\xe0"):
+            # Special key (like arrow keys)
+            ch2 = msvcrt.getch()  # type: ignore
+            # Map common Windows keys to Unix escape sequences for consistency
+            if ch2 == b"H":
+                return "\x1b[A"  # Up
+            if ch2 == b"P":
+                return "\x1b[B"  # Down
+            return f"\x1b[{ch2.decode('ascii')}"
+
+        # Handle Ctrl keys on Windows (mapped to control characters)
+        # Ctrl+K is \x0b, Ctrl+J is \x0a (newline)
+        return ch.decode("ascii", errors="ignore")
+
+    return sys.stdin.read(1)
 
 
 def select_issue(
