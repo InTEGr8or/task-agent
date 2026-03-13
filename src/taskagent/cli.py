@@ -268,6 +268,103 @@ def cmd_push(console: Console, manager: TaskAgent):
         console.print(f"[red]Failed to push mission repository: {e}[/red]")
 
 
+def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
+    """Automate the move of docs/issues to a separate repository."""
+    source_dir = manager.issues_root
+    if source_dir.is_symlink():
+        console.print(
+            "[yellow]docs/issues is already a symlink. Ejection skipped.[/yellow]"
+        )
+        return
+
+    if not source_dir.exists():
+        console.print(f"[red]Source directory {source_dir} not found.[/red]")
+        return
+
+    # Determine names
+    project_root = Path.cwd()
+    project_name = project_root.name
+    target_name = f"{project_name}-issues"
+    target_path = project_root.parent / target_name
+
+    if target_path.exists():
+        console.print(f"[red]Target path {target_path} already exists. Aborting.[/red]")
+        return
+
+    console.print(f"[blue]Ejecting mission to [bold]{target_path}[/bold]...[/blue]")
+
+    try:
+        # 1. Verify GH CLI
+        subprocess.run(["gh", "--version"], check=True, capture_output=True)
+
+        # 2. Create target and move files
+        target_path.mkdir(parents=True)
+        for item in source_dir.iterdir():
+            shutil.move(str(item), str(target_path / item.name))
+
+        # 3. Git Init and Create Repo
+        subprocess.run(["git", "-C", str(target_path), "init"], check=True)
+
+        # Add everything
+        subprocess.run(["git", "-C", str(target_path), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(target_path),
+                "commit",
+                "-m",
+                "chore: initial mission control commit",
+            ],
+            check=True,
+        )
+
+        # gh repo create
+        visibility = "--public" if public else "--private"
+        console.print(
+            f"[blue]Creating GitHub repository [bold]{target_name}[/bold] ({visibility})...[/blue]"
+        )
+        subprocess.run(
+            [
+                "gh",
+                "repo",
+                "create",
+                target_name,
+                visibility,
+                "--source=.",
+                "--remote=origin",
+                "--push",
+            ],
+            cwd=str(target_path),
+            check=True,
+        )
+
+        # 4. Remove old dir and Symlink
+        shutil.rmtree(str(source_dir))
+        # Create a relative symlink (e.g., ../../task-agent-issues)
+        # From docs/issues to ../task-agent-issues
+        os.symlink(f"../../{target_name}", str(source_dir))
+
+        console.print(
+            "[bold green]Successfully ejected mission repository![/bold green]"
+        )
+        console.print(f"Mission Repo: [cyan]{target_path}[/cyan]")
+        console.print(
+            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_name}[/cyan]"
+        )
+        console.print(
+            "\n[yellow]Recommended:[/yellow] Add the following to your main .gitignore:"
+        )
+        console.print(f"  [cyan]{source_dir.relative_to(project_root)}[/cyan]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Command failed: {e}[/red]")
+        if e.stderr:
+            console.print(f"[dim]{e.stderr.decode()}[/dim]")
+    except Exception as e:
+        console.print(f"[red]An error occurred: {e}[/red]")
+
+
 def cmd_new(
     console: Console,
     manager: TaskAgent,
@@ -878,6 +975,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("start", "Start a task (creates branch & worktree)"),
         ("done", "Complete a task (moves file & commits)"),
         ("push", "Push the mission repository to origin"),
+        ("eject-mission", "Move mission queue to a separate repository"),
         ("", ""),  # Spacer
         ("active", "Mark a task as active without starting a worktree"),
         ("promote", "Promote a draft task to pending"),
@@ -949,6 +1047,14 @@ def main():
     # push
     subparsers.add_parser("push", help="Push the mission repository to origin")
 
+    # eject-mission
+    eject_parser = subparsers.add_parser(
+        "eject-mission", help="Move mission queue to a separate repository"
+    )
+    eject_parser.add_argument(
+        "--public", action="store_true", help="Make the new mission repo public"
+    )
+
     done_parser = subparsers.add_parser("done")
     done_parser.add_argument("slug", nargs="?")
     done_parser.add_argument("-m", "--message")
@@ -1017,6 +1123,8 @@ def main():
         cmd_init_mcp(console, scope=args.scope)
     elif args.command == "push":
         cmd_push(console, manager)
+    elif args.command == "eject-mission":
+        cmd_eject_mission(console, manager, public=args.public)
     elif args.command == "done":
         cmd_done(
             console,
