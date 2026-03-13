@@ -614,6 +614,62 @@ def cmd_version(console: Console, promote: Optional[str] = None, tag: bool = Fal
         console.print(f"[red]Error: {e}[/red]")
 
 
+def display_overview(console: Console, manager: TaskManager):
+    """Display a rich overview of the task agent state and available commands."""
+    v = get_tool_version()
+    console.print(
+        Panel(f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]", expand=False)
+    )
+
+    # Task Summary
+    issues = manager.load_mission()
+    active = [i for i in issues if i.status == "active"]
+    pending = [i for i in issues if i.status == "pending"]
+    draft = [i for i in issues if i.status == "draft"]
+
+    stats_table = Table.grid(padding=(0, 2))
+    stats_table.add_row(
+        f"[bold green]Active:[/bold green] {len(active)}",
+        f"[bold yellow]Pending:[/bold yellow] {len(pending)}",
+        f"[bold dim]Draft:[/bold dim] {len(draft)}",
+    )
+    console.print(stats_table)
+    console.print()
+
+    # Commands Table
+    table = Table(
+        title="Available Commands", box=None, show_header=False, padding=(0, 2)
+    )
+    table.add_column("Command", style="cyan", no_wrap=True)
+    table.add_column("Description", style="white")
+
+    commands = [
+        ("next", "Show the highest priority task"),
+        ("list", "List all tasks in the queue (try --json or --text)"),
+        ("new", "Create a new task"),
+        ("start", "Start a task (creates branch & worktree)"),
+        ("done", "Complete a task (moves file & commits)"),
+        ("", ""),  # Spacer
+        ("active", "Mark a task as active without starting a worktree"),
+        ("promote", "Promote a draft task to pending"),
+        ("up/down", "Adjust task priority"),
+        ("ingest", "Scan disk for new markdown tasks"),
+        ("", ""),  # Spacer
+        ("init-worker", "Scaffold an autonomous sidecar worker"),
+        ("init-mcp", "Register Task Agent with Gemini CLI"),
+        ("mcp", "Run the MCP server"),
+        ("version", "Manage project versioning"),
+    ]
+
+    for cmd, desc in commands:
+        table.add_row(cmd, desc)
+
+    console.print(table)
+    console.print(
+        "\n[dim]Run [bold]ta <command> --help[/bold] for detailed options.[/dim]"
+    )
+
+
 def main():
     if "LESS" not in os.environ:
         os.environ["LESS"] = "RFX"
@@ -733,7 +789,7 @@ def main():
         else:
             cmd_version(console)
     else:
-        parser.print_help()
+        display_overview(console, manager)
 
 
 if __name__ == "__main__":
