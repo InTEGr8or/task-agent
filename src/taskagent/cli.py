@@ -342,23 +342,23 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 
         # 4. Remove old dir and Symlink
         shutil.rmtree(str(source_dir))
-        # Create a relative symlink (e.g., ../../task-agent-issues)
-        # From docs/issues to ../task-agent-issues
-        os.symlink(f"../../{target_name}", str(source_dir))
+        # Use an absolute symlink for maximum local robustness
+        os.symlink(str(target_path.absolute()), str(source_dir))
 
         console.print(
             "[bold green]Successfully ejected mission repository![/bold green]"
         )
-        console.print(f"Mission Repo: [cyan]{target_path}[/cyan]")
+        console.print(f"Mission Repo: [cyan]{target_path.absolute()}[/cyan]")
         console.print(
-            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_name}[/cyan]"
+            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_path.absolute()}[/cyan]"
         )
         console.print(
-            "\n[yellow]Recommended:[/yellow] Add the following to your main .gitignore:"
+            "\n[yellow]Recommended:[/yellow] Commit the symlink to your repository so it persists across branches:"
         )
-        # Use absolute paths for relative calculation to avoid subpath errors
-        rel_path = source_dir.absolute().relative_to(project_root.absolute())
-        console.print(f"  [cyan]{rel_path}[/cyan]")
+        console.print(f"  [cyan]git add {source_dir.relative_to(project_root)}[/cyan]")
+        console.print(
+            '  [cyan]git commit -m "chore: link docs/issues to mission repo"[/cyan]'
+        )
 
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Command failed: {e}[/red]")
