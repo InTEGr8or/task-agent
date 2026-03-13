@@ -867,10 +867,66 @@ def cmd_version(
         console.print(f"[red]Error: {e}[/red]")
 
 
-def cmd_triage(console: Console, manager: TaskAgent):
+def cmd_restore(
+    console: Console, manager: TaskAgent, slug_part: str, to_status: str = "pending"
+):
+    """Restore a completed issue."""
+    try:
+        # Search including completed to find the full slug
+        issue_file = manager.find_issue_file(slug_part, include_completed=True)
+        if not issue_file:
+            console.print(f"[red]No issue found matching '{slug_part}'.[/red]")
+            return
+
+        # Determine slug from file name or parent dir
+        is_dir_based = issue_file.name == "README.md"
+        slug = issue_file.parent.name if is_dir_based else issue_file.stem
+
+        issue = manager.restore_issue(slug, to_status=to_status)
+        console.print(
+            f"[bold green]Issue '{issue.slug}' restored to {to_status}.[/bold green]"
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+def cmd_triage(
+    console: Console, manager: TaskAgent, search_query: Optional[str] = None
+):
     """Interactively reorder and promote tasks."""
-    issues = manager.sync_mission()
-    if not issues:
+    # We might want to triage COMPLETED issues too
+    show_completed = False
+
+    def get_display_issues(search: Optional[str] = None, completed: bool = False):
+        if completed:
+            # Load completed issues from disk since they aren't in mission.usv
+            all_issues = []
+            completed_root = manager.issues_root / "completed"
+            if completed_root.exists():
+                for year_dir in sorted(completed_root.iterdir(), reverse=True):
+                    if year_dir.is_dir():
+                        # File-based
+                        for f in sorted(year_dir.glob("*.md")):
+                            slug = f.stem
+                            all_issues.append(
+                                Issue(slug=slug, status="completed", priority=0)
+                            )
+                        # Directory-based
+                        for d in sorted(year_dir.glob("*/README.md")):
+                            slug = d.parent.name
+                            all_issues.append(
+                                Issue(slug=slug, status="completed", priority=0)
+                            )
+            issues = all_issues
+        else:
+            issues = manager.sync_mission()
+
+        if search:
+            issues = [i for i in issues if search.lower() in i.slug.lower()]
+        return issues
+
+    issues = get_display_issues(search_query, show_completed)
+    if not issues and not search_query:
         console.print("[yellow]No issues to triage.[/yellow]")
         return
 
@@ -878,8 +934,14 @@ def cmd_triage(console: Console, manager: TaskAgent):
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:
             # Render
+            title = "[bold blue]Triage Mode[/bold blue]"
+            if show_completed:
+                title = "[bold magenta]Triage Mode (COMPLETED)[/bold magenta]"
+            if search_query:
+                title += f" [dim](Search: {search_query})[/dim]"
+
             table = Table(
-                title="[bold blue]Triage Mode[/bold blue]",
+                title=title,
                 box=None,
                 show_header=True,
                 padding=(0, 2),
@@ -902,15 +964,20 @@ def cmd_triage(console: Console, manager: TaskAgent):
                     status_style = "bold yellow"
                 elif issue.status == "draft":
                     status_style = "dim"
+                elif issue.status == "completed":
+                    status_style = "bold blue"
 
                 table.add_row(
-                    str(i + 1),
+                    str(i + 1) if not show_completed else "-",
                     f"[{status_style}]{issue.status.upper()}[/{status_style}]",
                     display_slug,
                     style=style,
                 )
 
-            help_text = "\n[dim]j/k: move cursor | ctrl+k/j: change priority | p: promote | d: demote | q: exit[/dim]"
+            help_text = "[dim]j/k: move cursor | ctrl+k/j: priority | p: promote | d: demote | c: completed | /: search | q: exit[/dim]"
+            if show_completed:
+                help_text = "[dim]j/k: move cursor | r: restore to pending | c: toggle completed | /: search | q: exit[/dim]"
+
             live.update(
                 Panel(table, subtitle=help_text, border_style="blue"), refresh=True
             )
@@ -922,42 +989,60 @@ def cmd_triage(console: Console, manager: TaskAgent):
                 break
             elif key == "\r":  # enter (return)
                 break
+            elif key == "/":
+                live.stop()
+                search_query = questionary.text("Search slug:").ask()
+                issues = get_display_issues(search_query, show_completed)
+                cursor = 0
+                live.start()
+            elif key == "c":
+                show_completed = not show_completed
+                issues = get_display_issues(search_query, show_completed)
+                cursor = 0
             elif key in ["k", "\x1b[A"]:  # up
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:  # down
                 cursor = min(len(issues) - 1, cursor + 1)
-            elif key == "\x0b":  # ctrl+k
+            elif key == "\x0b" and not show_completed:  # ctrl+k
                 slug = issues[cursor].slug
                 try:
                     manager.prioritize_issue(slug, "up")
-                    issues = manager.load_mission()
+                    issues = get_display_issues(search_query, show_completed)
                     cursor = max(0, cursor - 1)
                 except Exception:
                     pass
-            elif key == "\x0a":  # ctrl+j (often \n)
+            elif key == "\x0a" and not show_completed:  # ctrl+j (often \n)
                 slug = issues[cursor].slug
                 try:
                     manager.prioritize_issue(slug, "down")
-                    issues = manager.load_mission()
+                    issues = get_display_issues(search_query, show_completed)
                     cursor = min(len(issues) - 1, cursor + 1)
                 except Exception:
                     pass
-            elif key == "p":  # promote
+            elif key == "p" and not show_completed:  # promote
                 issue = issues[cursor]
                 if issue.status == "draft":
                     try:
                         manager.promote_issue(issue.slug)
-                        issues = manager.load_mission()
+                        issues = get_display_issues(search_query, show_completed)
                     except Exception:
                         pass
-            elif key == "d":  # demote
+            elif key == "d" and not show_completed:  # demote
                 issue = issues[cursor]
                 if issue.status == "pending":
                     try:
                         manager.demote_issue(issue.slug)
-                        issues = manager.load_mission()
+                        issues = get_display_issues(search_query, show_completed)
                     except Exception:
                         pass
+            elif key == "r" and show_completed:  # restore
+                target = issues[cursor]
+                try:
+                    manager.restore_issue(target.slug, to_status="pending")
+                    issues = get_display_issues(search_query, show_completed)
+                    cursor = min(len(issues) - 1, cursor)
+                except Exception:
+                    pass
 
 
 def display_overview(console: Console, manager: TaskAgent):
@@ -1038,7 +1123,23 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("next")
-    subparsers.add_parser("triage", help="Interactively reorder and promote tasks")
+    triage_parser = subparsers.add_parser(
+        "triage", help="Interactively reorder and promote tasks"
+    )
+    triage_parser.add_argument(
+        "search", nargs="?", help="Optional search query to filter by slug"
+    )
+
+    restore_parser = subparsers.add_parser("restore", help="Restore a completed issue")
+    restore_parser.add_argument("slug", help="Slug (or partial slug) of the issue")
+    restore_parser.add_argument(
+        "-s",
+        "--status",
+        choices=["pending", "draft", "active"],
+        default="pending",
+        help="Target status (default: pending)",
+    )
+
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
@@ -1120,7 +1221,9 @@ def main():
     if args.command == "next":
         cmd_next(console, manager)
     elif args.command == "triage":
-        cmd_triage(console, manager)
+        cmd_triage(console, manager, search_query=args.search)
+    elif args.command == "restore":
+        cmd_restore(console, manager, args.slug, to_status=args.status)
     elif args.command == "list":
         fmt = "table"
         if args.json:
