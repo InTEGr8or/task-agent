@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "task-agent": {
+      "command": "uv",
+      "args": ["run", "python", "src/taskagent/mcp.py"],
+      "cwd": ".",
+      "trust": true,
+      "description": "Standardized task and issue management for autonomous agents."
+    }
+  }
+}

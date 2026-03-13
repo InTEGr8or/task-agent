@@ -9,6 +9,7 @@ authors = [
 ]
 license = { text = "MIT" }
 dependencies = [
+    "mcp>=1.26.0",
     "pydantic>=2.10.6",
     "questionary>=2.1.1",
     "rich>=13.9.4",
