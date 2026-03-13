@@ -314,26 +314,47 @@ class TaskManager:
             if not commit_message:
                 commit_message = f"feat: complete {target_issue.slug}"
 
-            status = subprocess.run(
-                ["git", "status", "--porcelain"], capture_output=True, text=True
-            ).stdout.strip()
+            # Initial add
+            subprocess.run(["git", "add", "."], check=False)
 
-            if status:
-                try:
-                    subprocess.run(["git", "add", "."], check=True)
-                    subprocess.run(["git", "commit", "-m", commit_message], check=True)
-                    commit_hash = self.get_git_commit()
-                except subprocess.CalledProcessError:
-                    commit_hash = self.get_git_commit()
-            else:
+            # Try to commit
+            res = subprocess.run(
+                ["git", "commit", "-m", commit_message], capture_output=True, text=True
+            )
+
+            if res.returncode != 0:
+                # If it failed, it might be due to pre-commit hooks modifying files.
+                # Try adding and committing one more time.
+                subprocess.run(["git", "add", "."], check=False)
+                res = subprocess.run(
+                    ["git", "commit", "-m", commit_message],
+                    capture_output=True,
+                    text=True,
+                )
+
+            if res.returncode == 0:
                 commit_hash = self.get_git_commit()
-        else:
-            commit_hash = self.get_git_commit()
 
-        # 5. Replace placeholder
-        file_text = final_file.read_text(encoding="utf-8")
-        file_text = file_text.replace("<pending-commit-id>", commit_hash)
-        final_file.write_text(file_text, encoding="utf-8")
+                # 5. Replace placeholder with real hash
+                file_text = final_file.read_text(encoding="utf-8")
+                file_text = file_text.replace("<pending-commit-id>", commit_hash)
+                final_file.write_text(file_text, encoding="utf-8")
+
+                # 6. Amend the commit to include the updated file (the hash replacement)
+                # Note: This changes the commit hash, but it's better than leaving it unstaged.
+                subprocess.run(["git", "add", str(final_file)], check=False)
+                subprocess.run(["git", "commit", "--amend", "--no-edit"], check=False)
+
+                # Get the final hash after amend
+                commit_hash = self.get_git_commit()
+            else:
+                commit_hash = "failed"
+        else:
+            # If not committing, still replace with current head or 'pending'
+            commit_hash = self.get_git_commit()
+            file_text = final_file.read_text(encoding="utf-8")
+            file_text = file_text.replace("<pending-commit-id>", commit_hash)
+            final_file.write_text(file_text, encoding="utf-8")
 
         target_issue.status = "completed"
         return target_issue, commit_hash
