@@ -549,6 +549,34 @@ class TaskAgent:
         self.sync_mission()
         return issues[idx]
 
+    def update_issue(self, slug: str, content: str) -> Issue:
+        """Update the content of an issue."""
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+
+        issue_file.write_text(content, encoding="utf-8")
+
+        # Re-extract deps in case they changed
+        issues = self.load_mission()
+        updated = False
+        for i in issues:
+            if i.slug == slug:
+                i.dependencies = self.extract_deps(issue_file)
+                updated = True
+                break
+
+        if updated:
+            self.save_mission(issues)
+
+        # Return the issue object
+        for i in issues:
+            if i.slug == slug:
+                return i
+
+        # If it was completed, it's not in mission.usv
+        return Issue(slug=slug, status="completed")
+
     def ingest_issues(self) -> Tuple[int, int]:
         """Ingest existing markdown files. Returns (num_new, num_removed)."""
         self.ensure_issues_dir()

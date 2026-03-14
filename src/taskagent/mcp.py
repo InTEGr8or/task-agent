@@ -179,6 +179,23 @@ def get_task_details(name: str) -> str:
     return issue_file.read_text(encoding="utf-8")
 
 
+@mcp.tool()
+def update_task(name: str, content: str) -> str:
+    """Update the Markdown content of a task.
+
+    Args:
+        name: The title or partial name of the task to update.
+        content: The new complete Markdown content for the task.
+    """
+    manager = get_manager()
+    slug = manager.slugify(name)
+    try:
+        manager.update_issue(slug, content)
+        return f"Successfully updated task '{slug}'."
+    except Exception as e:
+        return f"Error updating task: {e}"
+
+
 def run_mcp_server():
     """Main entry point to run the MCP server."""
     mcp.run()

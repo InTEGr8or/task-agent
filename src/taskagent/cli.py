@@ -164,6 +164,39 @@ def select_issue(
     return next(i for i in matches if i.slug == selected_slug)
 
 
+def render_issue(console: Console, issue: Issue, issue_file: Path):
+    """Render an issue's details to the console, using a pager if necessary."""
+    with issue_file.open("r", encoding="utf-8") as f:
+        content = f.read()
+
+    deps_info = ""
+    if issue.dependencies:
+        deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(issue.dependencies)}[/yellow]\n"
+
+    panel = Panel(
+        f"[bold blue]ISSUE:[/bold blue] [cyan]{issue.slug}[/cyan]\n"
+        f"[bold blue]PRIORITY:[/bold blue] {issue.priority} | "
+        f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
+        f"{deps_info}"
+        f"[bold blue]FILE:[/bold blue] {issue_file}",
+        title="Task Agent",
+        expand=False,
+    )
+    md = Markdown(content)
+
+    # Estimate lines: Panel (~6) + Markdown content + some buffer
+    total_lines = 8 + content.count("\n")
+    terminal_height = console.size.height
+
+    if total_lines > terminal_height:
+        with console.pager(styles=True):
+            console.print(panel)
+            console.print(md)
+    else:
+        console.print(panel)
+        console.print(md)
+
+
 def cmd_next(console: Console, manager: TaskAgent):
     """Show the top issue."""
     next_issue = manager.get_next_issue()
@@ -177,28 +210,7 @@ def cmd_next(console: Console, manager: TaskAgent):
         console.print(f"[red]Issue file not found for slug: {next_issue.slug}[/red]")
         sys.exit(1)
 
-    with issue_file.open("r", encoding="utf-8") as f:
-        content = f.read()
-
-    deps_info = ""
-    if next_issue.dependencies:
-        deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(next_issue.dependencies)}[/yellow]\n"
-
-    with console.pager(styles=True):
-        console.print(
-            Panel(
-                f"[bold blue]NEXT ISSUE:[/bold blue] [cyan]{next_issue.slug}[/cyan]\n"
-                f"[bold blue]PRIORITY:[/bold blue] {next_issue.priority} | "
-                f"[bold blue]STATUS:[/bold blue] {next_issue.status}\n"
-                f"{deps_info}"
-                f"[bold blue]FILE:[/bold blue] {issue_file}",
-                title="Task Agent",
-                expand=False,
-            )
-        )
-
-        md = Markdown(content)
-        console.print(md)
+    render_issue(console, next_issue, issue_file)
 
 
 def cmd_done(
@@ -982,9 +994,9 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move cursor | ctrl+k/j: priority | p: promote | d: demote | c: completed | /: search | q: exit[/dim]"
+            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | c: comp | /: search | q: exit[/dim]"
             if show_completed:
-                help_text = "[dim]j/k: move cursor | r: restore to pending | c: toggle completed | /: search | q: exit[/dim]"
+                help_text = "[dim]j/k: move | r: rest | v: view | e: edit | c: toggle comp | /: search | q: exit[/dim]"
 
             live.update(
                 Panel(table, subtitle=help_text, border_style="blue"), refresh=True
@@ -1011,6 +1023,34 @@ def cmd_triage(
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:  # down
                 cursor = min(len(issues) - 1, cursor + 1)
+            elif key == "v":
+                live.stop()
+                issue = issues[cursor]
+                issue_file = manager.find_issue_file(
+                    issue.slug, include_completed=show_completed
+                )
+                if issue_file:
+                    render_issue(console, issue, issue_file)
+                else:
+                    console.print(f"[red]Issue file not found for {issue.slug}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                live.start()
+            elif key == "e":
+                live.stop()
+                issue = issues[cursor]
+                issue_file = manager.find_issue_file(
+                    issue.slug, include_completed=show_completed
+                )
+                if issue_file:
+                    editor = os.environ.get("EDITOR", "vim")
+                    subprocess.run([editor, str(issue_file)])
+                    # Re-load mission in case deps changed
+                    manager.ingest_issues()
+                    issues = get_display_issues(search_query, show_completed)
+                else:
+                    console.print(f"[red]Issue file not found for {issue.slug}[/red]")
+                    questionary.press_any_key_to_continue().ask()
+                live.start()
             elif key == "\x0b" and not show_completed:  # ctrl+k
                 slug = issues[cursor].slug
                 try:
