@@ -49,9 +49,14 @@ def create_task(
 
 
 @mcp.tool()
-def promote_task(slug: str) -> str:
-    """Promote a task from 'draft' to 'pending' status."""
+def promote_task(name: str) -> str:
+    """Promote a task from 'draft' to 'pending' status.
+
+    Args:
+        name: The title or partial name of the task.
+    """
     manager = get_manager()
+    slug = manager.slugify(name)
     try:
         manager.promote_issue(slug)
         return f"Task '{slug}' promoted to pending."
@@ -60,9 +65,14 @@ def promote_task(slug: str) -> str:
 
 
 @mcp.tool()
-def demote_task(slug: str) -> str:
-    """Demote a task from 'pending' back to 'draft' status."""
+def demote_task(name: str) -> str:
+    """Demote a task from 'pending' back to 'draft' status.
+
+    Args:
+        name: The title or partial name of the task.
+    """
     manager = get_manager()
+    slug = manager.slugify(name)
     try:
         manager.demote_issue(slug)
         return f"Task '{slug}' demoted to draft."
@@ -71,9 +81,14 @@ def demote_task(slug: str) -> str:
 
 
 @mcp.tool()
-def mark_task_active(slug: str) -> str:
-    """Move a task to 'active' status, indicating work has started."""
+def mark_task_active(name: str) -> str:
+    """Move a task to 'active' status, indicating work has started.
+
+    Args:
+        name: The title or partial name of the task.
+    """
     manager = get_manager()
+    slug = manager.slugify(name)
     try:
         manager.move_to_active(slug)
         return f"Task '{slug}' is now active."
@@ -82,14 +97,15 @@ def mark_task_active(slug: str) -> str:
 
 
 @mcp.tool()
-def complete_task(slug: str, message: Optional[str] = None) -> str:
+def complete_task(name: str, message: Optional[str] = None) -> str:
     """Mark a task as completed and commit the changes.
 
     Args:
-        slug: The slug of the task to complete.
+        name: The title or partial name of the task to complete.
         message: Optional git commit message.
     """
     manager = get_manager()
+    slug = manager.slugify(name)
     try:
         issue, commit_hash = manager.complete_issue(slug, commit_message=message)
         return f"Task '{slug}' completed. Commit: {commit_hash}"
@@ -98,16 +114,17 @@ def complete_task(slug: str, message: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def search_task(slug: str) -> str:
-    """Search for a task by slug, including in completed tasks.
+def search_task(name: str) -> str:
+    """Search for a task by title or partial name, including in completed tasks.
 
     Args:
-        slug: The slug of the task to search for.
+        name: The title or partial name of the task to search for.
     """
     manager = get_manager()
+    slug = manager.slugify(name)
     issue_file = manager.find_issue_file(slug, include_completed=True)
     if not issue_file:
-        return f"Task '{slug}' not found anywhere."
+        return f"Task matching '{name}' ({slug}) not found anywhere."
 
     # Determine status based on path
     status = "unknown"
@@ -120,14 +137,15 @@ def search_task(slug: str) -> str:
 
 
 @mcp.tool()
-def restore_task(slug: str, status: str = "pending") -> str:
+def restore_task(name: str, status: str = "pending") -> str:
     """Restore a completed task back to pending, draft, or active status.
 
     Args:
-        slug: The slug of the task to restore.
+        name: The title or partial name of the task to restore.
         status: The target status ('pending', 'draft', or 'active'). Defaults to 'pending'.
     """
     manager = get_manager()
+    slug = manager.slugify(name)
     try:
         manager.restore_issue(slug, to_status=status)
         return f"Task '{slug}' restored to '{status}'."
@@ -136,12 +154,17 @@ def restore_task(slug: str, status: str = "pending") -> str:
 
 
 @mcp.tool()
-def get_task_details(slug: str) -> str:
-    """Get the full description and content of a specific task."""
+def get_task_details(name: str) -> str:
+    """Get the full description and content of a specific task.
+
+    Args:
+        name: The title or partial name of the task.
+    """
     manager = get_manager()
+    slug = manager.slugify(name)
     issue_file = manager.find_issue_file(slug)
     if not issue_file:
-        return f"Task '{slug}' not found."
+        return f"Task matching '{name}' ({slug}) not found."
 
     return issue_file.read_text(encoding="utf-8")
 
