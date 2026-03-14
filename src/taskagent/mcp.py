@@ -30,19 +30,26 @@ def list_tasks() -> str:
 
 @mcp.tool()
 def create_task(
-    title: str, body: str = "", draft: bool = False, depends_on: Optional[str] = None
+    title: str,
+    completion_criteria: str,
+    body: str = "",
+    draft: bool = False,
+    depends_on: Optional[str] = None,
 ) -> str:
     """Create a new task in the mission queue.
 
     Args:
         title: The title of the task.
+        completion_criteria: Clear, measurable criteria for task completion.
         body: Detailed description of the task.
         draft: If True, creates the task in 'draft' status. Default is False (pending).
         depends_on: Comma-separated list of existing task slugs this task depends on.
     """
     manager = get_manager()
     try:
-        issue = manager.create_issue(title, body, draft, depends_on)
+        issue = manager.create_issue(
+            title, body, draft, depends_on, completion_criteria=completion_criteria
+        )
         return f"Created task: {issue.slug} (Status: {issue.status})"
     except Exception as e:
         return f"Error creating task: {e}"

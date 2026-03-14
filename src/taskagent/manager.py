@@ -271,6 +271,7 @@ class TaskAgent:
         draft: bool = False,
         depends_on: Optional[str] = None,
         as_dir: bool = False,
+        completion_criteria: Optional[str] = None,
     ) -> Issue:
         """Create a new issue."""
         slug = self.slugify(title)
@@ -298,6 +299,8 @@ class TaskAgent:
             if deps:
                 f.write(f"**Depends on:** {', '.join(deps)}\n\n")
             f.write(f"{body}\n")
+            if completion_criteria:
+                f.write(f"\n## Completion Criteria\n\n{completion_criteria}\n")
 
         # Update mission.usv
         issues = self.load_mission()

@@ -404,10 +404,13 @@ def cmd_new(
     draft: bool,
     depends_on: Optional[str] = None,
     as_dir: bool = False,
+    completion_criteria: Optional[str] = None,
 ):
     """Create a new issue."""
     try:
-        issue = manager.create_issue(title, body, draft, depends_on, as_dir)
+        issue = manager.create_issue(
+            title, body, draft, depends_on, as_dir, completion_criteria
+        )
         console.print(f"[bold green]Created new issue: {issue.slug}[/bold green]")
         issue_file = manager.find_issue_file(issue.slug)
         console.print(f"File: {issue_file}")
@@ -1198,6 +1201,7 @@ def main():
     new_parser = subparsers.add_parser("new")
     new_parser.add_argument("title")
     new_parser.add_argument("-b", "--body", default="")
+    new_parser.add_argument("-c", "--criteria", help="Completion criteria")
     new_parser.add_argument("-d", "--draft", action="store_true")
     new_parser.add_argument("--dir", action="store_true")
     new_parser.add_argument("--depends-on")
@@ -1277,6 +1281,7 @@ def main():
             args.draft,
             args.depends_on,
             args.dir,
+            args.criteria,
         )
     elif args.command == "version":
         if args.version_command == "promote":

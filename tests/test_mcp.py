@@ -26,9 +26,13 @@ def test_mcp_list_tasks(mock_manager):
 def test_mcp_create_task(mock_manager):
     mock_manager.create_issue.return_value = Issue(slug="new-task", status="pending")
 
-    result = mcp.create_task("New Task", body="Desc")
+    result = mcp.create_task(
+        "New Task", completion_criteria="Must pass tests", body="Desc"
+    )
     assert "Created task: new-task (Status: pending)" in result
-    mock_manager.create_issue.assert_called_once_with("New Task", "Desc", False, None)
+    mock_manager.create_issue.assert_called_once_with(
+        "New Task", "Desc", False, None, completion_criteria="Must pass tests"
+    )
 
 
 def test_mcp_mark_task_active(mock_manager):

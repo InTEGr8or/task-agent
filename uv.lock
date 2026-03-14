@@ -983,7 +983,7 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "0.1.100"
+version = "0.1.102"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
