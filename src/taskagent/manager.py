@@ -489,16 +489,22 @@ class TaskAgent:
             # A. Commit Code Changes (Main Repo)
             if self.code_root:
                 code_hash = self._git_commit(self.code_root, msg)
+                if code_hash == "failed":
+                    raise RuntimeError("Failed to commit changes to code repository.")
 
             # B. Commit Mission Changes (Mission Repo)
             # If they are different, we perform a second commit
             if self.is_dual_repo and self.mission_root:
                 mission_msg = f"task: finalize {target_issue.slug}"
-                self._git_commit(self.mission_root, mission_msg)
+                mission_hash = self._git_commit(self.mission_root, mission_msg)
+                if mission_hash == "failed":
+                    raise RuntimeError(
+                        "Failed to commit changes to mission repository."
+                    )
 
         # 5. Update issue file with the code hash
         # If we didn't commit, we use the current HEAD or 'pending'
-        if code_hash == "unknown" or code_hash == "failed":
+        if code_hash == "unknown":
             code_hash = self.get_git_commit()
 
         file_text = final_file.read_text(encoding="utf-8")
@@ -508,13 +514,20 @@ class TaskAgent:
         # 6. Amend the mission commit if in dual mode, or the code commit if single mode
         if should_commit:
             if self.is_dual_repo and self.mission_root:
-                self._git_commit(
+                res = self._git_commit(
                     self.mission_root, "", amend=True, files=[str(final_file)]
                 )
+                if res == "failed":
+                    raise RuntimeError("Failed to amend mission commit.")
             elif self.code_root:
-                self._git_commit(
+                res = self._git_commit(
                     self.code_root, "", amend=True, files=[str(final_file)]
                 )
+                if res == "failed":
+                    # We might want to be more lenient here or use a separate commit?
+                    # For now, if amend fails, we still consider the issue finished
+                    # but maybe warn? Let's raise for now to be safe.
+                    raise RuntimeError("Failed to amend code commit.")
 
         # 7. Optional Push
         if push_mission and self.mission_root:
