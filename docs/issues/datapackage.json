@@ -9,6 +9,10 @@
       "schema": {
         "fields": [
           {
+            "name": "name",
+            "type": "string"
+          },
+          {
             "name": "slug",
             "type": "string"
           },
