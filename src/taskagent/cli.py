@@ -1180,7 +1180,7 @@ def display_overview(console: Console, manager: TaskAgent):
 
     commands = [
         ("next", "Show the highest priority task"),
-        ("triage", "Interactively reorder and promote tasks"),
+        ("prior", "Interactively reorder and promote tasks"),
         ("list", "List all tasks in the queue (try --json or --text)"),
         ("new", "Create a new task"),
         ("start", "Start a task (creates branch & worktree)"),
@@ -1194,6 +1194,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("demote", "Demote a pending task back to draft"),
         ("up/down", "Adjust task priority"),
         ("ingest", "Scan disk for new markdown tasks"),
+        ("triage", "(alias for prior)"),
         ("", ""),  # Spacer
         ("init-worker", "Scaffold an autonomous sidecar worker"),
         ("init-mcp", "Register Task Agent with Gemini CLI"),
@@ -1224,6 +1225,12 @@ def main():
         "triage", help="Interactively reorder and promote tasks"
     )
     triage_parser.add_argument(
+        "search", nargs="?", help="Optional search query to filter by slug"
+    )
+    prior_parser = subparsers.add_parser(
+        "prior", help="Interactively reorder and promote tasks"
+    )
+    prior_parser.add_argument(
         "search", nargs="?", help="Optional search query to filter by slug"
     )
 
@@ -1326,6 +1333,8 @@ def main():
     elif args.command == "init":
         cmd_init(console, manager)
     elif args.command == "triage":
+        cmd_triage(console, manager, search_query=args.search)
+    elif args.command == "prior":
         cmd_triage(console, manager, search_query=args.search)
     elif args.command == "restore":
         cmd_restore(console, manager, args.slug, to_status=args.status)
