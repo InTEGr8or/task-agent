@@ -1054,7 +1054,9 @@ def cmd_triage(
             if show_completed:
                 help_text = "[dim]j/k: move | r: rest | v: view | e: edit | c: toggle comp | /: search | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
+            from rich.box import ROUNDED
+
+            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
 
             # Input
             key = get_key()
