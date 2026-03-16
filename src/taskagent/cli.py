@@ -1029,7 +1029,7 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | c: comp | /: search | q: exit[/dim]"
+            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | c: comp | /: search | q: exit[/dim]"
             if show_completed:
                 help_text = "[dim]j/k: move | r: rest | v: view | e: edit | c: toggle comp | /: search | q: exit[/dim]"
 
@@ -1077,12 +1077,26 @@ def cmd_triage(
                 if issue_file:
                     editor = os.environ.get("EDITOR", "vim")
                     subprocess.run([editor, str(issue_file)])
-                    # Re-load mission in case deps changed
-                    manager.ingest_issues()
+                    manager.init_project()
                     issues = get_display_issues(search_query, show_completed)
                 else:
                     console.print(f"[red]Issue file not found for {issue.slug}[/red]")
                     questionary.press_any_key_to_continue().ask()
+                live.start()
+            elif key == "a" and not show_completed:
+                live.stop()
+                title = questionary.text("Issue title:").ask()
+                if title:
+                    body = questionary.text("Issue body (optional):").ask() or ""
+                    draft = questionary.confirm("Create as draft?").ask()
+                    try:
+                        issue = manager.create_issue(title, body, draft)
+                        console.print(f"[bold green]Created: {issue.slug}[/bold green]")
+                        manager.init_project()
+                        issues = get_display_issues(search_query, show_completed)
+                    except Exception as e:
+                        console.print(f"[red]Error: {e}[/red]")
+                        questionary.press_any_key_to_continue().ask()
                 live.start()
             elif key == "\x0b" and not show_completed:  # ctrl+k
                 slug = issues[cursor].slug
