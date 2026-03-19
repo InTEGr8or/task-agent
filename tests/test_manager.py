@@ -176,3 +176,51 @@ def test_api_ingest_issues(manager, tmp_path):
     # Check dependencies extracted
     dir_issue = next(i for i in issues if i.slug == "dir-task")
     assert dir_issue.dependencies == ["other-task"]
+
+
+def test_api_add_dependency(manager):
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+
+    manager.add_dependency("task-b", "task-a")
+
+    issue_file = manager.find_issue_file("task-b")
+    content = issue_file.read_text()
+    assert "**Depends on:** task-a" in content
+
+
+def test_api_add_dependency_existing(manager):
+    manager.create_issue("Task A")
+    manager.create_issue("Task B", body="**Depends on:** task-a")
+
+    # Add same dependency again
+    manager.add_dependency("task-b", "task-a")
+
+    issue_file = manager.find_issue_file("task-b")
+    deps = manager.extract_deps(issue_file)
+    assert deps == ["task-a"]
+
+
+def test_api_remove_dependency(manager):
+    manager.create_issue("Task A")
+    manager.create_issue("Task B", body="**Depends on:** task-a")
+
+    manager.remove_dependency("task-b", "task-a")
+
+    issue_file = manager.find_issue_file("task-b")
+    deps = manager.extract_deps(issue_file)
+    assert deps == []
+
+
+def test_api_add_multiple_dependencies(manager):
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+    manager.create_issue("Task C")
+
+    manager.add_dependency("task-c", "task-a")
+    manager.add_dependency("task-c", "task-b")
+
+    issue_file = manager.find_issue_file("task-c")
+    deps = manager.extract_deps(issue_file)
+    assert "task-a" in deps
+    assert "task-b" in deps
