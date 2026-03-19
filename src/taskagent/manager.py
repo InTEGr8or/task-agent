@@ -530,7 +530,6 @@ class TaskAgent:
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
-        self._set_writable(issue_file, False)
 
         issues = self.load_mission()
         for issue in issues:
@@ -562,7 +561,6 @@ class TaskAgent:
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
-        self._set_writable(issue_file, False)
 
         issues = self.load_mission()
         for issue in issues:
