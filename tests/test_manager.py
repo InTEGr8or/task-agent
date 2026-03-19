@@ -127,6 +127,44 @@ def test_api_demote_issue(manager):
     assert (manager.issues_root / "draft" / "demote-me.md").exists()
 
 
+def test_api_promote_cascades_to_children(manager):
+    """When a parent is promoted, draft children are also promoted."""
+    manager.create_issue("Parent", draft=True)
+    manager.create_issue("Child", draft=True)
+
+    manager.add_dependency("child", "parent")
+
+    manager.promote_issue("parent")
+
+    assert (manager.issues_root / "pending" / "parent.md").exists()
+    assert (manager.issues_root / "pending" / "child.md").exists()
+
+    issues = manager.load_mission()
+    parent = next(i for i in issues if i.slug == "parent")
+    child = next(i for i in issues if i.slug == "child")
+    assert parent.status == "pending"
+    assert child.status == "pending"
+
+
+def test_api_demote_cascades_to_children(manager):
+    """When a parent is demoted, pending children are also demoted."""
+    manager.create_issue("Parent", draft=False)
+    manager.create_issue("Child", draft=False)
+
+    manager.add_dependency("child", "parent")
+
+    manager.demote_issue("parent")
+
+    assert (manager.issues_root / "draft" / "parent.md").exists()
+    assert (manager.issues_root / "draft" / "child.md").exists()
+
+    issues = manager.load_mission()
+    parent = next(i for i in issues if i.slug == "parent")
+    child = next(i for i in issues if i.slug == "child")
+    assert parent.status == "draft"
+    assert child.status == "draft"
+
+
 def test_api_move_to_active(manager):
     manager.create_issue("Active Me")
     manager.move_to_active("active-me")

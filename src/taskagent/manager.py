@@ -412,7 +412,7 @@ class TaskAgent:
         return next(i for i in issues if i.slug == slug)
 
     def promote_issue(self, slug: str) -> Issue:
-        """Promote an issue from draft to pending."""
+        """Promote an issue from draft to pending. Also promotes any draft children."""
         issues = self.load_mission()
         target = next(
             (i for i in issues if i.slug == slug and i.status == "draft"), None
@@ -420,21 +420,34 @@ class TaskAgent:
         if not target:
             raise ValueError(f"Draft issue '{slug}' not found.")
 
-        issue_file = self.find_issue_file(target.slug)
-        if not issue_file:
-            raise FileNotFoundError(f"Issue file not found for '{target.slug}'.")
+        promoted = [target.slug]
 
-        is_dir_based = issue_file.name == "README.md"
-        source = issue_file.parent if is_dir_based else issue_file
-        dest = self.issues_root / "pending" / source.name
+        def promote_single(s: str):
+            issue_file = self.find_issue_file(s)
+            if not issue_file:
+                return
+            is_dir_based = issue_file.name == "README.md"
+            source = issue_file.parent if is_dir_based else issue_file
+            dest = self.issues_root / "pending" / source.name
+            shutil.move(str(source), str(dest))
 
-        shutil.move(str(source), str(dest))
+        promote_single(target.slug)
+
+        children = [
+            i.slug
+            for i in issues
+            if target.slug in i.dependencies and i.status == "draft"
+        ]
+        for child_slug in children:
+            promote_single(child_slug)
+            promoted.append(child_slug)
+
         self.sync_mission()
         target.status = "pending"
         return target
 
     def demote_issue(self, slug: str) -> Issue:
-        """Demote an issue from pending to draft."""
+        """Demote an issue from pending to draft. Also demotes any pending children."""
         issues = self.load_mission()
         target = next(
             (i for i in issues if i.slug == slug and i.status == "pending"), None
@@ -442,15 +455,25 @@ class TaskAgent:
         if not target:
             raise ValueError(f"Pending issue '{slug}' not found.")
 
-        issue_file = self.find_issue_file(target.slug)
-        if not issue_file:
-            raise FileNotFoundError(f"Issue file not found for '{target.slug}'.")
+        def demote_single(s: str):
+            issue_file = self.find_issue_file(s)
+            if not issue_file:
+                return
+            is_dir_based = issue_file.name == "README.md"
+            source = issue_file.parent if is_dir_based else issue_file
+            dest = self.issues_root / "draft" / source.name
+            shutil.move(str(source), str(dest))
 
-        is_dir_based = issue_file.name == "README.md"
-        source = issue_file.parent if is_dir_based else issue_file
-        dest = self.issues_root / "draft" / source.name
+        demote_single(target.slug)
 
-        shutil.move(str(source), str(dest))
+        children = [
+            i.slug
+            for i in issues
+            if target.slug in i.dependencies and i.status == "pending"
+        ]
+        for child_slug in children:
+            demote_single(child_slug)
+
         self.sync_mission()
         target.status = "draft"
         return target
@@ -508,7 +531,13 @@ class TaskAgent:
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
         self._set_writable(issue_file, False)
-        self.init_project()
+
+        issues = self.load_mission()
+        for issue in issues:
+            if issue.slug == slug:
+                issue.dependencies = deps
+                break
+        self.save_mission(issues)
 
     def remove_dependency(self, slug: str, depends_on: str) -> None:
         """Remove a dependency from an issue."""
@@ -534,7 +563,13 @@ class TaskAgent:
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
         self._set_writable(issue_file, False)
-        self.init_project()
+
+        issues = self.load_mission()
+        for issue in issues:
+            if issue.slug == slug:
+                issue.dependencies = deps
+                break
+        self.save_mission(issues)
 
     def _git_commit(
         self,

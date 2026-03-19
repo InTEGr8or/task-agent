@@ -1,2 +1,3 @@
 Make NVim the default editormake-nvim-the-default-editor
 test plantest-plan
+test tasktest-task
