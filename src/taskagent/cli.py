@@ -8,6 +8,7 @@ import sys
 import argparse
 import os
 import json
+import re
 import importlib.metadata
 import urllib.request
 import questionary
@@ -54,15 +55,16 @@ def get_latest_pypi_version(timeout: int = 4) -> Optional[str]:
         return None
 
 
-def get_project_version() -> Tuple[str, Optional[str]]:
-    """Read the current project version from pyproject.toml or package.json."""
-    # Check pyproject.toml
-    if Path("pyproject.toml").exists():
-        try:
-            with open("pyproject.toml", "r") as f:
-                content = f.read()
-                import re
+def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
+    """Read the current project version from various project files."""
+    root = root or Path.cwd()
 
+    # Check pyproject.toml
+    pyproject = root / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            with pyproject.open("r") as f:
+                content = f.read()
                 match = re.search(r'version\s*=\s*"(.*?)"', content)
                 if match:
                     return match.group(1), "pyproject.toml"
@@ -70,12 +72,67 @@ def get_project_version() -> Tuple[str, Optional[str]]:
             pass
 
     # Check package.json
-    if Path("package.json").exists():
+    package_json = root / "package.json"
+    if package_json.exists():
         try:
-            with open("package.json", "r") as f:
+            with package_json.open("r") as f:
                 data = json.load(f)
                 if "version" in data:
                     return data["version"], "package.json"
+        except Exception:
+            pass
+
+    # Check Cargo.toml (Rust)
+    cargo = root / "Cargo.toml"
+    if cargo.exists():
+        try:
+            with cargo.open("r") as f:
+                content = f.read()
+                match = re.search(r'^version\s*=\s*"(.*?)"', content, re.MULTILINE)
+                if match:
+                    return match.group(1), "Cargo.toml"
+        except Exception:
+            pass
+
+    # Check *.csproj (.NET)
+    for csproj in root.glob("*.csproj"):
+        try:
+            with csproj.open("r") as f:
+                content = f.read()
+                match = re.search(r"<Version>(.*?)</Version>", content)
+                if match:
+                    return match.group(1), csproj.name
+        except Exception:
+            pass
+
+    # Check pom.xml (Java/Maven)
+    pom = root / "pom.xml"
+    if pom.exists():
+        try:
+            with pom.open("r") as f:
+                content = f.read()
+                match = re.search(r"<version>(.*?)</version>", content)
+                if match:
+                    return match.group(1), "pom.xml"
+        except Exception:
+            pass
+
+    # Check build.gradle (Java/Gradle)
+    gradle_kts = root / "build.gradle.kts"
+    gradle = root / "build.gradle"
+    gradle_file = None
+    if gradle_kts.exists():
+        gradle_file = gradle_kts
+    elif gradle.exists():
+        gradle_file = gradle
+
+    if gradle_file:
+        try:
+            with gradle_file.open("r") as f:
+                content = f.read()
+                match = re.search(r'version\s*=\s*["\'](.*?)["\']', content)
+                if match:
+                    return match.group(1), gradle_file.name
         except Exception:
             pass
 
