@@ -15,3 +15,10 @@ The project has been renamed from `issue-agent` to `task-agent`. The default sto
 1.  **Code Change**: Modify `manager.py` to detect if `docs/issues` exists and `docs/tasks` does not (or we are in `init`).
 2.  **Move Logic**: In `init_project`, if `self.issues_root` is `docs/issues` and it's not explicitly configured, move it to `docs/tasks`.
 3.  **Documentation**: Use `grep_search` to find all occurrences of `docs/issues` and replace them.
+
+## Solution
+
+Implemented directory migration logic in init_project and updated all documentation and tests.
+
+---
+**Completed in commit:** `184cf6d`
