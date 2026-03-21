@@ -356,11 +356,11 @@ def cmd_push(console: Console, manager: TaskAgent):
 
 
 def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
-    """Automate the move of docs/issues to a separate repository."""
+    """Automate the move of docs/tasks to a separate repository."""
     source_dir = manager.issues_root
     if source_dir.is_symlink():
         console.print(
-            "[yellow]docs/issues is already a symlink. Ejection skipped.[/yellow]"
+            "[yellow]docs/tasks is already a symlink. Ejection skipped.[/yellow]"
         )
         return
 
@@ -371,7 +371,7 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
     # Determine names
     project_root = Path.cwd()
     project_name = project_root.name
-    target_name = f"{project_name}-issues"
+    target_name = f"{project_name}-tasks"
     target_path = project_root.parent / target_name
 
     if target_path.exists():

@@ -20,17 +20,17 @@ def test_discover_env_var(tmp_path, monkeypatch):
 
 
 def test_discover_walk_up_folder(tmp_path):
-    # Setup structure: root/docs/issues, root/src/subdir
+    # Setup structure: root/docs/tasks, root/src/subdir
     root = tmp_path / "project"
-    issues_dir = root / "docs" / "issues"
-    issues_dir.mkdir(parents=True)
+    tasks_dir = root / "docs" / "tasks"
+    tasks_dir.mkdir(parents=True)
 
     subdir = root / "src" / "deep" / "dir"
     subdir.mkdir(parents=True)
 
     # Run discovery from deep subdir
     manager = discover(start_path=subdir)
-    assert manager.issues_root.resolve() == issues_dir.resolve()
+    assert manager.issues_root.resolve() == tasks_dir.resolve()
 
 
 def test_discover_config_file(tmp_path):

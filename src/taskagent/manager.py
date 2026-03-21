@@ -90,19 +90,54 @@ class TaskAgent:
     def init_project(self) -> Tuple[int, int]:
         """Initialize or heal the task agent structure in the current project.
         Syncs disk state with mission.usv. Returns (num_new, num_removed)."""
-        # Migrate issues/ to tasks/ if exists
-        old_dir = self.issues_root.parent / "issues"
-        if old_dir.exists() and old_dir.is_dir():
-            if not self.issues_root.exists():
-                self.issues_root.mkdir(parents=True)
-            for item in old_dir.iterdir():
-                # Only move if destination doesn't exist to avoid overwrites
-                dest = self.issues_root / item.name
-                if not dest.exists():
-                    shutil.move(str(item), str(dest))
-            # Remove only if empty
-            if not any(old_dir.iterdir()):
-                old_dir.rmdir()
+        # Robust migration from issues/ to tasks/
+        parent = self.issues_root.parent
+        legacy_issues = parent / "issues"
+        target_tasks = parent / "tasks"
+
+        if legacy_issues.exists() or legacy_issues.is_symlink():
+            if not target_tasks.exists() and not target_tasks.is_symlink():
+                # Perform the move/rename
+                if legacy_issues.is_symlink():
+                    # Get target (could be relative or absolute)
+                    link_target = os.readlink(str(legacy_issues))
+                    target_path = legacy_issues.parent / link_target
+
+                    # If the target folder name contains "-issues", rename it to "-tasks"
+                    if "-issues" in target_path.name:
+                        new_target_name = target_path.name.replace("-issues", "-tasks")
+                        new_target_path = target_path.parent / new_target_name
+                        if not new_target_path.exists():
+                            target_path.rename(new_target_path)
+                            # Update link_target for the new symlink
+                            link_target = link_target.replace(
+                                target_path.name, new_target_name
+                            )
+
+                    # Remove old symlink
+                    legacy_issues.unlink()
+                    # Create new symlink at docs/tasks
+                    os.symlink(link_target, str(target_tasks))
+                else:
+                    # It's a directory
+                    legacy_issues.rename(target_tasks)
+
+                # Update self state if we were pointing to the legacy name
+                if self.issues_root.name == "issues":
+                    self.issues_root = target_tasks
+                    self.mission_path = self.issues_root / "mission.usv"
+                    # Refresh mission root too
+                    self.mission_root = self._get_git_root(self.issues_root)
+            else:
+                # Merge if both exist
+                if legacy_issues.is_dir() and target_tasks.is_dir():
+                    for item in legacy_issues.iterdir():
+                        dest = target_tasks / item.name
+                        if not dest.exists():
+                            shutil.move(str(item), str(dest))
+                    # Remove legacy only if now empty
+                    if not any(legacy_issues.iterdir()):
+                        legacy_issues.rmdir()
 
         self.ensure_issues_dir()
         num_new, num_removed = self.ingest_issues()
@@ -254,13 +289,15 @@ class TaskAgent:
 
                         # Determine status from file location
                         issue_file = self.find_issue_file(slug)
-                        status = "unknown"
                         if issue_file:
                             # If it's slug/README.md, status is parent of parent
                             if issue_file.name == "README.md":
                                 status = issue_file.parent.parent.name
                             else:
                                 status = issue_file.parent.name
+                        else:
+                            # Fallback during migration or if file is temporarily gone
+                            status = "pending"
 
                         issues.append(
                             Issue(

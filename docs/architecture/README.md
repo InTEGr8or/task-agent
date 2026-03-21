@@ -4,7 +4,7 @@ Task Agent is designed with a "filesystem-as-a-database" philosophy. This ensure
 
 ## 📂 Data Storage
 
-All task data is stored within the `docs/issues/` directory.
+All task data is stored within the `docs/tasks/` directory.
 
 ### 1. The Mission File (`mission.usv`)
 The `mission.usv` file is the source of truth for the prioritized queue. It uses **Unit Separator Value (\x1f)** formatting.
