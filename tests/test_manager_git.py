@@ -6,7 +6,7 @@ from taskagent.manager import TaskAgent
 
 @pytest.fixture
 def manager(tmp_path):
-    issues_root = tmp_path / "docs" / "issues"
+    issues_root = tmp_path / "docs" / "tasks"
     return TaskAgent(config_dir=str(issues_root))
 
 
@@ -60,13 +60,15 @@ def test_dual_repo_detection(tmp_path, manager):
 
 def test_complete_issue_dual_repo_flow(tmp_path, manager):
     # Setup dual repo state
-    manager.code_root = tmp_path / "code"
-    manager.mission_root = tmp_path / "mission"
-    manager.code_root.mkdir()
-    manager.mission_root.mkdir()
+    code_root = tmp_path / "code"
+    mission_root = tmp_path / "mission"
+    code_root.mkdir()
+    mission_root.mkdir()
 
-    # Create issue in mission repo
-    manager.issues_root = manager.mission_root / "issues"
+    # Set them explicitly
+    manager.code_root = code_root
+    manager.mission_root = mission_root
+    manager.issues_root = mission_root / "tasks"
     manager.create_issue("Test Task")
 
     with patch.object(TaskAgent, "_git_commit") as mock_commit:
@@ -78,6 +80,6 @@ def test_complete_issue_dual_repo_flow(tmp_path, manager):
         # Plus the amend call
         assert mock_commit.call_count >= 2
         # Verify first call is for code repo
-        assert mock_commit.call_args_list[0].args[0] == manager.code_root
+        assert mock_commit.call_args_list[0].args[0] == code_root
         # Verify second call is for mission repo
-        assert mock_commit.call_args_list[1].args[0] == manager.mission_root
+        assert mock_commit.call_args_list[1].args[0] == mission_root

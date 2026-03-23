@@ -15,7 +15,7 @@ from datetime import datetime
 @pytest.fixture
 def temp_issues_dir(tmp_path):
     """Create a temporary issues structure."""
-    issues_root = tmp_path / "docs" / "issues"
+    issues_root = tmp_path / "docs" / "tasks"
     for subdir in ["pending", "draft", "active", "completed"]:
         (issues_root / subdir).mkdir(parents=True)
     return issues_root
