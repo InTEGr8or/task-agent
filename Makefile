@@ -27,3 +27,6 @@ active: ## Mark an issue as active (usage: make active [SLUG=slug])
 
 done: ## Mark an issue as done (usage: make done [SLUG=slug])
 	@uv run python -m taskagent done $(SLUG)
+
+build: ## Build the package
+	@echo "No build task defined"

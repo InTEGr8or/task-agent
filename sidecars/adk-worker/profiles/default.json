@@ -1,0 +1,14 @@
+{
+  "manager": {
+    "provider": "google",
+    "model_id": "gemini-3-flash-preview"
+  },
+  "worker": {
+    "provider": "google",
+    "model_id": "gemini-3-flash-preview"
+  },
+  "validator": {
+    "provider": "google",
+    "model_id": "gemini-3-flash-preview"
+  }
+}

@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
@@ -133,49 +134,63 @@ def check_success_tool(passed: bool, message: str, tool_context: ToolContext) ->
         return f"Validation Failed: {message}. Requesting fix."
 
 
+# --- Helpers ---
+
+
+def load_instruction(name: str) -> str:
+    """Load agent instruction from a markdown file."""
+    path = Path(__file__).parent / "instructions" / f"{name}.md"
+    return path.read_text(encoding="utf-8").strip()
+
+
+def load_profile(name: str) -> dict:
+    """Load model profile from a JSON file."""
+    path = Path(__file__).parent / "profiles" / f"{name}.json"
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def get_model(config: dict):
+    """Factory to create a model instance based on profile config."""
+    provider = config.get("provider", "google")
+    model_id = config.get("model_id", "gemini-2.0-flash")
+
+    if provider == "google":
+        return Gemini(model_id=model_id)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+
 # --- Agent Definitions ---
+
+# Load profile
+profile_name = os.getenv("TA_PROFILE", "default")
+profile = load_profile(profile_name)
 
 # Initialize API Key
 get_google_api_key()
-model = Gemini(model_id="gemini-2.0-flash")
 
 # 1. Manager: High-level planner
 manager = LlmAgent(
     name="Manager",
-    model=model,
-    instruction="""You are the Manager Agent.
-    Your job is to read the task description in {TA_FILE} and create a technical plan.
-    The task involves modifying the codebase at {TA_ROOT} for issue {TA_SLUG}.
-    Break the task into discrete, actionable steps for the Worker.
-    """,
+    model=get_model(profile["manager"]),
+    instruction=load_instruction("manager"),
     output_key="master_plan",
 )
 
 # 2. Worker: Implementation agent
 worker = LlmAgent(
     name="Worker",
-    model=model,
-    instruction="""You are the Worker Agent.
-    Your job is to execute the technical plan: {master_plan}.
-    Use the tools to read files, write files, and run commands.
-    All paths provided to tools are relative to {TA_ROOT}.
-    Make surgical, high-quality changes.
-    If the Validator previously failed, address their specific feedback: {validation_feedback}.
-    """,
+    model=get_model(profile["worker"]),
+    instruction=load_instruction("worker"),
     tools=[read_file_tool, write_file_tool, run_command_tool],
 )
 
 # 3. Validator: Quality assurance agent
 validator = LlmAgent(
     name="Validator",
-    model=model,
-    instruction="""You are the Validator Agent.
-    Your job is to verify the changes made by the Worker in {TA_ROOT}.
-    Run tests, linting, or any relevant verification commands using 'run_command_tool'.
-    Analyze the output for any errors or regressions.
-    If the changes are correct and verified, use 'check_success_tool' with passed=True.
-    If there are errors, use 'check_success_tool' with passed=False and provide detailed feedback.
-    """,
+    model=get_model(profile["validator"]),
+    instruction=load_instruction("validator"),
     tools=[run_command_tool, check_success_tool],
     output_key="validation_feedback",
 )
