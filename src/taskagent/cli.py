@@ -399,7 +399,11 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
             ["git", "-C", str(target_path), "init"], check=True, shell=(os.name == "nt")
         )
 
-        # Add everything
+        # Calculate relative path for git operations and gitignore
+        project_root = Path.cwd()
+        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
+
+        # Add everything to new repo
         subprocess.run(
             ["git", "-C", str(target_path), "add", "."],
             check=True,
@@ -440,6 +444,13 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         )
 
         # 4. Remove old dir and Symlink
+        # First remove from git if tracked
+        subprocess.run(
+            ["git", "rm", "-r", "--cached", str(git_rel_path)],
+            check=False,
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
         shutil.rmtree(str(source_dir))
 
         # Use an absolute symlink for maximum local robustness
@@ -447,8 +458,6 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 
         # 5. Update .gitignore
         gitignore = project_root / ".gitignore"
-        # Calculate relative path for the gitignore entry
-        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
         ignore_line = f"\n{git_rel_path}\n"
 
         if gitignore.exists():
