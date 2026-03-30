@@ -471,15 +471,15 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         # 6. Update .env
         env_file = project_root / ".env"
         env_lines = [
-            "\nTA_EJECT_ISSUES=true\n",
-            f"TA_EJECTED_ISSUES_PATH={target_path.absolute()}\n",
+            "\nTA_EJECT_TASKS=true\n",
+            f"TA_EJECTED_TASKS_PATH={target_path.absolute()}\n",
         ]
         if env_file.exists():
             content = env_file.read_text()
             with env_file.open("a") as f:
-                if "TA_EJECT_ISSUES" not in content:
+                if "TA_EJECT_TASKS" not in content:
                     f.write(env_lines[0])
-                if "TA_EJECTED_ISSUES_PATH" not in content:
+                if "TA_EJECTED_TASKS_PATH" not in content:
                     f.write(env_lines[1])
         else:
             env_file.write_text("".join(env_lines))
@@ -493,7 +493,7 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         )
         console.print("\n[bold green]Environment updated:[/bold green]")
         console.print(f"  - Added [cyan]{git_rel_path}[/cyan] to .gitignore")
-        console.print("  - Configured [cyan]TA_EJECTED_ISSUES_PATH[/cyan] in .env")
+        console.print("  - Configured [cyan]TA_EJECTED_TASKS_PATH[/cyan] in .env")
         console.print("\n[dim]The symlink will now 'auto-heal' in new worktrees.[/dim]")
 
     except subprocess.CalledProcessError as e:
