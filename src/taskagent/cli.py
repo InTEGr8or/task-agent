@@ -689,7 +689,7 @@ def cmd_new(
     body: str,
     draft: bool,
     depends_on: Optional[str] = None,
-    as_dir: bool = False,
+    as_dir: bool = True,
     completion_criteria: Optional[str] = None,
 ):
     """Create a new issue."""
@@ -1688,7 +1688,14 @@ def main():
     new_parser.add_argument("-b", "--body", default="")
     new_parser.add_argument("-c", "--criteria", help="Completion criteria")
     new_parser.add_argument("-d", "--draft", action="store_true")
-    new_parser.add_argument("--dir", action="store_true")
+    new_parser.add_argument(
+        "--file",
+        action="store_true",
+        help="Create as single file instead of folder (default: folder)",
+    )
+    new_parser.add_argument(
+        "--dir", action="store_true", help="Create as folder (default)"
+    )
     new_parser.add_argument("--depends-on")
     version_parser = subparsers.add_parser("version")
     v_sub = version_parser.add_subparsers(dest="version_command")
@@ -1785,7 +1792,7 @@ def main():
             args.body,
             args.draft,
             args.depends_on,
-            args.dir,
+            not args.file,
             args.criteria,
         )
     elif args.command == "version":
