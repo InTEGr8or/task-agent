@@ -398,6 +398,77 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                 live.start()
 
 
+def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
+    """Show completed tasks in reverse chronological order."""
+    completed_root = manager.issues_root / "completed"
+    if not completed_root.exists():
+        console.print("[yellow]No completed tasks found.[/yellow]")
+        return
+
+    all_completed: List[Tuple[Path, str]] = []
+
+    for year_dir in sorted(completed_root.iterdir(), reverse=True):
+        if not year_dir.is_dir():
+            continue
+        for f in sorted(year_dir.glob("*.md"), reverse=True):
+            all_completed.append((f, f.stem))
+        for d in sorted(year_dir.iterdir(), reverse=True):
+            if d.is_dir():
+                readme = d / "README.md"
+                if readme.exists():
+                    all_completed.append((readme, d.name))
+
+    if not all_completed:
+        console.print("[yellow]No completed tasks found.[/yellow]")
+        return
+
+    display_items = all_completed[:limit]
+    cursor = 0
+
+    with Live(auto_refresh=False, console=console, screen=True) as live:
+        while True:
+            table = Table(
+                title="[bold blue]History[/bold blue]",
+                box=None,
+                show_header=True,
+                padding=(0, 2),
+            )
+            table.add_column("#", justify="right", style="dim", width=4)
+            table.add_column("Slug", style="cyan")
+
+            for idx, (file, slug) in enumerate(display_items):
+                style = "bold cyan" if idx == cursor else "white"
+                prefix = "> " if idx == cursor else "  "
+                table.add_row(str(idx + 1), f"{prefix}{slug}", style=style)
+
+            help_text = "[dim]v: view | q: exit[/dim]"
+            from rich.box import ROUNDED
+
+            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
+
+            try:
+                key = get_key()
+            except Exception:
+                key = "q"
+
+            if key in ["q", "\x1b"]:
+                break
+            elif key in ["k", "\x1b[A"]:
+                cursor = max(0, cursor - 1)
+            elif key in ["j", "\x1b[B"]:
+                cursor = min(len(display_items) - 1, cursor + 1)
+            elif key == "v":
+                live.stop()
+                file, slug = display_items[cursor]
+                issue = Issue(name=slug, slug=slug, status="completed", priority=0)
+                render_issue(console, issue, file)
+                try:
+                    get_key()
+                except Exception:
+                    pass
+                live.start()
+
+
 def cmd_done(
     console: Console,
     manager: TaskAgent,
@@ -1544,6 +1615,10 @@ def main():
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
+    history_parser = subparsers.add_parser("history")
+    history_parser.add_argument(
+        "-n", "--limit", type=int, default=20, help="Number of items to show"
+    )
     subparsers.add_parser("ingest")
     subparsers.add_parser("self-up")
     up_parser = subparsers.add_parser("up")
@@ -1662,6 +1737,8 @@ def main():
         elif args.text:
             fmt = "text"
         cmd_list(console, manager, fmt)
+    elif args.command == "history":
+        cmd_history(console, manager, args.limit)
     elif args.command == "ingest":
         cmd_ingest(console, manager)
     elif args.command == "self-up":
