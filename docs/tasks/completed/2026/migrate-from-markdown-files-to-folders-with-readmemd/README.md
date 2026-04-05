@@ -13,3 +13,6 @@ That means it will affect anything in the pending/ or active/ first.
 The new transformer might be fast enough to run it on every single task in all folders right away. That might simplify things. But it should be a unitary transformer that works on one file first.
 
 Then, we can see if we should apply it to all of them right off the bat. We don't have very large data stores yet where that would be a problem. So running a broad scan would probably be best, but how do we trigger it once and only once? We would have to look for a task file in the root of each of the status folders.
+
+---
+**Completed in commit:** `3eb91c9`

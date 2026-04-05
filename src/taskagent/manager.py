@@ -141,6 +141,7 @@ class TaskAgent:
 
         self.ensure_issues_dir()
         num_new, num_removed = self.ingest_issues()
+        self.migrate_all_to_folders()
         self.save_datapackage()
         self.lock_mission_files()
         return num_new, num_removed
@@ -156,6 +157,20 @@ class TaskAgent:
         # Collapse multiple hyphens
         text = re.sub(r"[-]+", "-", text)
         return text.strip("-")
+
+    def migrate_all_to_folders(self) -> int:
+        """Migrate all file-based issues to folder format.
+        Returns the count of migrated issues."""
+        count = 0
+        for status in ["pending", "draft", "active"]:
+            status_dir = self.issues_root / status
+            if not status_dir.exists():
+                continue
+            for md_file in status_dir.glob("*.md"):
+                slug = self.slugify(md_file.stem)
+                if self.migrate_to_folder(slug):
+                    count += 1
+        return count
 
     def find_issue_file(
         self, slug: str, include_completed: bool = False
@@ -202,6 +217,32 @@ class TaskAgent:
                         return readme
 
         return None
+
+    def migrate_to_folder(self, slug: str) -> Optional[Path]:
+        """Migrate a file-based issue to folder-based format.
+        Converts slug.md to slug/README.md.
+        Returns the new README path if migration happened, None otherwise."""
+        issue_file = self.find_issue_file(slug)
+        if not issue_file:
+            return None
+
+        if issue_file.name == "README.md":
+            return issue_file
+
+        if not issue_file.exists():
+            return None
+
+        is_dir_based = issue_file.name == "README.md"
+        if is_dir_based:
+            return issue_file
+
+        content = issue_file.read_text(encoding="utf-8")
+        slug_dir = issue_file.parent / slug
+        slug_dir.mkdir(parents=True, exist_ok=True)
+        new_readme = slug_dir / "README.md"
+        new_readme.write_text(content, encoding="utf-8")
+        issue_file.unlink()
+        return new_readme
 
     def restore_issue(self, slug: str, to_status: str = "pending") -> Issue:
         """Restore a completed issue back to a specified status."""
@@ -474,6 +515,7 @@ class TaskAgent:
         promoted = [target.slug]
 
         def promote_single(s: str):
+            self.migrate_to_folder(s)
             issue_file = self.find_issue_file(s)
             if not issue_file:
                 return
@@ -507,6 +549,7 @@ class TaskAgent:
             raise ValueError(f"Pending issue '{slug}' not found.")
 
         def demote_single(s: str):
+            self.migrate_to_folder(s)
             issue_file = self.find_issue_file(s)
             if not issue_file:
                 return
@@ -544,6 +587,7 @@ class TaskAgent:
                 f"Issue '{slug}' cannot be marked as active from status '{target.status}'."
             )
 
+        self.migrate_to_folder(target.slug)
         issue_file = self.find_issue_file(target.slug)
         if not issue_file:
             raise FileNotFoundError(f"Issue file not found for '{target.slug}'.")
@@ -694,6 +738,7 @@ class TaskAgent:
         if not target_issue:
             raise ValueError(f"Issue '{slug}' not found.")
 
+        self.migrate_to_folder(target_issue.slug)
         issue_file = self.find_issue_file(target_issue.slug)
         if not issue_file:
             raise FileNotFoundError(
