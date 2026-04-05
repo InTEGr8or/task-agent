@@ -141,7 +141,7 @@ def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]
 
 def get_key() -> str:
     """Read a single key or escape sequence from stdin."""
-    if HAS_TERMIOS:
+    if HAS_TERMIOS and sys.stdin.isatty():
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -280,6 +280,122 @@ def cmd_next(console: Console, manager: TaskAgent):
         sys.exit(1)
 
     render_issue(console, next_issue, issue_file)
+
+
+def cmd_search(console: Console, manager: TaskAgent, pattern: str):
+    """Search for issues by slug prefix pattern."""
+    issues = manager.load_mission()
+    if not issues:
+        console.print("[yellow]No issues found.[/yellow]")
+        return
+
+    matches = [i for i in issues if i.slug.startswith(pattern)]
+
+    if not matches:
+        console.print(f"[yellow]No issues match pattern '{pattern}'.[/yellow]")
+        return
+
+    if len(matches) == 1:
+        issue = matches[0]
+        issue_file = manager.find_issue_file(issue.slug)
+        if not issue_file:
+            console.print(f"[red]Issue file not found for {issue.slug}[/red]")
+            return
+
+        render_issue(console, issue, issue_file)
+        console.print("[dim]Press 'e' to edit, 'q' to exit.[/dim]")
+        try:
+            key = get_key()
+        except Exception:
+            key = "q"
+        if key == "e" and issue_file:
+            editor = get_editor()
+            subprocess.run([editor, str(issue_file)])
+            manager.init_project()
+        return
+
+    cursor = 0
+
+    with Live(auto_refresh=False, console=console, screen=True) as live:
+        while True:
+            table = Table(
+                title=f"[bold blue]Search Results: '{pattern}'[/bold blue]",
+                box=None,
+                show_header=True,
+                padding=(0, 2),
+            )
+            table.add_column("#", justify="right", style="dim", width=4)
+            table.add_column("Status", width=10)
+            table.add_column("Slug", style="cyan")
+
+            for idx, issue in enumerate(matches):
+                style = "bold cyan" if idx == cursor else "white"
+                prefix = "> " if idx == cursor else "  "
+                status_style = (
+                    "bold green"
+                    if issue.status == "active"
+                    else ("bold yellow" if issue.status == "pending" else "dim")
+                )
+                table.add_row(
+                    str(idx + 1),
+                    f"[{status_style}]{issue.status.upper()}[/{status_style}]",
+                    f"{prefix}{issue.slug}",
+                    style=style,
+                )
+
+            help_text = "[dim]l: view | e: edit | q: exit[/dim]"
+            from rich.box import ROUNDED
+
+            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
+
+            try:
+                key = get_key()
+            except Exception:
+                key = "q"
+
+            if key in ["q", "\x1b"]:
+                break
+            elif key in ["k", "\x1b[A"]:
+                cursor = max(0, cursor - 1)
+            elif key in ["j", "\x1b[B"]:
+                cursor = min(len(matches) - 1, cursor + 1)
+            elif key == "l":
+                live.stop()
+                issue = matches[cursor]
+                issue_file = manager.find_issue_file(issue.slug)
+                if issue_file:
+                    render_issue(console, issue, issue_file)
+                    console.print(
+                        "[dim]Press 'e' to edit, 'q' to return to list.[/dim]"
+                    )
+                    try:
+                        inner_key = get_key()
+                    except Exception:
+                        inner_key = "q"
+                    if inner_key == "e":
+                        editor = get_editor()
+                        subprocess.run([editor, str(issue_file)])
+                        manager.init_project()
+                        issues = manager.load_mission()
+                        matches = [i for i in issues if i.slug.startswith(pattern)]
+                        if cursor >= len(matches):
+                            cursor = max(0, len(matches) - 1)
+                else:
+                    console.print(f"[red]Issue file not found for {issue.slug}[/red]")
+                live.start()
+            elif key == "e":
+                live.stop()
+                issue = matches[cursor]
+                issue_file = manager.find_issue_file(issue.slug)
+                if issue_file:
+                    editor = get_editor()
+                    subprocess.run([editor, str(issue_file)])
+                    manager.init_project()
+                    issues = manager.load_mission()
+                    matches = [i for i in issues if i.slug.startswith(pattern)]
+                    if cursor >= len(matches):
+                        cursor = max(0, len(matches) - 1)
+                live.start()
 
 
 def cmd_done(
@@ -1402,6 +1518,12 @@ def main():
     triage_parser.add_argument(
         "search", nargs="?", help="Optional search query to filter by slug"
     )
+    search_parser = subparsers.add_parser(
+        "search", help="Search for tasks by slug pattern"
+    )
+    search_parser.add_argument(
+        "pattern", help="Pattern to match against slug (wildcard end)"
+    )
     prior_parser = subparsers.add_parser(
         "prior", help="Interactively reorder and promote tasks"
     )
@@ -1529,6 +1651,8 @@ def main():
         cmd_triage(console, manager, search_query=args.search)
     elif args.command == "prior":
         cmd_triage(console, manager, search_query=args.search)
+    elif args.command == "search":
+        cmd_search(console, manager, args.pattern)
     elif args.command == "restore":
         cmd_restore(console, manager, args.slug, to_status=args.status)
     elif args.command == "list":
