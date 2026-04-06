@@ -685,14 +685,55 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 def cmd_new(
     console: Console,
     manager: TaskAgent,
-    title: str,
+    title: Optional[str],
     body: str,
     draft: bool,
     depends_on: Optional[str] = None,
     as_dir: bool = True,
     completion_criteria: Optional[str] = None,
+    interactive: bool = False,
 ):
     """Create a new issue."""
+    if interactive:
+        editor = get_editor()
+        slug = manager.slugify(title or "new-task")
+        temp_dir = manager.issues_root / "draft" / slug
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_file = temp_dir / "README.md"
+
+        template = f"""# {title or "New Task"}
+
+**Depends on:** {depends_on or ""}
+
+## Description
+
+
+
+## Completion Criteria
+
+{completion_criteria or ""}
+"""
+        temp_file.write_text(template, encoding="utf-8")
+
+        subprocess.run([editor, str(temp_file)], check=True)
+
+        manager.init_project()
+        issues = manager.load_mission()
+        new_issue = next((i for i in issues if i.slug == slug), None)
+        if new_issue:
+            console.print(
+                f"[bold green]Created new issue: {new_issue.slug}[/bold green]"
+            )
+            console.print(f"File: {temp_file}")
+        else:
+            console.print("[yellow]Task not created.[/yellow]")
+            shutil.rmtree(temp_dir)
+        return
+
+    if not title:
+        console.print("[red]Error: title is required for non-interactive mode.[/red]")
+        sys.exit(1)
+
     try:
         issue = manager.create_issue(
             title, body, draft, depends_on, as_dir, completion_criteria
@@ -1684,7 +1725,7 @@ def main():
     path_parser.add_argument("slug", help="Task slug")
 
     new_parser = subparsers.add_parser("new")
-    new_parser.add_argument("title")
+    new_parser.add_argument("title", nargs="?")
     new_parser.add_argument("-b", "--body", default="")
     new_parser.add_argument("-c", "--criteria", help="Completion criteria")
     new_parser.add_argument("-d", "--draft", action="store_true")
@@ -1695,6 +1736,9 @@ def main():
     )
     new_parser.add_argument(
         "--dir", action="store_true", help="Create as folder (default)"
+    )
+    new_parser.add_argument(
+        "-i", "--interactive", action="store_true", help="Open editor to fill in task"
     )
     new_parser.add_argument("--depends-on")
     version_parser = subparsers.add_parser("version")
@@ -1794,6 +1838,7 @@ def main():
             args.depends_on,
             not args.file,
             args.criteria,
+            args.interactive,
         )
     elif args.command == "version":
         if args.version_command == "promote":
