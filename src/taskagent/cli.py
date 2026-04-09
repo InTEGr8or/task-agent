@@ -407,12 +407,12 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
     all_completed: List[Tuple[Path, str]] = []
 
-    for year_dir in sorted(completed_root.iterdir(), reverse=True):
+    for year_dir in completed_root.iterdir():
         if not year_dir.is_dir():
             continue
-        for f in sorted(year_dir.glob("*.md"), reverse=True):
+        for f in year_dir.glob("*.md"):
             all_completed.append((f, f.stem))
-        for d in sorted(year_dir.iterdir(), reverse=True):
+        for d in year_dir.iterdir():
             if d.is_dir():
                 readme = d / "README.md"
                 if readme.exists():
@@ -421,6 +421,8 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
     if not all_completed:
         console.print("[yellow]No completed tasks found.[/yellow]")
         return
+
+    all_completed.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
 
     display_items = all_completed[:limit]
     cursor = 0
