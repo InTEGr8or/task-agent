@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple, Dict, Set
 from pathlib import Path
+from datetime import datetime
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -427,6 +428,14 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
     display_items = all_completed[:limit]
     cursor = 0
 
+    def get_mtime_iso(path: Path) -> str:
+        try:
+            return datetime.fromtimestamp(path.stat().st_mtime).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        except Exception:
+            return ""
+
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:
             table = Table(
@@ -436,12 +445,14 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 padding=(0, 2),
             )
             table.add_column("#", justify="right", style="dim", width=4)
+            table.add_column("Date", style="dim", width=16)
             table.add_column("Slug", style="cyan")
 
             for idx, (file, slug) in enumerate(display_items):
                 style = "bold cyan" if idx == cursor else "white"
                 prefix = "> " if idx == cursor else "  "
-                table.add_row(str(idx + 1), f"{prefix}{slug}", style=style)
+                date_str = get_mtime_iso(file)
+                table.add_row(str(idx + 1), date_str, f"{prefix}{slug}", style=style)
 
             help_text = "[dim]v/l: view | q: exit[/dim]"
             from rich.box import ROUNDED
