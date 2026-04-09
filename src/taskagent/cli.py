@@ -443,7 +443,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 prefix = "> " if idx == cursor else "  "
                 table.add_row(str(idx + 1), f"{prefix}{slug}", style=style)
 
-            help_text = "[dim]v: view | q: exit[/dim]"
+            help_text = "[dim]v/l: view | q: exit[/dim]"
             from rich.box import ROUNDED
 
             live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
@@ -459,7 +459,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:
                 cursor = min(len(display_items) - 1, cursor + 1)
-            elif key == "v":
+            elif key in ["v", "l"]:
                 live.stop()
                 file, slug = display_items[cursor]
                 issue = Issue(name=slug, slug=slug, status="completed", priority=0)
