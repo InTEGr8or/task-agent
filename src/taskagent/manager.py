@@ -44,11 +44,16 @@ class TaskAgent:
         """Push changes in the mission repository."""
         if not self.mission_root:
             return
-        subprocess.run(
-            ["git", "-C", str(self.mission_root), "push"],
-            check=True,
-            shell=(os.name == "nt"),
-        )
+        try:
+            subprocess.run(
+                ["git", "-C", str(self.mission_root), "push"],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(f"Failed to push mission repository: {e.stderr}")
 
     def _set_writable(self, path: Path, writable: bool):
         """Toggle the filesystem write bit for a file."""
@@ -723,6 +728,20 @@ class TaskAgent:
             except Exception:
                 return "unknown"
         return "failed"
+
+    def _git_push(self, repo_root: Path) -> bool:
+        """Push a repository using native git."""
+        try:
+            subprocess.run(
+                ["git", "-C", str(repo_root), "push"],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
 
     def complete_issue(
         self,
