@@ -495,6 +495,32 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 live.start()
 
 
+def cmd_report(console: Console, manager: TaskAgent, slug: str):
+    """View metadata/logs for a task."""
+    issue_file = manager.find_issue_file(slug, include_completed=True)
+    if not issue_file:
+        console.print(f"[red]Issue not found: {slug}[/red]")
+        return
+
+    meta_file = issue_file.parent / "meta.json"
+    if not meta_file.exists():
+        console.print(f"[yellow]No metadata found for {slug}[/yellow]")
+        return
+
+    with meta_file.open("r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    console.print(f"[bold blue]Task Report: {slug}[/bold blue]")
+    console.print(Panel(json.dumps(meta, indent=2), title="Metadata"))
+
+    trace_path = issue_file.parent / meta.get("reasoning_trace", "logs/trace.log")
+    if trace_path.exists():
+        console.print(f"[bold blue]Reasoning Trace ({trace_path.name}):[/bold blue]")
+        console.print(Panel(trace_path.read_text(encoding="utf-8")))
+    else:
+        console.print("[yellow]Reasoning trace not found.[/yellow]")
+
+
 def cmd_done(
     console: Console,
     manager: TaskAgent,
@@ -1722,6 +1748,11 @@ def main():
         help="Target status (default: pending)",
     )
 
+    report_parser = subparsers.add_parser(
+        "report", help="View metadata/logs for a task"
+    )
+    report_parser.add_argument("slug", help="Slug of the issue")
+
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
@@ -1850,6 +1881,8 @@ def main():
         cmd_search(console, manager, args.pattern)
     elif args.command == "restore":
         cmd_restore(console, manager, args.slug, to_status=args.status)
+    elif args.command == "report":
+        cmd_report(console, manager, args.slug)
     elif args.command == "list":
         fmt = "table"
         if args.json:
