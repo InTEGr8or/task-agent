@@ -247,10 +247,9 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         f"[bold blue]SLUG:[/bold blue] {issue.slug} | "
         f"[bold blue]PRIORITY:[/bold blue] {issue.priority} | "
         f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
-        f"{deps_info}"
-        f"[bold blue]FILE:[/bold blue] {issue_file}",
-        title="Task Agent",
-        expand=False,
+        f"[bold blue]FILE:[/bold blue]\n{issue_file}\n"
+        f"{deps_info}",
+        box=None,
     )
 
     md = Markdown(content)
@@ -348,7 +347,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
             help_text = "[dim]l: view | e: edit | q: exit[/dim]"
             from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
 
             try:
                 key = get_key()
@@ -470,7 +469,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
             help_text = "[dim]v/l: view | q: exit[/dim]"
             from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
 
             try:
                 key = get_key()
@@ -511,12 +510,12 @@ def cmd_report(console: Console, manager: TaskAgent, slug: str):
         meta = json.load(f)
 
     console.print(f"[bold blue]Task Report: {slug}[/bold blue]")
-    console.print(Panel(json.dumps(meta, indent=2), title="Metadata"))
+    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=None))
 
     trace_path = issue_file.parent / meta.get("reasoning_trace", "logs/trace.log")
     if trace_path.exists():
         console.print(f"[bold blue]Reasoning Trace ({trace_path.name}):[/bold blue]")
-        console.print(Panel(trace_path.read_text(encoding="utf-8")))
+        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=None))
     else:
         console.print("[yellow]Reasoning trace not found.[/yellow]")
 
@@ -1479,12 +1478,9 @@ def cmd_triage(
                 )
 
             help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
-            if show_completed:
-                help_text = "[dim]j/k: move | r: rest | v: view | e: edit | c: toggle | /: search | q: exit[/dim]"
-
             from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=ROUNDED), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
 
             # Input
             key = get_key()
@@ -1651,6 +1647,7 @@ def display_overview(console: Console, manager: TaskAgent):
         Panel(
             f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
             expand=False,
+            box=None,
         )
     )
 
