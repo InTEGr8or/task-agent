@@ -1,0 +1,11 @@
+{
+  "mcp": {
+    "task-agent": {
+      "type": "local",
+      "command": [
+        "ta",
+        "mcp"
+      ]
+    }
+  }
+}
