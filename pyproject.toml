@@ -1,6 +1,6 @@
 [project]
 name = "task-agent"
-version = "0.1.169"
+version = "0.1.170"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,6 +12,7 @@ dependencies = [
     "mcp>=1.26.0",
     "pydantic>=2.10.6",
     "python-dotenv>=1.2.2",
+    "pyperclip>=1.9.0",
     "questionary>=2.1.1",
     "rich>=13.9.4",
 ]
@@ -37,7 +38,7 @@ dev = [
 ]
 
 [tool.bumpversion]
-current_version = "0.1.169"
+current_version = "0.1.170"
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
 search = "version = \"{current_version}\""

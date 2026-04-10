@@ -15,6 +15,7 @@ import urllib.request
 import questionary
 import subprocess
 import shutil
+import pyperclip
 
 try:
     import tty
@@ -1431,7 +1432,7 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | q: exit[/dim]"
+            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
             if show_completed:
                 help_text = "[dim]j/k: move | r: rest | v: view | e: edit | c: toggle | /: search | q: exit[/dim]"
 
@@ -1453,6 +1454,13 @@ def cmd_triage(
                 indexed_issues = build_hierarchy(issues)
                 cursor = 0
                 live.start()
+            elif key == "y":
+                slug = indexed_issues[cursor][0].slug
+                pyperclip.copy(slug)
+                console.print(
+                    f"[bold green]Copied slug to clipboard: {slug}[/bold green]"
+                )
+                questionary.press_any_key_to_continue().ask()
             elif key == "c":
                 show_completed = not show_completed
                 issues = get_display_issues(search_query, show_completed)
