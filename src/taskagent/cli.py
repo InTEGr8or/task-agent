@@ -966,9 +966,17 @@ def cmd_start(console: Console, manager: TaskAgent, slug_part: Optional[str] = N
     branch_name = f"issue/{slug}"
     worktree_path = Path(".gwt") / slug
 
-    if worktree_path.exists():
+    # Check if a worktree already exists for a different task
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    worktrees = result.stdout.split("\n\n")
+    if len(worktrees) > 2:  # main and at least one other
         console.print(
-            f"[yellow]Worktree directory already exists: {worktree_path}[/yellow]"
+            "[red]Active worktree already exists. Please complete or shelf it first.[/red]"
         )
         return
 
