@@ -426,8 +426,8 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
     all_completed.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
 
-    display_items = all_completed[:limit]
     cursor = 0
+    window_size = console.height - 8
 
     def get_mtime_iso(path: Path) -> str:
         try:
@@ -439,6 +439,15 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:
+            start_idx = max(
+                0, min(cursor - window_size // 2, len(all_completed) - window_size)
+            )
+            if len(all_completed) <= window_size:
+                start_idx = 0
+                display_items = all_completed
+            else:
+                display_items = all_completed[start_idx : start_idx + window_size]
+
             table = Table(
                 title="[bold blue]History[/bold blue]",
                 box=None,
@@ -450,10 +459,13 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
             table.add_column("Slug", style="cyan")
 
             for idx, (file, slug) in enumerate(display_items):
-                style = "bold cyan" if idx == cursor else "white"
-                prefix = "> " if idx == cursor else "  "
+                absolute_idx = start_idx + idx
+                style = "bold cyan" if absolute_idx == cursor else "white"
+                prefix = "> " if absolute_idx == cursor else "  "
                 date_str = get_mtime_iso(file)
-                table.add_row(str(idx + 1), date_str, f"{prefix}{slug}", style=style)
+                table.add_row(
+                    str(absolute_idx + 1), date_str, f"{prefix}{slug}", style=style
+                )
 
             help_text = "[dim]v/l: view | q: exit[/dim]"
             from rich.box import ROUNDED
@@ -470,10 +482,10 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
             elif key in ["k", "\x1b[A"]:
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:
-                cursor = min(len(display_items) - 1, cursor + 1)
+                cursor = min(len(all_completed) - 1, cursor + 1)
             elif key in ["v", "l"]:
                 live.stop()
-                file, slug = display_items[cursor]
+                file, slug = all_completed[cursor]
                 issue = Issue(name=slug, slug=slug, status="completed", priority=0)
                 render_issue(console, issue, file)
                 try:
