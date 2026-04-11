@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Dict, Optional
-import keyring
+import keyring  # type: ignore
 from abc import ABC, abstractmethod
 
 

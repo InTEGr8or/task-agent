@@ -7,6 +7,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich import box
 import sys
+
+# Removed invalid NO_BORDER definition
 import argparse
 import os
 import json
@@ -250,7 +252,7 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
         f"[bold blue]FILE:[/bold blue]\n{issue_file}\n"
         f"{deps_info}",
-        box=box.SIMPLE,
+        box=box.MINIMAL,
     )
 
     md = Markdown(content)
@@ -322,7 +324,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
         while True:
             table = Table(
                 title=f"[bold blue]Search Results: '{pattern}'[/bold blue]",
-                box=box.SIMPLE,
+                box=box.MINIMAL,
                 show_header=True,
                 padding=(0, 2),
             )
@@ -347,7 +349,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
 
             help_text = "[dim]l: view | e: edit | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
 
             try:
                 key = get_key()
@@ -449,7 +451,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
             table = Table(
                 title="[bold blue]History[/bold blue]",
-                box=box.SIMPLE,
+                box=box.MINIMAL,
                 show_header=True,
                 padding=(0, 2),
             )
@@ -468,7 +470,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
             help_text = "[dim]v/l: view | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
 
             try:
                 key = get_key()
@@ -509,12 +511,12 @@ def cmd_report(console: Console, manager: TaskAgent, slug: str):
         meta = json.load(f)
 
     console.print(f"[bold blue]Task Report: {slug}[/bold blue]")
-    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=box.SIMPLE))
+    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=box.MINIMAL))
 
     trace_path = issue_file.parent / meta.get("reasoning_trace", "logs/trace.log")
     if trace_path.exists():
         console.print(f"[bold blue]Reasoning Trace ({trace_path.name}):[/bold blue]")
-        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=box.SIMPLE))
+        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=box.MINIMAL))
     else:
         console.print("[yellow]Reasoning trace not found.[/yellow]")
 
@@ -1487,7 +1489,7 @@ def cmd_triage(
 
             help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
 
             # Input
             key = get_key()
@@ -1654,7 +1656,7 @@ def display_overview(console: Console, manager: TaskAgent):
         Panel(
             f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
             expand=False,
-            box=box.SIMPLE,
+            box=box.MINIMAL,
         )
     )
 
@@ -1663,7 +1665,7 @@ def display_overview(console: Console, manager: TaskAgent):
     stats_table = Table.grid(padding=(0, 2))
     # Commands Table
     table = Table(
-        title="Available Commands", box=box.SIMPLE, show_header=False, padding=(0, 2)
+        title="Available Commands", box=box.MINIMAL, show_header=False, padding=(0, 2)
     )
     console.print(stats_table)
     console.print()
