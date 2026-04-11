@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich import box
 import sys
 import argparse
 import os
@@ -249,7 +250,7 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
         f"[bold blue]FILE:[/bold blue]\n{issue_file}\n"
         f"{deps_info}",
-        box=None,
+        box=box.SIMPLE,
     )
 
     md = Markdown(content)
@@ -321,7 +322,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
         while True:
             table = Table(
                 title=f"[bold blue]Search Results: '{pattern}'[/bold blue]",
-                box=None,
+                box=box.SIMPLE,
                 show_header=True,
                 padding=(0, 2),
             )
@@ -345,9 +346,8 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                 )
 
             help_text = "[dim]l: view | e: edit | q: exit[/dim]"
-            from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
 
             try:
                 key = get_key()
@@ -449,7 +449,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
             table = Table(
                 title="[bold blue]History[/bold blue]",
-                box=None,
+                box=box.SIMPLE,
                 show_header=True,
                 padding=(0, 2),
             )
@@ -467,9 +467,8 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 )
 
             help_text = "[dim]v/l: view | q: exit[/dim]"
-            from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
 
             try:
                 key = get_key()
@@ -510,12 +509,12 @@ def cmd_report(console: Console, manager: TaskAgent, slug: str):
         meta = json.load(f)
 
     console.print(f"[bold blue]Task Report: {slug}[/bold blue]")
-    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=None))
+    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=box.SIMPLE))
 
     trace_path = issue_file.parent / meta.get("reasoning_trace", "logs/trace.log")
     if trace_path.exists():
         console.print(f"[bold blue]Reasoning Trace ({trace_path.name}):[/bold blue]")
-        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=None))
+        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=box.SIMPLE))
     else:
         console.print("[yellow]Reasoning trace not found.[/yellow]")
 
@@ -1478,9 +1477,8 @@ def cmd_triage(
                 )
 
             help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
-            from rich.box import ROUNDED
 
-            live.update(Panel(table, subtitle=help_text, box=None), refresh=True)
+            live.update(Panel(table, subtitle=help_text, box=box.SIMPLE), refresh=True)
 
             # Input
             key = get_key()
@@ -1652,16 +1650,11 @@ def display_overview(console: Console, manager: TaskAgent):
     )
 
     # Task Summary
-    issues = manager.load_mission()
-    active = [i for i in issues if i.status == "active"]
-    pending = [i for i in issues if i.status == "pending"]
-    draft = [i for i in issues if i.status == "draft"]
 
     stats_table = Table.grid(padding=(0, 2))
-    stats_table.add_row(
-        f"[bold green]Active:[/bold green] {len(active)}",
-        f"[bold yellow]Pending:[/bold yellow] {len(pending)}",
-        f"[bold dim]Draft:[/bold dim] {len(draft)}",
+    # Commands Table
+    table = Table(
+        title="Available Commands", box=box.SIMPLE, show_header=False, padding=(0, 2)
     )
     console.print(stats_table)
     console.print()

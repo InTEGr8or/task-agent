@@ -5,7 +5,7 @@ from datetime import datetime
 
 @pytest.fixture
 def manager(tmp_path):
-    issues_root = tmp_path / "docs" / "issues"
+    issues_root = tmp_path / "docs" / "tasks"
     return TaskAgent(config_dir=str(issues_root))
 
 
@@ -15,7 +15,7 @@ def test_api_create_issue(manager):
     assert issue.status == "pending"
 
     # Check filesystem
-    file = manager.issues_root / "pending" / "api-task.md"
+    file = manager.issues_root / "pending" / "api-task" / "README.md"
     assert file.exists()
     assert "Body from API" in file.read_text()
 
@@ -29,13 +29,17 @@ def test_slugify_hashes(manager):
 def test_api_ingest_with_titles(manager):
     issues_root = manager.issues_root
     # Create file manually with a specific title
-    (issues_root / "pending" / "task-1.md").write_text("# My Custom Title\nContent")
+    (issues_root / "pending" / "task-1").mkdir(parents=True)
+    (issues_root / "pending" / "task-1" / "README.md").write_text(
+        "# My Custom Title\nContent"
+    )
 
     # Ingest
     manager.save_mission([])
     manager.ingest_issues()
 
     issues = manager.load_mission()
+    assert len(issues) == 1
     assert issues[0].name == "My Custom Title"
     assert issues[0].slug == "task-1"
 
@@ -67,13 +71,14 @@ def test_find_issue_file_resilient(manager):
     # Create a file with underscores manually
     pending_dir = manager.issues_root / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
-    file_with_underscores = pending_dir / "my_test_issue.md"
+    file_with_underscores = pending_dir / "my-test-issue" / "README.md"
+    file_with_underscores.parent.mkdir(parents=True, exist_ok=True)
     file_with_underscores.write_text("# My Test Issue")
 
     # Try to find it using hyphenated slug
-    found = manager.find_issue_file("my-test-issue")
+    found = manager.find_issue_file("my_test_issue")
     assert found is not None
-    assert found.name == "my_test_issue.md"
+    assert found.parent.name == "my-test-issue"
 
 
 def test_api_complete_issue(manager):
@@ -85,7 +90,9 @@ def test_api_complete_issue(manager):
     assert issue.status == "completed"
 
     year = str(datetime.now().year)
-    assert (manager.issues_root / "completed" / year / "complete-me.md").exists()
+    assert (
+        manager.issues_root / "completed" / year / "complete-me" / "README.md"
+    ).exists()
 
 
 def test_api_restore_issue(manager):
@@ -94,13 +101,17 @@ def test_api_restore_issue(manager):
 
     # Verify it is in completed
     year = str(datetime.now().year)
-    assert (manager.issues_root / "completed" / year / "restore-me.md").exists()
+    assert (
+        manager.issues_root / "completed" / year / "restore-me" / "README.md"
+    ).exists()
 
     # Restore it
     manager.restore_issue("restore-me", to_status="active")
 
-    assert (manager.issues_root / "active" / "restore-me.md").exists()
-    assert not (manager.issues_root / "completed" / year / "restore-me.md").exists()
+    assert (manager.issues_root / "active" / "restore-me" / "README.md").exists()
+    assert not (
+        manager.issues_root / "completed" / year / "restore-me" / "README.md"
+    ).exists()
 
     issues = manager.load_mission()
     issue = next(i for i in issues if i.slug == "restore-me")
@@ -120,11 +131,11 @@ def test_api_sync_mission(manager):
 def test_api_demote_issue(manager):
     manager.create_issue("Demote Me")
     # Starts as pending
-    assert (manager.issues_root / "pending" / "demote-me.md").exists()
+    assert (manager.issues_root / "pending" / "demote-me" / "README.md").exists()
 
     manager.demote_issue("demote-me")
-    assert not (manager.issues_root / "pending" / "demote-me.md").exists()
-    assert (manager.issues_root / "draft" / "demote-me.md").exists()
+    assert not (manager.issues_root / "pending" / "demote-me" / "README.md").exists()
+    assert (manager.issues_root / "draft" / "demote-me" / "README.md").exists()
 
 
 def test_api_promote_cascades_to_children(manager):
@@ -136,8 +147,8 @@ def test_api_promote_cascades_to_children(manager):
 
     manager.promote_issue("parent")
 
-    assert (manager.issues_root / "pending" / "parent.md").exists()
-    assert (manager.issues_root / "pending" / "child.md").exists()
+    assert (manager.issues_root / "pending" / "parent" / "README.md").exists()
+    assert (manager.issues_root / "pending" / "child" / "README.md").exists()
 
     issues = manager.load_mission()
     parent = next(i for i in issues if i.slug == "parent")
@@ -155,8 +166,8 @@ def test_api_demote_cascades_to_children(manager):
 
     manager.demote_issue("parent")
 
-    assert (manager.issues_root / "draft" / "parent.md").exists()
-    assert (manager.issues_root / "draft" / "child.md").exists()
+    assert (manager.issues_root / "draft" / "parent" / "README.md").exists()
+    assert (manager.issues_root / "draft" / "child" / "README.md").exists()
 
     issues = manager.load_mission()
     parent = next(i for i in issues if i.slug == "parent")
@@ -169,7 +180,7 @@ def test_api_move_to_active(manager):
     manager.create_issue("Active Me")
     manager.move_to_active("active-me")
 
-    assert (manager.issues_root / "active" / "active-me.md").exists()
+    assert (manager.issues_root / "active" / "active-me" / "README.md").exists()
     issues = manager.load_mission()
     assert issues[0].status == "active"
 
@@ -194,15 +205,18 @@ def test_api_ingest_issues(manager, tmp_path):
     issues_root = manager.issues_root
     # Create directory-based issue manually
     dir_task = issues_root / "pending" / "dir-task"
-    dir_task.mkdir()
+    dir_task.mkdir(parents=True)
     (dir_task / "README.md").write_text("# Dir Task\n**Depends on:** other-task")
 
     # Create file-based issue manually
-    (issues_root / "draft" / "file-task.md").write_text("# File Task")
+    file_task = issues_root / "draft" / "file-task"
+    file_task.mkdir(parents=True)
+    (file_task / "README.md").write_text("# File Task")
 
     # Wipe mission.usv
     manager.save_mission([])
 
+    # Must trigger folder migration for existing old-style files (if any existed, but here we created new-style manually)
     num_new, num_removed = manager.ingest_issues()
     assert num_new == 2
 

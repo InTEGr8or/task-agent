@@ -15,7 +15,7 @@ from datetime import datetime
 @pytest.fixture
 def temp_issues_dir(tmp_path):
     """Create a temporary issues structure."""
-    issues_root = tmp_path / "docs" / "issues"
+    issues_root = tmp_path / "docs" / "tasks"
     for subdir in ["pending", "draft", "active", "completed"]:
         (issues_root / subdir).mkdir(parents=True)
     return issues_root
@@ -36,7 +36,7 @@ def test_cmd_new_file(manager, temp_issues_dir):
     console = Console()
     cmd_new(console, manager, "Test Task", "Task Body", draft=False)
 
-    issue_file = temp_issues_dir / "pending" / "test-task.md"
+    issue_file = temp_issues_dir / "pending" / "test-task" / "README.md"
     assert issue_file.exists()
     assert "# Test Task" in issue_file.read_text()
 
@@ -75,7 +75,7 @@ def test_cmd_done(manager, temp_issues_dir):
 
     # Should be in completed/year/
     year = str(datetime.now().year)
-    completed_file = temp_issues_dir / "completed" / year / "done-task.md"
+    completed_file = temp_issues_dir / "completed" / year / "done-task" / "README.md"
     assert completed_file.exists()
     assert "Completed in commit" in completed_file.read_text()
 
@@ -87,7 +87,8 @@ def test_cmd_done(manager, temp_issues_dir):
 def test_cmd_ingest(manager, temp_issues_dir):
     console = Console()
     # Create files manually
-    (temp_issues_dir / "pending" / "task-1.md").write_text("# Task 1")
+    (temp_issues_dir / "pending" / "task-1").mkdir()
+    (temp_issues_dir / "pending" / "task-1" / "README.md").write_text("# Task 1")
     (temp_issues_dir / "draft" / "task-2").mkdir()
     (temp_issues_dir / "draft" / "task-2" / "README.md").write_text(
         "# Task 2\n\n**Depends on:** task-1"
@@ -127,8 +128,8 @@ def test_cmd_start(manager, temp_issues_dir, monkeypatch):
 
     cli.cmd_start(console, manager, "start-task")
 
-    assert (temp_issues_dir / "active" / "start-task.md").exists()
-    assert not (temp_issues_dir / "pending" / "start-task.md").exists()
+    assert (temp_issues_dir / "active" / "start-task" / "README.md").exists()
+    assert not (temp_issues_dir / "pending" / "start-task" / "README.md").exists()
     assert len(calls) > 0
 
 
@@ -179,8 +180,8 @@ def test_cmd_promote(manager, temp_issues_dir):
 
     cmd_promote(console, manager, "draft-t")
 
-    assert (temp_issues_dir / "pending" / "draft-task.md").exists()
-    assert not (temp_issues_dir / "draft" / "draft-task.md").exists()
+    assert (temp_issues_dir / "pending" / "draft-task" / "README.md").exists()
+    assert not (temp_issues_dir / "draft" / "draft-task" / "README.md").exists()
 
     issues = manager.load_mission()
     assert issues[0].status == "pending"

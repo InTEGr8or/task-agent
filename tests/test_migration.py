@@ -42,7 +42,9 @@ def test_migration_issues_to_tasks(legacy_setup):
     assert not (legacy_setup / "docs" / "issues").exists()
     assert (legacy_setup / "docs" / "tasks").exists()
     assert (legacy_setup / "docs" / "tasks" / "mission.usv").exists()
-    assert (legacy_setup / "docs" / "tasks" / "pending" / "old-task.md").exists()
+    assert (
+        legacy_setup / "docs" / "tasks" / "pending" / "old-task" / "README.md"
+    ).exists()
 
     # Verify content preservation
     issues = manager.load_mission()
@@ -68,6 +70,9 @@ def test_migration_preserves_usv_content(legacy_setup):
     issues = manager.load_mission()
     assert len(issues) == 1
     assert issues[0].slug == "old-task"
+    assert (
+        legacy_setup / "docs" / "tasks" / "pending" / "old-task" / "README.md"
+    ).exists()
 
 
 def test_migration_with_symlink(legacy_setup, tmp_path):
@@ -94,4 +99,4 @@ def test_migration_with_symlink(legacy_setup, tmp_path):
     new_remote = tmp_path / "project-tasks"
     assert new_remote.exists()
     assert str(tasks_link.readlink()) == str(new_remote)
-    assert (new_remote / "pending" / "old-task.md").exists()
+    assert (new_remote / "pending" / "old-task" / "README.md").exists()
