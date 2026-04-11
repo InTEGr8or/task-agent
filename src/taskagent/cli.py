@@ -16,7 +16,7 @@ import urllib.request
 import questionary
 import subprocess
 import shutil
-import pyperclip
+import pyperclip  # type: ignore
 
 try:
     import tty
@@ -1260,6 +1260,15 @@ def cmd_version(
     """Show project version, promote it, or tag it."""
     try:
         v, source = get_project_version()
+        console.print(f"[bold blue]Current version:[/bold blue] {v} (from {source})")
+
+        # Check PyPI
+        latest_v = get_latest_pypi_version()
+        if latest_v and latest_v != v:
+            console.print(
+                f"[bold yellow]New version available on PyPI:[/bold yellow] {latest_v}"
+            )
+
         if tag:
             if v == "unknown":
                 console.print(
@@ -1645,7 +1654,7 @@ def display_overview(console: Console, manager: TaskAgent):
         Panel(
             f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
             expand=False,
-            box=None,
+            box=box.SIMPLE,
         )
     )
 
