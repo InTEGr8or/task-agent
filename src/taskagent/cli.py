@@ -60,6 +60,21 @@ def get_latest_pypi_version(timeout: int = 4) -> Optional[str]:
         return None
 
 
+def display_version_info(console: Console):
+    """Display local and PyPI version information."""
+    try:
+        v, source = get_project_version()
+        console.print(f"[bold blue]Local version:[/bold blue] {v} (from {source})")
+
+        # Check PyPI
+        latest_v = get_latest_pypi_version()
+        if latest_v and latest_v != v:
+            console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
+            console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
+    except Exception as e:
+        console.print(f"[red]Error retrieving version info: {e}[/red]")
+
+
 def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
     """Read the current project version from various project files."""
     root = root or Path.cwd()
@@ -1260,33 +1275,26 @@ def cmd_version(
     push: bool = True,
 ):
     """Show project version, promote it, or tag it."""
-    try:
-        v, source = get_project_version()
-        console.print(f"[bold blue]Current version:[/bold blue] {v} (from {source})")
+    display_version_info(console)
 
-        # Check PyPI
-        latest_v = get_latest_pypi_version()
-        if latest_v and latest_v != v:
+    if tag:
+        v, _ = get_project_version()
+        if v == "unknown":
             console.print(
-                f"[bold yellow]New version available on PyPI:[/bold yellow] {latest_v}"
+                "[red]Error: Could not determine project version to tag.[/red]"
             )
+            return
 
-        if tag:
-            if v == "unknown":
-                console.print(
-                    "[red]Error: Could not determine project version to tag.[/red]"
-                )
-                return
-            tag_name = f"v{v}"
-            result = subprocess.run(
-                ["git", "tag", tag_name],
-                capture_output=True,
-                shell=(os.name == "nt"),
-            )
-            if result.returncode != 0:
-                console.print(f"[yellow]Tag {tag_name} already exists.[/yellow]")
-            else:
-                console.print(f"[bold green]Tagged commit as {tag_name}[/bold green]")
+        tag_name = f"v{v}"
+        result = subprocess.run(
+            ["git", "tag", tag_name],
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        if result.returncode != 0:
+            console.print(f"[yellow]Tag {tag_name} already exists.[/yellow]")
+        else:
+            console.print(f"[bold green]Tagged commit as {tag_name}[/bold green]")
 
             if push:
                 console.print(f"[blue]Pushing tag {tag_name} to origin...[/blue]")
@@ -1298,39 +1306,33 @@ def cmd_version(
                 console.print(
                     f"[bold green]Successfully pushed {tag_name}[/bold green]"
                 )
-            return
 
-        elif promote:
-            if source == "pyproject.toml":
-                subprocess.run(
-                    [
-                        "uv",
-                        "run",
-                        "bump-my-version",
-                        "bump",
-                        promote,
-                        "--no-commit",
-                        "--no-tag",
-                    ],
-                    check=True,
-                    shell=(os.name == "nt"),
-                )
-                if Path("uv.lock").exists():
-                    subprocess.run(["uv", "lock"], check=True, shell=(os.name == "nt"))
-            elif source == "package.json":
-                subprocess.run(
-                    ["npm", "version", promote, "--no-git-tag-version"],
-                    check=True,
-                    shell=(os.name == "nt"),
-                )
-            new_v, _ = get_project_version()
-            console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
-        else:
-            console.print(
-                f"[bold blue]Project Version ({source}):[/bold blue] [cyan]{v}[/cyan]"
+    if promote:
+        _, source = get_project_version()
+        if source == "pyproject.toml":
+            subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "bump-my-version",
+                    "bump",
+                    promote,
+                    "--no-commit",
+                    "--no-tag",
+                ],
+                check=True,
+                shell=(os.name == "nt"),
             )
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+            if Path("uv.lock").exists():
+                subprocess.run(["uv", "lock"], check=True, shell=(os.name == "nt"))
+        elif source == "package.json":
+            subprocess.run(
+                ["npm", "version", promote, "--no-git-tag-version"],
+                check=True,
+                shell=(os.name == "nt"),
+            )
+        new_v, _ = get_project_version()
+        console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
 
 def cmd_restore(
@@ -1858,7 +1860,7 @@ def main():
     args = parser.parse_args()
     console = Console()
     if args.version:
-        console.print(f"task-agent version {get_tool_version()}")
+        display_version_info(console)
         return
 
     manager = discover(Path(args.config_dir) if args.config_dir else None)
