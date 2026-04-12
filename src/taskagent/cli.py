@@ -61,18 +61,24 @@ def get_latest_pypi_version(timeout: int = 4) -> Optional[str]:
 
 
 def display_version_info(console: Console):
-    """Display local and PyPI version information."""
+    """Display running and PyPI version information."""
+    # 1. Get running tool version
+    tool_v = get_tool_version()
+    console.print(f"[bold blue]Running version:[/bold blue] {tool_v}")
+
+    # 2. Check PyPI
+    latest_v = get_latest_pypi_version()
+    if latest_v and latest_v != tool_v:
+        console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
+        console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
+
+    # 3. Optional: show local project version if available
     try:
         v, source = get_project_version()
-        console.print(f"[bold blue]Local version:[/bold blue] {v} (from {source})")
-
-        # Check PyPI
-        latest_v = get_latest_pypi_version()
-        if latest_v and latest_v != v:
-            console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
-            console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
-    except Exception as e:
-        console.print(f"[red]Error retrieving version info: {e}[/red]")
+        if v != "unknown":
+            console.print(f"[dim]Local project version:[/dim] {v} (from {source})")
+    except Exception:
+        pass
 
 
 def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
