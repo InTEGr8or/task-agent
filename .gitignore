@@ -2,3 +2,5 @@ __pycache__/
 adk-samples
 gemini-cli
 .envrc
+.code_signatures.json
+taskhash.json
