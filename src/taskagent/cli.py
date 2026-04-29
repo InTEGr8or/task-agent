@@ -542,59 +542,57 @@ def cmd_report(console: Console, manager: TaskAgent, slug: str):
         console.print("[yellow]Reasoning trace not found.[/yellow]")
 
 
+def cmd_mcp_api(console: Console):
+    """Display the MCP API (tools and docstrings)."""
+    mcp_file = Path(__file__).parent / "mcp.py"
+    if not mcp_file.exists():
+        console.print("[red]Could not find mcp.py[/red]")
+        return
+
+    content = mcp_file.read_text(encoding="utf-8")
+
+    # Regex to extract @mcp.tool() decorated functions and their docstrings
+    pattern = re.compile(
+        r"@mcp\.tool\(\)\ndef\s+(\w+)\(.*?\)\s*->.*?:?\n\s+[\"']{3}(.*?)[\"']{3}",
+        re.DOTALL,
+    )
+
+    console.print("[bold blue]Available MCP Tools:[/bold blue]\n")
+    for match in pattern.finditer(content):
+        tool_name = match.group(1)
+        docstring = match.group(2).strip()
+        console.print(f"[bold cyan]{tool_name}[/bold cyan]")
+        console.print(f"  {docstring}\n")
+
+
 def cmd_done(
     console: Console,
     manager: TaskAgent,
-    slug_part: Optional[str] = None,
+    slug: str,
     commit_message: Optional[str] = None,
     should_commit: bool = True,
-    push: bool = False,
-    solution_explanation: Optional[str] = None,
+    push_mission: bool = False,
+    solution: Optional[str] = None,
 ):
     """Mark an issue as done."""
-    issues = manager.load_mission()
-    target_issue = select_issue(console, issues, slug_part)
-
-    if not target_issue:
-        if slug_part:
-            console.print(f"[red]No issue found matching '{slug_part}'.[/red]")
-        else:
-            console.print("[yellow]No issues to mark as done.[/yellow]")
-        sys.exit(1)
-
     try:
-        _, code_hash = manager.complete_issue(
-            target_issue.slug,
-            commit_message,
-            should_commit,
-            push_mission=push,
-            solution_explanation=solution_explanation,
+        issue, commit_hash = manager.complete_issue(
+            slug,
+            commit_message=commit_message,
+            should_commit=should_commit,
+            push_mission=push_mission,
+            solution_explanation=solution,
         )
         console.print(
-            f"[bold green]Issue '{target_issue.slug}' marked as done and removed from mission.usv[/bold green]"
+            f"[bold green]Issue '{issue.slug}' marked as done and removed from mission.usv[/bold green]"
         )
-        if should_commit and code_hash not in ["unknown", "failed"]:
-            console.print(
-                f"[bold green]Successfully committed work as {code_hash}.[/bold green]"
-            )
-        if push:
-            console.print(
-                "[bold green]Mission repository pushed to origin.[/bold green]"
-            )
+        if commit_hash:
+            console.print(f"Commit: {commit_hash}")
+        # Auto-promote project version if needed
+        promote_version(console, manager)
     except Exception as e:
-        console.print(f"[red]Error completing issue: {e}[/red]")
+        console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
-
-    # Auto-promote patch version
-    ver, source = get_project_version()
-    if source == "pyproject.toml" and Path("pyproject.toml").exists():
-        console.print("[blue]Auto-promoting project patch version...[/blue]")
-        try:
-            cmd_version(console, promote="patch")
-        except Exception as e:
-            console.print(
-                f"[yellow]Warning: Could not auto-promote version: {e}[/yellow]"
-            )
 
 
 def cmd_push(console: Console, manager: TaskAgent):
@@ -1341,6 +1339,35 @@ def cmd_version(
         console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
 
+def promote_version(console: Console, manager: TaskAgent):
+    """Auto-promote project version when a task is completed."""
+    _, source = get_project_version()
+    if source == "pyproject.toml":
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "bump-my-version",
+                "bump",
+                "patch",
+                "--no-commit",
+                "--no-tag",
+            ],
+            check=True,
+            shell=(os.name == "nt"),
+        )
+        if Path("uv.lock").exists():
+            subprocess.run(["uv", "lock"], check=True, shell=(os.name == "nt"))
+    elif source == "package.json":
+        subprocess.run(
+            ["npm", "version", "patch", "--no-git-tag-version"],
+            check=True,
+            shell=(os.name == "nt"),
+        )
+    new_v, _ = get_project_version()
+    console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
+
+
 def cmd_restore(
     console: Console, manager: TaskAgent, slug_part: str, to_status: str = "pending"
 ):
@@ -1367,7 +1394,7 @@ def cmd_restore(
 def cmd_triage(
     console: Console, manager: TaskAgent, search_query: Optional[str] = None
 ):
-    """Interactively reorder and promote tasks."""
+    """Interactively prioritize and promote tasks."""
     show_completed = False
 
     def get_display_issues(search: Optional[str] = None, completed: bool = False):
@@ -1671,10 +1698,6 @@ def display_overview(console: Console, manager: TaskAgent):
     # Task Summary
 
     stats_table = Table.grid(padding=(0, 2))
-    # Commands Table
-    table = Table(
-        title="Available Commands", box=box.MINIMAL, show_header=False, padding=(0, 2)
-    )
     console.print(stats_table)
     console.print()
 
@@ -1687,8 +1710,9 @@ def display_overview(console: Console, manager: TaskAgent):
 
     commands = [
         ("next", "Show the highest priority task"),
-        ("prior", "Interactively reorder and promote tasks"),
+        ("prior", "Interactively prioritize and promote tasks"),
         ("list", "List all tasks in the queue (try --json or --text)"),
+        ("search", "Search for tasks by slug pattern"),
         ("new", "Create a new task"),
         ("start", "Start a task (creates branch & worktree)"),
         ("done", "Complete a task (moves file & commits)"),
@@ -1706,6 +1730,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("init-worker", "Scaffold an autonomous sidecar worker"),
         ("init-mcp", "Register Task Agent with Gemini CLI"),
         ("mcp", "Run the MCP server"),
+        ("mcp-api", "Display the MCP API (tools and docstrings)"),
         ("version", "Manage project versioning"),
     ]
 
@@ -1729,7 +1754,7 @@ def main():
     subparsers.add_parser("next")
     subparsers.add_parser("init", help="Initialize or heal the project")
     triage_parser = subparsers.add_parser(
-        "triage", help="Interactively reorder and promote tasks"
+        "triage", help="Interactively prioritize and promote tasks"
     )
     triage_parser.add_argument(
         "search", nargs="?", help="Optional search query to filter by slug"
@@ -1741,7 +1766,7 @@ def main():
         "pattern", help="Pattern to match against slug (wildcard end)"
     )
     prior_parser = subparsers.add_parser(
-        "prior", help="Interactively reorder and promote tasks"
+        "prior", help="Interactively prioritize and promote tasks"
     )
     prior_parser.add_argument(
         "search", nargs="?", help="Optional search query to filter by slug"
@@ -1770,6 +1795,7 @@ def main():
         "-n", "--limit", type=int, default=20, help="Number of items to show"
     )
     subparsers.add_parser("ingest")
+    subparsers.add_parser("mcp-api", help="List available MCP tools and API")
     subparsers.add_parser("self-up")
     up_parser = subparsers.add_parser("up")
     up_parser.add_argument("slug")
@@ -1903,6 +1929,8 @@ def main():
         cmd_history(console, manager, args.limit)
     elif args.command == "ingest":
         cmd_ingest(console, manager)
+    elif args.command == "mcp-api":
+        cmd_mcp_api(console)
     elif args.command == "self-up":
         cmd_self_up(console)
     elif args.command == "up":

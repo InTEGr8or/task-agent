@@ -8,6 +8,9 @@ help: ## Display this help screen
 # Application Tasks
 # ==============================================================================
 
+build: ## Build the package
+	@uv build
+
 test: lint ## Run unit tests
 	@uv run pytest
 
