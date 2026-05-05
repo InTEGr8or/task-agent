@@ -5,7 +5,7 @@ The `ta` command-line interface provides everything you need to manage your task
 ## 📋 General Options
 
 - `-V`, `--version`: Show the `task-agent` tool version and check for updates.
-- `-C`, `--config-dir`: Override the default issues directory (defaults to `docs/issues` or `TA_CONFIG_DIR`).
+- `-C`, `--config-dir`: Override the default issues directory (defaults to `docs/tasks` or `TA_CONFIG_DIR`).
 
 ## 🛠️ Commands
 
@@ -56,9 +56,11 @@ Increases or decreases the priority of a task within its status group.
 
 ### `ta ingest`
 Rebuilds the `mission.usv` and `datapackage.json` based on files found on disk.
+- Mission files are stored in `docs/tasks/.task-agent/` directory.
 - Preserves existing order for known tasks.
 - Appends new tasks found in `pending`, `draft`, or `active`.
 - Removes entries for missing files.
+- Automatically migrates mission files from old location to `.task-agent/` subdirectory.
 
 ### `ta version`
 Displays and manages the target project's version.
@@ -68,3 +70,14 @@ Displays and manages the target project's version.
 
 ### `ta self-up`
 Upgrades the `task-agent` tool itself via `uv`.
+
+### `ta worktree`
+Manage git worktrees for branches, tags, and commits.
+- **Actions**: `add`, `list`, `remove`, `prune`
+- **Flags**:
+  - `--tag`: Create worktree from tag instead of branch.
+  - `--commit`: Create worktree from specific commit SHA.
+  - `--copy`: Glob patterns to copy to worktree (can be specified multiple times).
+  - `--permissions`: Octal permissions for worktree directory.
+  - `--no-symlinks`: Do not copy symlinks to worktree.
+  - `--no-env`: Do not copy .env files to worktree.

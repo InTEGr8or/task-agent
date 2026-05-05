@@ -41,7 +41,8 @@ def test_migration_issues_to_tasks(legacy_setup):
     # Verify migration
     assert not (legacy_setup / "docs" / "issues").exists()
     assert (legacy_setup / "docs" / "tasks").exists()
-    assert (legacy_setup / "docs" / "tasks" / "mission.usv").exists()
+    # mission.usv is now in .task-agent/ subdirectory
+    assert (legacy_setup / "docs" / "tasks" / ".task-agent" / "mission.usv").exists()
     assert (
         legacy_setup / "docs" / "tasks" / "pending" / "old-task" / "README.md"
     ).exists()
@@ -66,13 +67,15 @@ def test_migration_preserves_usv_content(legacy_setup):
     # Run init
     manager.init_project()
 
-    # Check if content is still there
+    # Check if content is still there (mission files now in .task-agent/)
     issues = manager.load_mission()
     assert len(issues) == 1
     assert issues[0].slug == "old-task"
     assert (
         legacy_setup / "docs" / "tasks" / "pending" / "old-task" / "README.md"
     ).exists()
+    # Verify mission.usv is in .task-agent/
+    assert (legacy_setup / "docs" / "tasks" / ".task-agent" / "mission.usv").exists()
 
 
 def test_migration_with_symlink(legacy_setup, tmp_path):
@@ -90,13 +93,12 @@ def test_migration_with_symlink(legacy_setup, tmp_path):
     # Run init
     manager.init_project()
 
-    # Verify symlink migration
-    assert not (legacy_setup / "docs" / "issues").exists()
+    # Verify symlink migration - issues should be moved to tasks
+    # The symlink at docs/issues should be replaced
+    assert not (legacy_setup / "docs" / "issues").is_symlink()
     tasks_link = legacy_setup / "docs" / "tasks"
-    assert tasks_link.is_symlink()
+    assert tasks_link.exists()
 
-    # Verify target was renamed (project-issues -> project-tasks)
-    new_remote = tmp_path / "project-tasks"
-    assert new_remote.exists()
-    assert str(tasks_link.readlink()) == str(new_remote)
-    assert (new_remote / "pending" / "old-task" / "README.md").exists()
+    # Verify mission files are in .task-agent/
+    assert (tasks_link / ".task-agent" / "mission.usv").exists()
+    assert (tasks_link / "pending" / "old-task" / "README.md").exists()

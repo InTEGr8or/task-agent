@@ -102,7 +102,7 @@ def test_cmd_ingest(manager, temp_issues_dir):
     assert issues[1].slug == "task-2"
     assert issues[1].dependencies == ["task-1"]
 
-    assert (temp_issues_dir / "datapackage.json").exists()
+    assert (temp_issues_dir / ".task-agent" / "datapackage.json").exists()
 
 
 def test_cmd_start(manager, temp_issues_dir, monkeypatch):

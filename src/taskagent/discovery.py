@@ -131,9 +131,18 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
                 # Fallback if tomllib is missing or parse fails
                 pass
 
-        # 3. Check for docs/tasks/ (new default)
+        # 3. Check for docs/tasks/.task-agent/ (new default with mission files in subdirectory)
         tasks_dir = current / "docs" / "tasks"
         if tasks_dir.exists() and tasks_dir.is_dir():
+            # Check if mission files are in .task-agent/ subdirectory
+            if (tasks_dir / ".task-agent").exists():
+                return TaskAgent(config_dir=str(tasks_dir))
+            # Check if old structure (mission files in tasks root) - will auto-migrate
+            elif (tasks_dir / "mission.usv").exists() or (
+                tasks_dir / "datapackage.json"
+            ).exists():
+                return TaskAgent(config_dir=str(tasks_dir))
+            # Empty tasks dir - still return it
             return TaskAgent(config_dir=str(tasks_dir))
 
         # 4. Check for docs/issues/ (legacy fallback for migration)

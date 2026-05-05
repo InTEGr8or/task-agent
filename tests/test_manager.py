@@ -6,7 +6,10 @@ from datetime import datetime
 @pytest.fixture
 def manager(tmp_path):
     issues_root = tmp_path / "docs" / "tasks"
-    return TaskAgent(config_dir=str(issues_root))
+    m = TaskAgent(config_dir=str(issues_root))
+    # Ensure .task-agent directory exists for tests
+    (issues_root / ".task-agent").mkdir(exist_ok=True)
+    return m
 
 
 def test_api_create_issue(manager):
@@ -53,11 +56,14 @@ def test_mission_file_protection(manager):
     import os
     import stat
 
-    # Check read-only bit
+    # Check read-only bit on mission.usv in .task-agent/
     mode = os.stat(manager.mission_path).st_mode
     assert not (mode & stat.S_IWRITE)
+    assert "mission.usv" in str(manager.mission_path)
+    assert ".task-agent" in str(manager.mission_path)
 
-    dp_path = manager.issues_root / "datapackage.json"
+    # Check datapackage.json in .task-agent/
+    dp_path = manager.mission_dir / "datapackage.json"
     mode_dp = os.stat(dp_path).st_mode
     assert not (mode_dp & stat.S_IWRITE)
 

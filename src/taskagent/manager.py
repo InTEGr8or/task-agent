@@ -13,7 +13,9 @@ from taskagent.models.issue import Issue, USV_DELIM
 
 class TaskAgent:
     def __init__(self, config_dir: Optional[str] = None):
-        self.issues_root, self.mission_path = self.get_config_paths(config_dir)
+        self.issues_root, self.mission_dir, self.mission_path = self.get_config_paths(
+            config_dir
+        )
         self.ensure_issues_dir()
         self.code_root = self._get_git_root(Path.cwd())
         self.mission_root = self._get_git_root(self.issues_root)
@@ -56,18 +58,46 @@ class TaskAgent:
             raise RuntimeError(f"Failed to push mission repository: {e.stderr}")
 
     def _set_writable(self, path: Path, writable: bool):
-        """Toggle the filesystem write bit for a file."""
+        """Toggle the filesystem write bit and chattr for a file."""
         if not path.exists():
             return
+
+        # First handle chattr (immutable attribute)
+        try:
+            if writable:
+                # Remove immutable attribute
+                subprocess.run(
+                    ["chattr", "-i", str(path)],
+                    capture_output=True,
+                    check=False,
+                    shell=(os.name == "nt"),
+                )
+            else:
+                # Set immutable attribute (after chmod)
+                pass  # We'll set it after chmod
+        except Exception:
+            pass
+
+        # Handle chmod
         current_mode = path.stat().st_mode
         if writable:
             os.chmod(path, current_mode | stat.S_IWRITE)
         else:
             os.chmod(path, current_mode & ~stat.S_IWRITE)
+            # Set immutable attribute after making read-only
+            try:
+                subprocess.run(
+                    ["chattr", "+i", str(path)],
+                    capture_output=True,
+                    check=False,
+                    shell=(os.name == "nt"),
+                )
+            except Exception:
+                pass  # Best effort
 
     @staticmethod
-    def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path]:
-        """Get the issues root and mission path based on config or environment."""
+    def get_config_paths(config_dir: Optional[str] = None) -> Tuple[Path, Path, Path]:
+        """Get the issues root, mission dir, and mission path based on config or environment."""
         if config_dir:
             issues_root = Path(config_dir)
         else:
@@ -75,12 +105,14 @@ class TaskAgent:
             env_dir = os.environ.get("TA_CONFIG_DIR")
             issues_root = Path(env_dir) if env_dir else Path("docs/tasks")
 
-        mission_path = issues_root / "mission.usv"
-        return issues_root, mission_path
+        mission_dir = issues_root / ".task-agent"
+        mission_path = mission_dir / "mission.usv"
+        return issues_root, mission_dir, mission_path
 
     def ensure_issues_dir(self):
         """Ensure the issues directory and its subdirectories exist."""
         self.issues_root.mkdir(parents=True, exist_ok=True)
+        self.mission_dir.mkdir(parents=True, exist_ok=True)
         for subdir in ["pending", "draft", "active", "completed"]:
             (self.issues_root / subdir).mkdir(parents=True, exist_ok=True)
 
@@ -88,13 +120,36 @@ class TaskAgent:
         """Ensure mission.usv and datapackage.json are read-only."""
         if self.mission_path.exists():
             self._set_writable(self.mission_path, False)
-        dp_path = self.issues_root / "datapackage.json"
+        dp_path = self.mission_dir / "datapackage.json"
         if dp_path.exists():
             self._set_writable(dp_path, False)
+
+    def _migrate_mission_files(self):
+        """Migrate mission files from issues_root to .task-agent/ subdirectory."""
+        old_mission = self.issues_root / "mission.usv"
+        old_dp = self.issues_root / "datapackage.json"
+
+        migrated = False
+        if old_mission.exists() or old_dp.exists():
+            self.mission_dir.mkdir(exist_ok=True)
+
+            if old_mission.exists() and not self.mission_path.exists():
+                shutil.move(str(old_mission), str(self.mission_path))
+                migrated = True
+
+            if old_dp.exists() and not (self.mission_dir / "datapackage.json").exists():
+                shutil.move(str(old_dp), str(self.mission_dir / "datapackage.json"))
+                migrated = True
+
+            if migrated:
+                print("Migrated mission files to .task-agent/ directory")
 
     def init_project(self) -> Tuple[int, int]:
         """Initialize or heal the task agent structure in the current project.
         Syncs disk state with mission.usv. Returns (num_new, num_removed)."""
+        # Migrate mission files to .task-agent/ if needed
+        self._migrate_mission_files()
+
         # Robust migration from issues/ to tasks/
         parent = self.issues_root.parent
         legacy_issues = parent / "issues"
@@ -130,7 +185,8 @@ class TaskAgent:
                 # Update self state if we were pointing to the legacy name
                 if self.issues_root.name == "issues":
                     self.issues_root = target_tasks
-                    self.mission_path = self.issues_root / "mission.usv"
+                    self.mission_dir = self.issues_root / ".task-agent"
+                    self.mission_path = self.mission_dir / "mission.usv"
                     # Refresh mission root too
                     self.mission_root = self._get_git_root(self.issues_root)
             else:
@@ -305,11 +361,17 @@ class TaskAgent:
         return new_issue
 
     def load_mission(self) -> List[Issue]:
-        if not self.mission_path.exists():
+        # Check new location first (.task-agent/mission.usv)
+        if self.mission_path.exists():
+            mission_file = self.mission_path
+        # Check legacy location (mission.usv in issues_root) for migration
+        elif (self.issues_root / "mission.usv").exists():
+            mission_file = self.issues_root / "mission.usv"
+        else:
             return []
 
         issues = []
-        with self.mission_path.open("r", encoding="utf-8") as f:
+        with mission_file.open("r", encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -360,7 +422,7 @@ class TaskAgent:
 
     def save_mission(self, issues: List[Issue]):
         """Save the list of issues back to mission.usv."""
-        self.mission_path.parent.mkdir(parents=True, exist_ok=True)
+        self.mission_dir.mkdir(parents=True, exist_ok=True)
         self._set_writable(self.mission_path, True)
         with self.mission_path.open("w", encoding="utf-8", newline="\n") as f:
             for issue in issues:
@@ -387,7 +449,8 @@ class TaskAgent:
                 }
             ],
         }
-        dp_path = self.issues_root / "datapackage.json"
+        self.mission_dir.mkdir(parents=True, exist_ok=True)
+        dp_path = self.mission_dir / "datapackage.json"
         self._set_writable(dp_path, True)
         with dp_path.open("w", encoding="utf-8") as f:
             json.dump(datapackage, f, indent=2)
