@@ -1,0 +1,16 @@
+{
+  "branches": {
+    "main": {
+      "user.name": "Mark Stouffer",
+      "user.email": "1802850+INTEGR8or@users.noreply.github.com"
+    },
+    "uat": {
+      "user.name": "AI Agent",
+      "user.email": "ai-agent@users.noreply.github.com"
+    },
+    "default": {
+      "user.name": "Mark Stouffer",
+      "user.email": "1802850+INTEGR8or@users.noreply.github.com"
+    }
+  }
+}

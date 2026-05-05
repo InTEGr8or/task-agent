@@ -1368,6 +1368,354 @@ def promote_version(console: Console, manager: TaskAgent):
     console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
 
+def cmd_worktree(console: Console, manager: TaskAgent, args):
+    """Manage git worktrees for branches, tags, and commits."""
+    import subprocess
+    import os
+    from pathlib import Path
+
+    # Default worktree directory
+    worktree_base = Path(".gwt")
+    worktree_base.mkdir(exist_ok=True)
+
+    # Show help if no action provided
+    if not args.action:
+        console.print("[bold blue]Worktree Management[/bold blue]")
+        console.print()
+        console.print("[bold]Available actions:[/bold]")
+        console.print("  [cyan]add[/cyan]    - Create a new worktree (requires target)")
+        console.print("  [cyan]list[/cyan]   - List all worktrees")
+        console.print("  [cyan]remove[/cyan] - Remove a worktree (requires target)")
+        console.print("  [cyan]prune[/cyan]   - Remove stale worktree information")
+        console.print()
+        console.print("[dim]Run 'ta worktree add --help' for detailed options.[/dim]")
+        console.print(
+            "[dim]Run 'ta worktree <action> --help' for action-specific help.[/dim]"
+        )
+        return
+
+    if args.action == "add":
+        if not args.target:
+            console.print(
+                "[red]Error: target (branch/tag/commit) is required for add action[/red]"
+            )
+            return
+
+        # Determine what we're checking out
+        if args.tag:
+            ref = f"tags/{args.target}"
+            display_name = f"tag:{args.target}"
+        elif args.commit:
+            ref = args.target
+            display_name = f"commit:{args.target[:8]}"
+        else:
+            ref = args.target
+            display_name = f"branch:{args.target}"
+
+        # Create worktree path
+        worktree_path = worktree_base / args.target
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Add the worktree
+            if args.tag or args.commit:
+                # For tags/commits, we need to checkout the specific ref
+                subprocess.run(
+                    ["git", "worktree", "add", str(worktree_path), ref],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    shell=(os.name == "nt"),
+                )
+            else:
+                # For branches, create new branch if it doesn't exist
+                subprocess.run(
+                    ["git", "worktree", "add", "-B", args.target, str(worktree_path)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    shell=(os.name == "nt"),
+                )
+
+            console.print(
+                f"[green]Added worktree for {display_name} at {worktree_path}[/green]"
+            )
+
+            # Set permissions if specified
+            if args.permissions:
+                try:
+                    perms = int(args.permissions, 8)
+                    os.chmod(worktree_path, perms)
+                    console.print(f"[dim]Set permissions to {args.permissions}[/dim]")
+                except ValueError:
+                    console.print(
+                        f"[yellow]Warning: Invalid permissions '{args.permissions}', using default[/yellow]"
+                    )
+
+            # Copy files if requested
+            copy_patterns = args.copy or []
+            if not args.no_symlinks:
+                copy_patterns.append("symlinks")
+            if not args.no_env:
+                copy_patterns.append("*.env")
+
+            if copy_patterns:
+                _copy_files_to_worktree(console, worktree_path, copy_patterns)
+
+            # Configure git user for this worktree if needed
+            _configure_git_user_for_worktree(console, worktree_path, args.target)
+
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Error creating worktree: {e.stderr}[/red]")
+            # Clean up on failure
+            if worktree_path.exists():
+                subprocess.run(
+                    ["git", "worktree", "remove", str(worktree_path)],
+                    check=False,
+                    shell=(os.name == "nt"),
+                )
+                try:
+                    if not any(worktree_path.iterdir()):
+                        worktree_path.rmdir()
+                except (OSError, StopIteration):
+                    pass
+
+    elif args.action == "list":
+        try:
+            result = subprocess.run(
+                ["git", "worktree", "list"],
+                capture_output=True,
+                text=True,
+                check=True,
+                shell=(os.name == "nt"),
+            )
+            if result.stdout.strip():
+                console.print("[bold blue]Worktrees:[/bold blue]")
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        console.print(f"  {line}")
+            else:
+                console.print("[yellow]No worktrees found[/yellow]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Error listing worktrees: {e.stderr}[/red]")
+
+    elif args.action == "remove":
+        if not args.target:
+            console.print(
+                "[red]Error: target (worktree path) is required for remove action[/red]"
+            )
+            return
+
+        worktree_path = Path(args.target)
+        if not worktree_path.exists():
+            console.print(
+                f"[yellow]Worktree path {worktree_path} does not exist[/yellow]"
+            )
+            return
+
+        try:
+            subprocess.run(
+                ["git", "worktree", "remove", str(worktree_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+            console.print(f"[green]Removed worktree at {worktree_path}[/green]")
+            # Try to remove the directory if empty
+            try:
+                worktree_path.rmdir()
+            except OSError:
+                pass  # Directory not empty, leave it
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Error removing worktree: {e.stderr}[/red]")
+
+    elif args.action == "prune":
+        try:
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+            console.print("[green]Pruned stale worktrees[/green]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Error pruning worktrees: {e.stderr}[/red]")
+
+
+def _copy_files_to_worktree(console: Console, worktree_path: Path, patterns: list):
+    """Copy files matching patterns to the worktree directory."""
+    import shutil
+
+    repo_root = Path.cwd()
+
+    for pattern in patterns:
+        if pattern == "symlinks":
+            # Find and copy symlinks
+            for item in repo_root.rglob("*"):
+                if item.is_symlink() and not any(
+                    part.startswith(".gwt") for part in item.parts
+                ):
+                    relative_path = item.relative_to(repo_root)
+                    target_path = worktree_path / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        shutil.copy2(item, target_path)
+                        console.print(f"[dim]Copied symlink: {relative_path}[/dim]")
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]Warning: Failed to copy symlink {relative_path}: {e}[/yellow]"
+                        )
+        else:
+            # Handle glob patterns
+            for item in repo_root.glob(pattern):
+                if not any(part.startswith(".gwt") for part in item.parts):
+                    relative_path = item.relative_to(repo_root)
+                    target_path = worktree_path / relative_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        if item.is_dir():
+                            shutil.copytree(item, target_path, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(item, target_path)
+                        console.print(f"[dim]Copied: {relative_path}[/dim]")
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]Warning: Failed to copy {relative_path}: {e}[/yellow]"
+                        )
+
+
+def _configure_git_user_for_worktree(
+    console: Console, worktree_path: Path, branch_name: str
+):
+    """Configure git user.email and user.name for a worktree based on branch."""
+    import subprocess
+    import json
+    from pathlib import Path
+
+    # Default to current user's git config
+    try:
+        # Get current git config
+        user_name_result = subprocess.run(
+            ["git", "config", "--get", "user.name"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        user_email_result = subprocess.run(
+            ["git", "config", "--get", "user.email"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        user_name = (
+            user_name_result.stdout.strip() if user_name_result.returncode == 0 else ""
+        )
+        user_email = (
+            user_email_result.stdout.strip()
+            if user_email_result.returncode == 0
+            else ""
+        )
+
+        # Check for branch-specific git config
+        # Look for .task-agent/worktree-config.json
+        config_path = Path(".task-agent/worktree-config.json")
+        if config_path.exists():
+            try:
+                with config_path.open("r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    # Check if there's a specific config for this branch
+                    branch_config = config.get("branches", {}).get(branch_name, {})
+                    if branch_config:
+                        user_name = branch_config.get("user.name", user_name)
+                        user_email = branch_config.get("user.email", user_email)
+                        console.print(
+                            f"[dim]Using branch-specific config for '{branch_name}'[/dim]"
+                        )
+                    # Check for default config
+                    elif "default" in config.get("branches", {}):
+                        default_config = config["branches"]["default"]
+                        user_name = default_config.get("user.name", user_name)
+                        user_email = default_config.get("user.email", user_email)
+                        console.print("[dim]Using default worktree config[/dim]")
+            except Exception as e:
+                console.print(
+                    f"[yellow]Warning: Failed to read worktree config: {e}[/yellow]"
+                )
+
+        if user_name and user_email:
+            # Set git config locally for this worktree
+            subprocess.run(
+                ["git", "-C", str(worktree_path), "config", "user.name", user_name],
+                check=False,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(worktree_path), "config", "user.email", user_email],
+                check=False,
+                capture_output=True,
+            )
+            console.print(
+                f"[dim]Configured git user for worktree: {user_name} <{user_email}>[/dim]"
+            )
+        else:
+            console.print(
+                "[yellow]Warning: Could not determine git user from current config[/yellow]"
+            )
+
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Failed to configure git user for worktree: {e}[/yellow]"
+        )
+        user_email_result = subprocess.run(
+            ["git", "config", "--get", "user.email"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        user_name = (
+            user_name_result.stdout.strip() if user_name_result.returncode == 0 else ""
+        )
+        user_email = (
+            user_email_result.stdout.strip()
+            if user_email_result.returncode == 0
+            else ""
+        )
+
+        # TODO: Implement branch-specific git config logic here
+        # For now, we'll just use the current user's config
+        # In the future, this could read from a config file to determine
+        # which GitHub account to use for which branch
+
+        if user_name and user_email:
+            # Set git config locally for this worktree
+            subprocess.run(
+                ["git", "-C", str(worktree_path), "config", "user.name", user_name],
+                check=False,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(worktree_path), "config", "user.email", user_email],
+                check=False,
+                capture_output=True,
+            )
+            console.print(
+                f"[dim]Configured git user for worktree: {user_name} <{user_email}>[/dim]"
+            )
+        else:
+            console.print(
+                "[yellow]Warning: Could not determine git user from current config[/yellow]"
+            )
+
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Failed to configure git user for worktree: {e}[/yellow]"
+        )
+
+
 def cmd_restore(
     console: Console, manager: TaskAgent, slug_part: str, to_status: str = "pending"
 ):
@@ -1797,6 +2145,39 @@ def main():
     subparsers.add_parser("ingest")
     subparsers.add_parser("mcp-api", help="List available MCP tools and API")
     subparsers.add_parser("self-up")
+    worktree_parser = subparsers.add_parser(
+        "worktree", help="Manage git worktrees with advanced features"
+    )
+    worktree_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["add", "list", "remove", "prune"],
+        help="Worktree action to perform (shows help if omitted)",
+    )
+    worktree_parser.add_argument(
+        "target", nargs="?", help="Branch, tag, or commit SHA (for add action)"
+    )
+    worktree_parser.add_argument(
+        "--tag", action="store_true", help="Create worktree from tag instead of branch"
+    )
+    worktree_parser.add_argument(
+        "--commit", action="store_true", help="Create worktree from specific commit SHA"
+    )
+    worktree_parser.add_argument(
+        "--copy",
+        action="append",
+        help="Glob patterns to copy to worktree (can be specified multiple times)",
+    )
+    worktree_parser.add_argument(
+        "--permissions",
+        help="Octal permissions for worktree directory (e.g., 700, 755)",
+    )
+    worktree_parser.add_argument(
+        "--no-symlinks", action="store_true", help="Do not copy symlinks to worktree"
+    )
+    worktree_parser.add_argument(
+        "--no-env", action="store_true", help="Do not copy .env files to worktree"
+    )
     up_parser = subparsers.add_parser("up")
     up_parser.add_argument("slug")
     down_parser = subparsers.add_parser("down")
@@ -1979,6 +2360,8 @@ def main():
             args.criteria,
             args.interactive,
         )
+    elif args.command == "worktree":
+        cmd_worktree(console, manager, args)
     elif args.command == "version":
         if args.version_command == "promote":
             cmd_version(console, promote=args.part, push=False)
