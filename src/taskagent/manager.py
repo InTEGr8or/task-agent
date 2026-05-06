@@ -63,20 +63,21 @@ class TaskAgent:
             return
 
         # First handle chattr (immutable attribute)
-        try:
-            if writable:
-                # Remove immutable attribute
+        if writable:
+            # Remove immutable attribute before making writable
+            try:
                 subprocess.run(
                     ["chattr", "-i", str(path)],
                     capture_output=True,
-                    check=False,
+                    check=True,
                     shell=(os.name == "nt"),
                 )
-            else:
-                # Set immutable attribute (after chmod)
-                pass  # We'll set it after chmod
-        except Exception:
-            pass
+            except subprocess.CalledProcessError:
+                raise RuntimeError(
+                    f"Cannot modify {path.name} (immutable attribute set).\n"
+                    f"Run: sudo chattr -i {path}\n"
+                    f"Or: sudo setcap cap_linux_immutable+ep $(which ta)"
+                )
 
         # Handle chmod
         current_mode = path.stat().st_mode
