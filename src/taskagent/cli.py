@@ -1544,6 +1544,83 @@ def cmd_worktree(console: Console, manager: TaskAgent, args):
             console.print(f"[red]Error pruning worktrees: {e.stderr}[/red]")
 
 
+def cmd_github(console: Console, manager: TaskAgent, args):
+    """Sync with GitHub Issues."""
+    try:
+        from taskagent.plugins.github import GitHubPlugin
+    except ImportError:
+        console.print("[red]GitHub plugin not installed. Run: uv add githubkit[/red]")
+        return
+
+    # Load config from .ta-config.json or environment
+    config = {}
+    config_file = Path("~/.config/task-agent/settings.json").expanduser()
+    if config_file.exists():
+        try:
+            config = json.loads(config_file.read_text())
+        except Exception:
+            pass
+
+    # Override repo if specified in args
+    if hasattr(args, "repo") and args.repo:
+        config["repo"] = args.repo
+
+    try:
+        plugin = GitHubPlugin(config)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        return
+
+    if args.github_command == "sync":
+        try:
+            issues = plugin.sync_from_github()
+            console.print(f"[green]Imported {len(issues)} issues from GitHub[/green]")
+
+            # Add issues to task-agent
+            for issue in issues:
+                try:
+                    manager.create_issue(issue.name, body="Imported from GitHub")
+                    console.print(f"  Added: {issue.name}")
+                except Exception as e:
+                    console.print(f"  [yellow]Skipped {issue.slug}: {e}[/yellow]")
+
+            # Save mission
+            manager.save_mission(manager.load_mission())
+            console.print("[green]Mission file updated[/green]")
+        except Exception as e:
+            console.print(f"[red]Error syncing: {e}[/red]")
+
+    elif args.github_command == "create":
+        try:
+            issue = None
+            # Find the issue by slug
+            issue_file = manager.find_issue_file(args.slug)
+            if not issue_file:
+                console.print(f"[red]Issue '{args.slug}' not found[/red]")
+                return
+
+            # Load issue details
+            content = (
+                issue_file.read_text()
+                if issue_file.name == "README.md"
+                else issue_file.read_text()
+            )
+            name = content.split("\n")[0].lstrip("#").strip()
+
+            # Create GitHub issue
+            from taskagent.models.issue import Issue
+
+            temp_issue = Issue(name=name, slug=args.slug, dependencies=[])
+            result = plugin.create_github_issue(temp_issue)
+
+            console.print(f"[green]Created GitHub Issue #{result['number']}[/green]")
+            console.print(f"URL: {result['url']}")
+        except Exception as e:
+            console.print(f"[red]Error creating issue: {e}[/red]")
+    else:
+        console.print("[yellow]Use 'sync' or 'create' subcommand[/yellow]")
+
+
 def _copy_files_to_worktree(console: Console, worktree_path: Path, patterns: list):
     """Copy files matching patterns to the worktree directory."""
     import shutil
@@ -1644,51 +1721,6 @@ def _configure_git_user_for_worktree(
                 console.print(
                     f"[yellow]Warning: Failed to read worktree config: {e}[/yellow]"
                 )
-
-        if user_name and user_email:
-            # Set git config locally for this worktree
-            subprocess.run(
-                ["git", "-C", str(worktree_path), "config", "user.name", user_name],
-                check=False,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["git", "-C", str(worktree_path), "config", "user.email", user_email],
-                check=False,
-                capture_output=True,
-            )
-            console.print(
-                f"[dim]Configured git user for worktree: {user_name} <{user_email}>[/dim]"
-            )
-        else:
-            console.print(
-                "[yellow]Warning: Could not determine git user from current config[/yellow]"
-            )
-
-    except Exception as e:
-        console.print(
-            f"[yellow]Warning: Failed to configure git user for worktree: {e}[/yellow]"
-        )
-        user_email_result = subprocess.run(
-            ["git", "config", "--get", "user.email"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        user_name = (
-            user_name_result.stdout.strip() if user_name_result.returncode == 0 else ""
-        )
-        user_email = (
-            user_email_result.stdout.strip()
-            if user_email_result.returncode == 0
-            else ""
-        )
-
-        # TODO: Implement branch-specific git config logic here
-        # For now, we'll just use the current user's config
-        # In the future, this could read from a config file to determine
-        # which GitHub account to use for which branch
 
         if user_name and user_email:
             # Set git config locally for this worktree
@@ -2178,6 +2210,21 @@ def main():
     worktree_parser.add_argument(
         "--no-env", action="store_true", help="Do not copy .env files to worktree"
     )
+
+    # GitHub integration
+    github_parser = subparsers.add_parser("github", help="Sync with GitHub Issues")
+    github_sub = github_parser.add_subparsers(dest="github_command")
+
+    sync_parser = github_sub.add_parser("sync", help="Import issues from GitHub")
+    sync_parser.add_argument("--repo", help="Repository (owner/repo) override")
+
+    create_parser = github_sub.add_parser(
+        "create", help="Create GitHub issue from task"
+    )
+    create_parser.add_argument("slug", help="Task slug to create GitHub issue for")
+
+    # Add other commands as needed
+
     up_parser = subparsers.add_parser("up")
     up_parser.add_argument("slug")
     down_parser = subparsers.add_parser("down")
@@ -2362,6 +2409,8 @@ def main():
         )
     elif args.command == "worktree":
         cmd_worktree(console, manager, args)
+    elif args.command == "github":
+        cmd_github(console, manager, args)
     elif args.command == "version":
         if args.version_command == "promote":
             cmd_version(console, promote=args.part, push=False)
