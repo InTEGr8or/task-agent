@@ -489,7 +489,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                     str(absolute_idx + 1), date_str, f"{prefix}{slug}", style=style
                 )
 
-            help_text = "[dim]v/l: view | q: exit[/dim]"
+            help_text = "[dim]v/l: view | c: copy slug | q: exit[/dim]"
 
             live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
 
@@ -503,7 +503,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
             elif key in ["k", "\x1b[A"]:
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:
-                cursor = min(len(all_completed) - 1, cursor + 1)
+                cursor = min(len(all_completed), cursor + 1)
             elif key in ["v", "l"]:
                 live.stop()
                 file, slug = all_completed[cursor]
@@ -514,6 +514,14 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 except Exception:
                     pass
                 live.start()
+            elif key in ["c"]:
+                # Copy slug to clipboard
+                _, slug = all_completed[cursor]
+                try:
+                    pyperclip.copy(slug)
+                    console.print(f"[green]Copied slug to clipboard: {slug}[/green]")
+                except Exception as e:
+                    console.print(f"[yellow]Failed to copy to clipboard: {e}[/yellow]")
 
 
 def cmd_report(console: Console, manager: TaskAgent, slug: str):
