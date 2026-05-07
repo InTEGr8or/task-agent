@@ -308,13 +308,46 @@ def cmd_next(console: Console, manager: TaskAgent):
 
 
 def cmd_search(console: Console, manager: TaskAgent, pattern: str):
-    """Search for issues by slug prefix pattern."""
+    """Search for issues by slug pattern (case-insensitive contains)."""
     issues = manager.load_mission()
-    if not issues:
+    if not issues and not (manager.issues_root / "completed").exists():
         console.print("[yellow]No issues found.[/yellow]")
         return
 
-    matches = [i for i in issues if i.slug.startswith(pattern)]
+    # Case-insensitive contains search
+    pattern_lower = pattern.lower()
+    matches = [i for i in issues if pattern_lower in i.slug.lower()]
+
+    # If no matches in mission, search completed tasks
+    if not matches:
+        completed_root = manager.issues_root / "completed"
+        if completed_root.exists():
+            for year_dir in sorted(completed_root.iterdir(), reverse=True):
+                if year_dir.is_dir():
+                    # Check file-based tasks
+                    for f in year_dir.glob("*.md"):
+                        if pattern_lower in f.stem.lower():
+                            slug = f.stem
+                            name = manager.extract_title(f)
+                            matches.append(
+                                Issue(
+                                    name=name, slug=slug, status="completed", priority=0
+                                )
+                            )
+                    # Check directory-based tasks
+                    for d in year_dir.iterdir():
+                        if d.is_dir():
+                            readme = d / "README.md"
+                            if readme.exists() and pattern_lower in d.name.lower():
+                                name = manager.extract_title(readme)
+                                matches.append(
+                                    Issue(
+                                        name=name,
+                                        slug=d.name,
+                                        status="completed",
+                                        priority=0,
+                                    )
+                                )
 
     if not matches:
         console.print(f"[yellow]No issues match pattern '{pattern}'.[/yellow]")
