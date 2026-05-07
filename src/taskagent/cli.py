@@ -613,6 +613,76 @@ def cmd_push(console: Console, manager: TaskAgent):
         console.print(f"[red]Failed to push mission repository: {e}[/red]")
 
 
+def cmd_commit(
+    console: Console,
+    manager: TaskAgent,
+    message: Optional[str] = None,
+    should_push: bool = True,
+):
+    """Commit and optionally push changes in the tasks/ directory."""
+    import subprocess
+
+    # Determine the tasks directory
+    tasks_dir = manager.issues_root
+    if not tasks_dir or not tasks_dir.exists():
+        console.print("[red]Tasks directory not found.[/red]")
+        return
+
+    # Generate default commit message if not provided
+    if not message:
+        message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    console.print(f"[blue]Committing changes in {tasks_dir}...[/blue]")
+
+    try:
+        # Add all changes in tasks directory
+        subprocess.run(
+            ["git", "add", str(tasks_dir / ".")],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+
+        # Check if there are changes to commit
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+
+        if result.returncode == 0:
+            console.print("[yellow]No changes to commit in tasks/ directory.[/yellow]")
+            return
+
+        # Commit
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        console.print(f"[bold green]Committed: {message}[/bold green]")
+
+        # Push if requested
+        if should_push:
+            if manager.mission_root:
+                console.print("[blue]Pushing to remote...[/blue]")
+                manager.push_mission_repo()
+                console.print("[bold green]Successfully pushed.[/bold green]")
+            else:
+                console.print(
+                    "[yellow]No mission repository configured, skipping push.[/yellow]"
+                )
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error: {e.stderr}[/red]")
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+
+
 def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
     """Automate the move of docs/tasks to a separate repository."""
     source_dir = manager.issues_root
@@ -2267,6 +2337,21 @@ def main():
 
     # push
     subparsers.add_parser("push", help="Push the mission repository to origin")
+
+    # commit - commit and push changes in tasks/ directory
+    commit_parser = subparsers.add_parser(
+        "commit", help="Commit and push changes in tasks/ directory"
+    )
+    commit_parser.add_argument(
+        "-m", "--message", help="Commit message (default: auto-generated)"
+    )
+    commit_parser.add_argument(
+        "--no-push",
+        dest="push",
+        action="store_false",
+        help="Do not push to remote",
+    )
+    commit_parser.set_defaults(push=True)
 
     # eject-mission
     eject_parser = subparsers.add_parser(
