@@ -2,7 +2,7 @@
 
 import os
 from typing import List
-from githubkit import GitHub, Auth
+from githubkit import GitHub
 from githubkit.versions.latest.models import Issue as GitHubIssueModel
 
 from taskagent.models.issue import Issue
@@ -13,16 +13,25 @@ class GitHubPlugin:
 
     def __init__(self, config: dict):
         """Initialize with config dict containing 'token' and optionally 'repo'."""
-        self.token = config.get("token") or os.environ.get("GITHUB_TOKEN")
-        self.repo_full_name = config.get("repo")  # e.g., "owner/repo"
+        # Allow config to come from worktree-config.json under "github" key
+        github_config = config.get("github", {})
+
+        self.token = (
+            github_config.get("token")
+            or config.get("token")
+            or os.environ.get("GITHUB_TOKEN")
+        )
+        self.repo_full_name = github_config.get("repo") or config.get("repo")
 
         if not self.token:
             raise ValueError(
-                "GitHub token required. Set 'token' in config or GITHUB_TOKEN env var."
+                "GitHub token required. Set 'github.token' in config or GITHUB_TOKEN env var."
             )
 
-        auth = Auth.Token(self.token)
-        self.github = GitHub(auth)
+        if not self.repo_full_name:
+            raise ValueError("GitHub repo required. Set 'github.repo' in config.")
+
+        self.github = GitHub(self.token)
 
     def _to_task_agent_issue(self, gh_issue: GitHubIssueModel) -> Issue:
         """Convert a GitHub Issue to TaskAgent Issue."""
@@ -56,7 +65,7 @@ class GitHubPlugin:
             # Get open issues (excluding pull requests)
             resp = self.github.rest.issues.list_for_repo(owner, repo, state="open")
 
-            for gh_issue in resp.parsed_data:
+            for gh_issue in resp.parsed_data:  # type: ignore[attr-defined]
                 # Skip pull requests (they appear as issues in GitHub API)
                 if hasattr(gh_issue, "pull_request"):
                     continue

@@ -1663,18 +1663,21 @@ def cmd_github(console: Console, manager: TaskAgent, args):
         console.print("[red]GitHub plugin not installed. Run: uv add githubkit[/red]")
         return
 
-    # Load config from .ta-config.json or environment
+    # Load config from .task-agent/worktree-config.json
     config = {}
-    config_file = Path("~/.config/task-agent/settings.json").expanduser()
+    config_file = Path(".task-agent/worktree-config.json")
     if config_file.exists():
         try:
-            config = json.loads(config_file.read_text())
+            with config_file.open("r", encoding="utf-8") as f:
+                config = json.load(f)
         except Exception:
             pass
 
     # Override repo if specified in args
     if hasattr(args, "repo") and args.repo:
-        config["repo"] = args.repo
+        if "github" not in config:
+            config["github"] = {}
+        config["github"]["repo"] = args.repo
 
     try:
         plugin = GitHubPlugin(config)

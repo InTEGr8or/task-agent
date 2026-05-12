@@ -15,7 +15,7 @@ test: lint ## Run unit tests
 	@uv run pytest
 
 lint: ## Run linting and type checks
-	@uv run ruff check .
+	@uv run ruff check . --fix
 	@uv run ruff format --check .
 	@uv run mypy src
 
