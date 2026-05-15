@@ -3,4 +3,4 @@
 Allow storing GitHub token and repo in .ta-config.json or worktree-config.json. Add validation for required fields.
 
 ---
-**Completed in commit:** `<pending-commit-id>`
+**Completed in commit:** `a825289`

@@ -27,12 +27,13 @@ try:
     HAS_TERMIOS = True
 except ImportError:
     HAS_TERMIOS = False
-    try:
-        import msvcrt
 
-        HAS_MSVCRT = True
-    except ImportError:
-        HAS_MSVCRT = False
+try:
+    import msvcrt
+
+    HAS_MSVCRT = True
+except ImportError:
+    HAS_MSVCRT = False
 
 from rich.live import Live
 
@@ -1007,25 +1008,21 @@ def cmd_list(
             )
         return
 
-    table = Table(title="Task Queue")
+    table = Table(title="Task Queue", box=None, padding=(0, 2))
     table.add_column("Priority", justify="right", style="cyan")
-    table.add_column("Status", style="magenta")
-    table.add_column("Name", style="white")
-    table.add_column("Slug", style="green")
-    table.add_column("Depends On", style="yellow")
-    table.add_column("Location", style="dim")
+    table.add_column("Status", width=10)
+    table.add_column("Slug")
 
     for issue, depth in rows_to_display:
-        issue_file = manager.find_issue_file(issue.slug)
-        location = str(issue_file) if issue_file else "[red]MISSING[/red]"
-
-        status_str = issue.status
-        if status_str == "pending":
-            status_str = f"[bold yellow]{status_str}[/bold yellow]"
-        elif status_str == "draft":
-            status_str = f"[dim]{status_str}[/dim]"
-        elif status_str == "active":
-            status_str = f"[bold green]{status_str}[/bold green]"
+        status_style = "white"
+        if issue.status == "active":
+            status_style = "bold green"
+        elif issue.status == "pending":
+            status_style = "bold yellow"
+        elif issue.status == "draft":
+            status_style = "dim"
+        elif issue.status == "completed":
+            status_style = "bold blue"
 
         indent = "  " * depth
         prefix = "└─ " if depth > 0 else ""
@@ -1033,11 +1030,8 @@ def cmd_list(
 
         table.add_row(
             str(issue.priority),
-            status_str,
-            issue.name,
+            f"[{status_style}]{issue.status.upper()}[/{status_style}]",
             display_slug,
-            ", ".join(issue.dependencies),
-            location,
         )
     console.print(table)
 
