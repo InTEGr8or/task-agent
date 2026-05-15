@@ -309,46 +309,57 @@ def cmd_next(console: Console, manager: TaskAgent):
 
 
 def cmd_search(console: Console, manager: TaskAgent, pattern: str):
-    """Search for issues by slug pattern (case-insensitive contains)."""
-    issues = manager.load_mission()
-    if not issues and not (manager.issues_root / "completed").exists():
-        console.print("[yellow]No issues found.[/yellow]")
+    """Search for issues by slug pattern (case-insensitive fuzzy match)."""
+    import re
+
+    # Normalize pattern: remove dashes, punctuation, lowercase
+    def normalize(s: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9]", "", s).lower()
+
+    def fuzzy_match(slug: str, pattern: str) -> bool:
+        slug_clean = normalize(slug)
+        pat_clean = normalize(pattern)
+        return pat_clean in slug_clean or slug_clean.startswith(pat_clean)
+
+    pat_norm = normalize(pattern)
+    if not pat_norm:
+        console.print("[yellow]No pattern provided.[/yellow]")
         return
 
-    # Case-insensitive contains search
-    pattern_lower = pattern.lower()
-    matches = [i for i in issues if pattern_lower in i.slug.lower()]
+    matches: List[Issue] = []
 
-    # If no matches in mission, search completed tasks
-    if not matches:
-        completed_root = manager.issues_root / "completed"
-        if completed_root.exists():
-            for year_dir in sorted(completed_root.iterdir(), reverse=True):
-                if year_dir.is_dir():
-                    # Check file-based tasks
-                    for f in year_dir.glob("*.md"):
-                        if pattern_lower in f.stem.lower():
-                            slug = f.stem
-                            name = manager.extract_title(f)
+    # Search mission issues
+    issues = manager.load_mission()
+    for i in issues:
+        if fuzzy_match(i.slug, pat_norm):
+            matches.append(i)
+
+    # Always search completed tasks too
+    completed_root = manager.issues_root / "completed"
+    if completed_root.exists():
+        for year_dir in sorted(completed_root.iterdir(), reverse=True):
+            if year_dir.is_dir():
+                for f in year_dir.glob("*.md"):
+                    if fuzzy_match(f.stem, pat_norm):
+                        name = manager.extract_title(f)
+                        matches.append(
+                            Issue(
+                                name=name, slug=f.stem, status="completed", priority=0
+                            )
+                        )
+                for d in year_dir.iterdir():
+                    if d.is_dir():
+                        readme = d / "README.md"
+                        if readme.exists() and fuzzy_match(d.name, pat_norm):
+                            name = manager.extract_title(readme)
                             matches.append(
                                 Issue(
-                                    name=name, slug=slug, status="completed", priority=0
+                                    name=name,
+                                    slug=d.name,
+                                    status="completed",
+                                    priority=0,
                                 )
                             )
-                    # Check directory-based tasks
-                    for d in year_dir.iterdir():
-                        if d.is_dir():
-                            readme = d / "README.md"
-                            if readme.exists() and pattern_lower in d.name.lower():
-                                name = manager.extract_title(readme)
-                                matches.append(
-                                    Issue(
-                                        name=name,
-                                        slug=d.name,
-                                        status="completed",
-                                        priority=0,
-                                    )
-                                )
 
     if not matches:
         console.print(f"[yellow]No issues match pattern '{pattern}'.[/yellow]")
@@ -435,7 +446,49 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                         subprocess.run([editor, str(issue_file)])
                         manager.init_project()
                         issues = manager.load_mission()
-                        matches = [i for i in issues if i.slug.startswith(pattern)]
+                        matches = [i for i in issues if fuzzy_match(i.slug, pat_norm)]
+                        # Also re-search completed
+                        completed_root = manager.issues_root / "completed"
+                        new_matches: List[Issue] = list(matches)
+                        if completed_root.exists():
+                            for year_dir in sorted(
+                                completed_root.iterdir(), reverse=True
+                            ):
+                                if year_dir.is_dir():
+                                    for f in year_dir.glob("*.md"):
+                                        if fuzzy_match(f.stem, pat_norm) and not any(
+                                            m.slug == f.stem for m in new_matches
+                                        ):
+                                            name = manager.extract_title(f)
+                                            new_matches.append(
+                                                Issue(
+                                                    name=name,
+                                                    slug=f.stem,
+                                                    status="completed",
+                                                    priority=0,
+                                                )
+                                            )
+                                    for d in year_dir.iterdir():
+                                        if d.is_dir():
+                                            readme = d / "README.md"
+                                            if (
+                                                readme.exists()
+                                                and fuzzy_match(d.name, pat_norm)
+                                                and not any(
+                                                    m.slug == d.name
+                                                    for m in new_matches
+                                                )
+                                            ):
+                                                name = manager.extract_title(readme)
+                                                new_matches.append(
+                                                    Issue(
+                                                        name=name,
+                                                        slug=d.name,
+                                                        status="completed",
+                                                        priority=0,
+                                                    )
+                                                )
+                        matches = new_matches
                         if cursor >= len(matches):
                             cursor = max(0, len(matches) - 1)
                 else:
