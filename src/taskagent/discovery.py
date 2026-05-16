@@ -1,15 +1,34 @@
 import os
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 from taskagent.manager import TaskAgent
 from dotenv import load_dotenv
 
 
+def _update_env_var(env_path: Path, key: str, value: str):
+    """Set a key=value in .env, replacing existing value if present."""
+    if not env_path.exists():
+        env_path.write_text(f"{key}={value}\n")
+        return
+    lines = env_path.read_text().splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n")
+
+
 def _handle_ejected_symlink(current_root: Path):
     """
     Checks for TA_EJECT_ISSUES and TA_EJECT_TASKS and ensures docs symlink is correct.
     This 'auto-heals' links in new worktrees or clones.
+    Also migrates old sibling-directory ejections to .task-agent/tasks/.
     """
     # 1. Try to find the primary .env
     # If we are in a worktree (.gwt/something), look in the parent project root
@@ -30,11 +49,55 @@ def _handle_ejected_symlink(current_root: Path):
         "TA_EJECTED_ISSUES_PATH"
     )
 
+    tasks_link = current_root / "docs" / "tasks"
+    new_target = current_root / ".task-agent" / "tasks"
+
+    # --- Auto-migrate old sibling ejection to .task-agent/tasks/ ---
+    if tasks_link.is_symlink():
+        old_target = Path(tasks_link.readlink()).resolve()
+        if old_target != new_target.resolve() and old_target.exists():
+            # Old-style ejection detected — migrate
+            if not new_target.exists():
+                new_target.parent.mkdir(parents=True, exist_ok=True)
+                for item in old_target.iterdir():
+                    shutil.move(str(item), str(new_target / item.name))
+
+                # Update .env
+                abs_new = str(new_target.resolve())
+                _update_env_var(env_path, "TA_EJECTED_TASKS_PATH", abs_new)
+                _update_env_var(env_path, "TA_EJECTED_ISSUES_PATH", abs_new)
+
+                # Update .gitignore
+                gitignore = current_root / ".gitignore"
+                if (
+                    gitignore.exists()
+                    and ".task-agent/tasks/" not in gitignore.read_text()
+                ):
+                    with gitignore.open("a") as f:
+                        f.write("\n.task-agent/tasks/\n")
+
+                # Remove old sibling directory
+                if old_target.exists():
+                    shutil.rmtree(str(old_target))
+
+                # Reload env vars to pick up new path
+                if env_path.exists():
+                    load_dotenv(env_path, override=True)
+                    target_path_str = os.environ.get(
+                        "TA_EJECTED_TASKS_PATH"
+                    ) or os.environ.get("TA_EJECTED_ISSUES_PATH")
+
+    # Reload env_path in case env_path was created during migration
+    if not target_path_str and env_path.exists():
+        load_dotenv(env_path)
+        target_path_str = os.environ.get("TA_EJECTED_TASKS_PATH") or os.environ.get(
+            "TA_EJECTED_ISSUES_PATH"
+        )
+
     if not eject_enabled or not target_path_str:
         return
 
     target_path = Path(target_path_str).absolute()
-    tasks_link = current_root / "docs" / "tasks"
 
     # Ensure parent (docs/) exists
     tasks_link.parent.mkdir(parents=True, exist_ok=True)

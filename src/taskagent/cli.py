@@ -802,9 +802,7 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 
     # Determine names
     project_root = Path.cwd()
-    project_name = project_root.name
-    target_name = f"{project_name}-tasks"
-    target_path = project_root.parent / target_name
+    target_path = project_root / ".task-agent" / "tasks"
 
     if target_path.exists():
         console.print(f"[red]Target path {target_path} already exists. Aborting.[/red]")
@@ -853,14 +851,14 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         # gh repo create
         visibility = "--public" if public else "--private"
         console.print(
-            f"[blue]Creating GitHub repository [bold]{target_name}[/bold] ({visibility})...[/blue]"
+            f"[blue]Creating GitHub repository [bold]{target_path.name}[/bold] ({visibility})...[/blue]"
         )
         subprocess.run(
             [
                 "gh",
                 "repo",
                 "create",
-                target_name,
+                target_path.name,
                 visibility,
                 "--source=.",
                 "--remote=origin",
@@ -879,13 +877,11 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 
         # 5. Update .gitignore
         gitignore = project_root / ".gitignore"
-        # Calculate relative path for the gitignore entry
-        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
-        ignore_line = f"\n{git_rel_path}\n"
+        ignore_line = "\n.task-agent/tasks/\n"
 
         if gitignore.exists():
             content = gitignore.read_text()
-            if str(git_rel_path) not in content:
+            if ".task-agent/tasks/" not in content:
                 with gitignore.open("a") as f:
                     f.write(ignore_line)
         else:
@@ -915,7 +911,7 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
             f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_path.absolute()}[/cyan]"
         )
         console.print("\n[bold green]Environment updated:[/bold green]")
-        console.print(f"  - Added [cyan]{git_rel_path}[/cyan] to .gitignore")
+        console.print("  - Added [cyan].task-agent/tasks/[/cyan] to .gitignore")
         console.print("  - Configured [cyan]TA_EJECTED_ISSUES_PATH[/cyan] in .env")
         console.print("\n[dim]The symlink will now 'auto-heal' in new worktrees.[/dim]")
 
