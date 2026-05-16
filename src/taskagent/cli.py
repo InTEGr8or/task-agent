@@ -2264,6 +2264,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("done", "Complete a task (moves file & commits)"),
         ("init", "Initialize or heal the Task Agent project"),
         ("push", "Push the mission repository to origin"),
+        ("commit", "Commit pending changes in the active task directory"),
         ("eject-mission", "Move mission queue to a separate repository"),
         ("", ""),  # Spacer
         ("active", "Mark a task as active without starting a worktree"),
