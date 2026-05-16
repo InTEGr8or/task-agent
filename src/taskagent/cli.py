@@ -717,10 +717,15 @@ def cmd_commit(
     """Commit and optionally push changes in the tasks/ directory."""
     import subprocess
 
-    # Determine the tasks directory
+    # Determine the tasks directory and git root
     tasks_dir = manager.issues_root
     if not tasks_dir or not tasks_dir.exists():
         console.print("[red]Tasks directory not found.[/red]")
+        return
+
+    git_root = manager.mission_root
+    if not git_root:
+        console.print("[red]No git repository found for tasks directory.[/red]")
         return
 
     # Generate default commit message if not provided
@@ -732,7 +737,7 @@ def cmd_commit(
     try:
         # Add all changes in tasks directory
         subprocess.run(
-            ["git", "add", str(tasks_dir / ".")],
+            ["git", "-C", str(git_root), "add", str(tasks_dir / ".")],
             check=True,
             capture_output=True,
             text=True,
@@ -741,7 +746,7 @@ def cmd_commit(
 
         # Check if there are changes to commit
         result = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
+            ["git", "-C", str(git_root), "diff", "--cached", "--quiet"],
             capture_output=True,
             text=True,
             shell=(os.name == "nt"),
@@ -753,7 +758,7 @@ def cmd_commit(
 
         # Commit
         subprocess.run(
-            ["git", "commit", "-m", message],
+            ["git", "-C", str(git_root), "commit", "--no-verify", "-m", message],
             check=True,
             capture_output=True,
             text=True,
@@ -2559,6 +2564,8 @@ def main():
         cmd_init_mcp(console, agent=args.agent, print_json=args.print, scope=args.scope)
     elif args.command == "push":
         cmd_push(console, manager)
+    elif args.command == "commit":
+        cmd_commit(console, manager, message=args.message, should_push=args.push)
     elif args.command == "eject-mission":
         cmd_eject_mission(console, manager, public=args.public)
     elif args.command == "done":
