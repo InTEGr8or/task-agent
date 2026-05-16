@@ -367,7 +367,9 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
 
     if len(matches) == 1:
         issue = matches[0]
-        issue_file = manager.find_issue_file(issue.slug)
+        issue_file = manager.find_issue_file(
+            issue.slug, include_completed=(issue.status == "completed")
+        )
         if not issue_file:
             console.print(f"[red]Issue file not found for {issue.slug}[/red]")
             return
@@ -431,7 +433,9 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
             elif key == "l":
                 live.stop()
                 issue = matches[cursor]
-                issue_file = manager.find_issue_file(issue.slug)
+                issue_file = manager.find_issue_file(
+                    issue.slug, include_completed=(issue.status == "completed")
+                )
                 if issue_file:
                     render_issue(console, issue, issue_file)
                     console.print(
