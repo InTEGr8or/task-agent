@@ -50,7 +50,13 @@ def _handle_ejected_symlink(current_root: Path):
     )
 
     tasks_link = current_root / "docs" / "tasks"
-    new_target = current_root / ".task-agent" / "tasks"
+
+    # Resolve to main repo root (handle .gwt worktrees)
+    if current_root.parent.name == ".gwt":
+        repo_root = current_root.parent.parent
+    else:
+        repo_root = current_root
+    new_target = repo_root / ".task-agent" / "tasks"
 
     # --- Auto-migrate old sibling ejection to .task-agent/tasks/ ---
     if tasks_link.is_symlink():
@@ -58,7 +64,7 @@ def _handle_ejected_symlink(current_root: Path):
         if old_target != new_target.resolve() and old_target.exists():
             # Old-style ejection detected — migrate
             if not new_target.exists():
-                new_target.parent.mkdir(parents=True, exist_ok=True)
+                new_target.mkdir(parents=True, exist_ok=True)
                 for item in old_target.iterdir():
                     shutil.move(str(item), str(new_target / item.name))
 
