@@ -52,3 +52,6 @@ Edge cases:
 - [ ] `ta commit` works with the new location
 - [ ] `ta search` finds tasks in the new location
 - [ ] All existing tests pass
+
+---
+**Completed in commit:** `34e36cf`
