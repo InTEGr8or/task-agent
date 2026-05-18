@@ -2068,7 +2068,7 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
+            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | A: active | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
 
             live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
 
@@ -2191,6 +2191,20 @@ def cmd_triage(
                     cursor = min(len(indexed_issues) - 1, cursor)
                 except Exception:
                     pass
+            elif key == "A" and not show_completed:  # active
+                live.stop()
+                issue = indexed_issues[cursor][0]
+                try:
+                    manager.move_to_active(issue.slug)
+                    console.print(
+                        f"[bold green]Issue '{issue.slug}' is now active.[/bold green]"
+                    )
+                    issues = get_display_issues(search_query, show_completed)
+                    indexed_issues = build_hierarchy(issues)
+                except Exception as e:
+                    console.print(f"[red]Error: {e}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                live.start()
             elif key == "D" and not show_completed:  # done
                 live.stop()
                 issue = indexed_issues[cursor][0]
