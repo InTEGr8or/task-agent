@@ -110,6 +110,18 @@ class TaskAgent:
         mission_path = mission_dir / "mission.usv"
         return issues_root, mission_dir, mission_path
 
+    @property
+    def plan_path(self) -> Path:
+        return self.issues_root / "plan.md"
+
+    def get_or_create_plan(self) -> Path:
+        path = self.plan_path
+        if not path.exists():
+            path.write_text(
+                "# Plan\n\n*Long-term strategy and direction for this project.*\n"
+            )
+        return path
+
     def ensure_issues_dir(self):
         """Ensure the issues directory and its subdirectories exist."""
         self.issues_root.mkdir(parents=True, exist_ok=True)

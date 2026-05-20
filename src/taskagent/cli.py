@@ -1283,6 +1283,12 @@ def cmd_run(console: Console, manager: TaskAgent, slug_part: Optional[str] = Non
     except Exception as e:
         console.print(f"[red]Worker failed: {e}[/red]")
 
+def cmd_plan(console: Console, manager: TaskAgent):
+    """View or edit the project plan."""
+    plan_file = manager.get_or_create_plan()
+    editor = get_editor()
+    subprocess.run([editor, str(plan_file)])
+
 
 def cmd_init(console: Console, manager: TaskAgent):
     """Initialize or heal the project."""
@@ -2255,6 +2261,15 @@ def display_overview(console: Console, manager: TaskAgent):
         )
     )
 
+    # Plan
+    plan_path = manager.plan_path
+    if plan_path.exists():
+        console.print()
+        plan_content = plan_path.read_text().strip()
+        if plan_content:
+            console.print(Panel(plan_content, title="Plan", box=box.MINIMAL, border_style="blue"))
+        console.print()
+
     # Task Summary
 
     stats_table = Table.grid(padding=(0, 2))
@@ -2277,6 +2292,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("start", "Start a task (creates branch & worktree)"),
         ("done", "Complete a task (moves file & commits)"),
         ("init", "Initialize or heal the Task Agent project"),
+        ("plan", "View or edit the project plan"),
         ("push", "Push the mission repository to origin"),
         ("commit", "Commit pending changes in the active task directory"),
         ("eject-mission", "Move mission queue to a separate repository"),
@@ -2446,6 +2462,9 @@ def main():
         help="Registration scope (default: project)",
     )
 
+    # plan
+    subparsers.add_parser("plan", help="View or edit the project plan")
+
     # push
     subparsers.add_parser("push", help="Push the mission repository to origin")
 
@@ -2579,6 +2598,8 @@ def main():
         cmd_init_mcp(console, agent=args.agent, print_json=args.print, scope=args.scope)
     elif args.command == "push":
         cmd_push(console, manager)
+    elif args.command == "plan":
+        cmd_plan(console, manager)
     elif args.command == "commit":
         cmd_commit(console, manager, message=args.message, should_push=args.push)
     elif args.command == "eject-mission":
