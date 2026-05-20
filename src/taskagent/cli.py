@@ -1283,6 +1283,7 @@ def cmd_run(console: Console, manager: TaskAgent, slug_part: Optional[str] = Non
     except Exception as e:
         console.print(f"[red]Worker failed: {e}[/red]")
 
+
 def cmd_plan(console: Console, manager: TaskAgent):
     """View or edit the project plan."""
     plan_file = manager.get_or_create_plan()
