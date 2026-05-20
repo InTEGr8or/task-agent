@@ -2264,11 +2264,9 @@ def display_overview(console: Console, manager: TaskAgent):
     # Plan
     plan_path = manager.plan_path
     if plan_path.exists():
-        console.print()
         plan_content = plan_path.read_text().strip()
         if plan_content:
-            console.print(Panel(plan_content, title="Plan", box=box.MINIMAL, border_style="blue"))
-        console.print()
+            console.print(Markdown(plan_content))
 
     # Task Summary
 
