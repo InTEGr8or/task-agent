@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 # Using uv run --project allows running the sidecar with its own isolated dependencies
 # without polluting the core task-agent environment.
-uv run --project sidecars/adk-worker python sidecars/adk-worker/worker.py
+uv run --project sidecars/adk-worker python sidecars/adk-worker/worker.py "$@"

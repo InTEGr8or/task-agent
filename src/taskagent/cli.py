@@ -829,7 +829,11 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
             ["git", "-C", str(target_path), "init"], check=True, shell=(os.name == "nt")
         )
 
-        # Add everything
+        # Calculate relative path for git operations and gitignore
+        project_root = Path.cwd()
+        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
+
+        # Add everything to new repo
         subprocess.run(
             ["git", "-C", str(target_path), "add", "."],
             check=True,
@@ -870,6 +874,13 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         )
 
         # 4. Remove old dir and Symlink
+        # First remove from git if tracked
+        subprocess.run(
+            ["git", "rm", "-r", "--cached", str(git_rel_path)],
+            check=False,
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
         shutil.rmtree(str(source_dir))
 
         # Use an absolute symlink for maximum local robustness
@@ -877,11 +888,11 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
 
         # 5. Update .gitignore
         gitignore = project_root / ".gitignore"
-        ignore_line = "\n.task-agent/tasks/\n"
+        ignore_line = f"\n{git_rel_path}\n"
 
         if gitignore.exists():
             content = gitignore.read_text()
-            if ".task-agent/tasks/" not in content:
+            if str(git_rel_path) not in content:
                 with gitignore.open("a") as f:
                     f.write(ignore_line)
         else:
@@ -890,15 +901,15 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
         # 6. Update .env
         env_file = project_root / ".env"
         env_lines = [
-            "\nTA_EJECT_ISSUES=true\n",
-            f"TA_EJECTED_ISSUES_PATH={target_path.absolute()}\n",
+            "\nTA_EJECT_TASKS=true\n",
+            f"TA_EJECTED_TASKS_PATH={target_path.absolute()}\n",
         ]
         if env_file.exists():
             content = env_file.read_text()
             with env_file.open("a") as f:
-                if "TA_EJECT_ISSUES" not in content:
+                if "TA_EJECT_TASKS" not in content:
                     f.write(env_lines[0])
-                if "TA_EJECTED_ISSUES_PATH" not in content:
+                if "TA_EJECTED_TASKS_PATH" not in content:
                     f.write(env_lines[1])
         else:
             env_file.write_text("".join(env_lines))
@@ -911,8 +922,8 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
             f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_path.absolute()}[/cyan]"
         )
         console.print("\n[bold green]Environment updated:[/bold green]")
-        console.print("  - Added [cyan].task-agent/tasks/[/cyan] to .gitignore")
-        console.print("  - Configured [cyan]TA_EJECTED_ISSUES_PATH[/cyan] in .env")
+        console.print(f"  - Added [cyan]{git_rel_path}[/cyan] to .gitignore")
+        console.print("  - Configured [cyan]TA_EJECTED_TASKS_PATH[/cyan] in .env")
         console.print("\n[dim]The symlink will now 'auto-heal' in new worktrees.[/dim]")
 
     except subprocess.CalledProcessError as e:
@@ -921,6 +932,72 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
             console.print(f"[dim]{e.stderr.decode()}[/dim]")
     except Exception as e:
         console.print(f"[red]An error occurred: {e}[/red]")
+
+
+def cmd_mr_list(console: Console, manager: TaskAgent):
+    """List pending merge requests from workers."""
+    mr_dir = manager.issues_root / "mr"
+    if not mr_dir.exists():
+        console.print("[yellow]Merge request directory not found.[/yellow]")
+        return
+
+    mrs = list(mr_dir.glob("*.md")) + list(mr_dir.glob("*.json"))
+    if not mrs:
+        console.print("[blue]No pending merge requests.[/blue]")
+        return
+
+    table = Table(title="Pending Merge Requests")
+    table.add_column("Slug", style="cyan")
+    table.add_column("File", style="dim")
+
+    for mr in mrs:
+        table.add_row(mr.stem, str(mr.name))
+
+    console.print(table)
+
+
+def cmd_merge(
+    console: Console,
+    manager: TaskAgent,
+    slug_part: str,
+    message: Optional[str] = None,
+    push: bool = False,
+):
+    """Finalize a task using a merge request datagram."""
+    mr_dir = manager.issues_root / "mr"
+    # Find the MR file
+    matches = list(mr_dir.glob(f"{slug_part}*"))
+    if not matches:
+        console.print(f"[red]No merge request found for '{slug_part}'.[/red]")
+        return
+
+    if len(matches) > 1:
+        console.print(f"[yellow]Multiple MRs match '{slug_part}':[/yellow]")
+        for m in matches:
+            console.print(f"  - {m.name}")
+        return
+
+    mr_file = matches[0]
+    slug = mr_file.stem
+    solution = mr_file.read_text(encoding="utf-8")
+
+    console.print(f"[blue]Merging task [bold]{slug}[/bold]...[/blue]")
+
+    try:
+        _, code_hash = manager.complete_issue(
+            slug,
+            commit_message=message,
+            should_commit=True,
+            push_mission=push,
+            solution_explanation=solution,
+        )
+        # Remove the MR file after successful merge
+        mr_file.unlink()
+        console.print(f"[bold green]Successfully merged '{slug}'.[/bold green]")
+        if code_hash not in ["unknown", "failed"]:
+            console.print(f"[dim]Committed as {code_hash}.[/dim]")
+    except Exception as e:
+        console.print(f"[red]Merge failed: {e}[/red]")
 
 
 def cmd_new(
@@ -1164,7 +1241,12 @@ def cmd_active(
         return None
 
 
-def cmd_start(console: Console, manager: TaskAgent, slug_part: Optional[str] = None):
+def cmd_start(
+    console: Console,
+    manager: TaskAgent,
+    slug_part: Optional[str] = None,
+    run: bool = False,
+):
     """Move an issue to active and set up a git worktree."""
     target = cmd_active(console, manager, slug_part, silent=False)
     if not target:
@@ -1186,6 +1268,9 @@ def cmd_start(console: Console, manager: TaskAgent, slug_part: Optional[str] = N
         console.print(
             "[red]Active worktree already exists. Please complete or shelf it first.[/red]"
         )
+        if run:
+            console.print("[blue]Invoking worker as requested...[/blue]")
+            cmd_run(console, manager, slug)
         return
 
     console.print(
@@ -1202,6 +1287,11 @@ def cmd_start(console: Console, manager: TaskAgent, slug_part: Optional[str] = N
             shell=(os.name == "nt"),
         )
         console.print(f"[bold green]Successfully started issue '{slug}'.[/bold green]")
+
+        if run:
+            console.print("[blue]Invoking worker as requested...[/blue]")
+            cmd_run(console, manager, slug)
+
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Error: {e.stderr.strip()}[/red]")
 
@@ -2433,6 +2523,9 @@ def main():
     active_parser.add_argument("slug", nargs="?")
     start_parser = subparsers.add_parser("start")
     start_parser.add_argument("slug", nargs="?")
+    start_parser.add_argument(
+        "--run", action="store_true", help="Immediately run the sidecar worker"
+    )
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("slug", nargs="?")
     init_parser = subparsers.add_parser("init-worker")
@@ -2481,6 +2574,21 @@ def main():
         help="Do not push to remote",
     )
     commit_parser.set_defaults(push=True)
+
+    # mr
+    mr_parser = subparsers.add_parser("mr", help="Manage merge requests from workers")
+    mr_sub = mr_parser.add_subparsers(dest="mr_command")
+    mr_sub.add_parser("list", help="List pending merge requests")
+
+    # merge
+    merge_parser = subparsers.add_parser(
+        "merge", help="Merge a task completion datagram"
+    )
+    merge_parser.add_argument("slug", help="Slug of the task to merge")
+    merge_parser.add_argument("-m", "--message", help="Git commit message")
+    merge_parser.add_argument(
+        "--push", action="store_true", help="Push mission repo after merge"
+    )
 
     # eject-mission
     eject_parser = subparsers.add_parser(
@@ -2586,7 +2694,7 @@ def main():
     elif args.command == "active":
         cmd_active(console, manager, args.slug)
     elif args.command == "start":
-        cmd_start(console, manager, args.slug)
+        cmd_start(console, manager, args.slug, run=args.run)
     elif args.command == "run":
         cmd_run(console, manager, args.slug)
     elif args.command == "init-worker":
@@ -2601,6 +2709,13 @@ def main():
         cmd_plan(console, manager)
     elif args.command == "commit":
         cmd_commit(console, manager, message=args.message, should_push=args.push)
+    elif args.command == "mr":
+        if args.mr_command == "list":
+            cmd_mr_list(console, manager)
+        else:
+            console.print("[yellow]Unknown mr command. Use 'ta mr list'.[/yellow]")
+    elif args.command == "merge":
+        cmd_merge(console, manager, args.slug, message=args.message, push=args.push)
     elif args.command == "eject-mission":
         cmd_eject_mission(console, manager, public=args.public)
     elif args.command == "done":

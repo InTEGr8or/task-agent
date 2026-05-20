@@ -126,7 +126,7 @@ class TaskAgent:
         """Ensure the issues directory and its subdirectories exist."""
         self.issues_root.mkdir(parents=True, exist_ok=True)
         self.mission_dir.mkdir(parents=True, exist_ok=True)
-        for subdir in ["pending", "draft", "active", "completed"]:
+        for subdir in ["pending", "draft", "active", "completed", "mr"]:
             (self.issues_root / subdir).mkdir(parents=True, exist_ok=True)
 
     def lock_mission_files(self):

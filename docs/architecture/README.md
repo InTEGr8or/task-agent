@@ -23,6 +23,7 @@ Tasks move through subdirectories based on their current status:
 - `pending/`: The primary backlog of tasks ready to be started.
 - `draft/`: For tasks that are still being defined or aren't ready for work.
 - `active/`: Tasks currently assigned to a worker (human or agent).
+- `mr/`: (Merge Request) Datagrams from autonomous workers awaiting review.
 - `completed/{year}/`: Archived tasks, including metadata about which git commit completed them.
 
 ## 📄 Task Formats

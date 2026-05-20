@@ -32,10 +32,11 @@ ta list
 
 ## 📂 Project Structure
 
-Task Agent operates directly on your filesystem, primarily within the `docs/issues/` directory.
+Task Agent operates directly on your filesystem, primarily within the `docs/tasks/` directory.
 
-- `docs/issues/mission.usv`: The source of truth for task priority.
-- `docs/issues/pending/`: Tasks ready for execution.
-- `docs/issues/draft/`: Tasks currently being refined.
-- `docs/issues/active/`: Tasks currently being worked on.
-- `docs/issues/completed/`: Historical record of finished work.
+- `docs/tasks/mission.usv`: The source of truth for task priority.
+- `docs/tasks/pending/`: Tasks ready for execution.
+- `docs/tasks/draft/`: Tasks currently being refined.
+- `docs/tasks/active/`: Tasks currently being worked on.
+- `docs/tasks/completed/`: Historical record of finished work.
+
