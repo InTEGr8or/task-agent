@@ -100,3 +100,28 @@ def test_mcp_get_task_details(mock_manager, tmp_path):
     result = mcp.get_task_details("Task 1")
     assert "# Task 1" in result
     assert "Content" in result
+
+
+EXPECTED_TOOLS = {
+    "list_tasks",
+    "create_task",
+    "promote_task",
+    "demote_task",
+    "mark_task_active",
+    "complete_task",
+    "search_task",
+    "restore_task",
+    "get_task_details",
+    "update_task",
+}
+
+
+def test_mcp_all_tools_registered():
+    import asyncio
+
+    tools = asyncio.run(mcp.mcp.list_tools())
+    registered = {t.name for t in tools}
+    assert registered == EXPECTED_TOOLS, (
+        f"Missing: {EXPECTED_TOOLS - registered}, "
+        f"Unexpected: {registered - EXPECTED_TOOLS}"
+    )

@@ -1458,12 +1458,20 @@ def cmd_init_mcp(
     print_json: bool = False,
     scope: str = "project",
 ):
-    """Register the Task Agent as an MCP server."""
+    """Register the Task Agent as an MCP server.
+
+    Uses ``uv run --project <root> ta mcp`` so the server can be spawned
+    without the project's virtualenv being active in the calling shell.
+    """
+    project_root = Path.cwd().resolve()
+    mcp_command = "uv"
+    mcp_args = ["run", "--project", str(project_root), "ta", "mcp"]
+
     mcp_config = {
         "mcpServers": {
             "task-agent": {
-                "command": "ta",
-                "args": ["mcp"],
+                "command": mcp_command,
+                "args": mcp_args,
             }
         }
     }
@@ -1481,8 +1489,8 @@ def cmd_init_mcp(
             "mcp",
             "add",
             "task-agent",
-            "ta",
-            "mcp",
+            mcp_command,
+            *mcp_args,
             "--trust",
             "--scope",
             scope,
@@ -1495,41 +1503,34 @@ def cmd_init_mcp(
         except subprocess.CalledProcessError as e:
             console.print(f"[red]Failed to register MCP server: {e}[/red]")
     elif agent == "opencode":
-        # Try to find opencode.json in current directory or parent directories
-        config_path = None
-        current = Path.cwd()
-        while current != current.parent:
-            candidate = current / "opencode.json"
-            if candidate.exists():
-                config_path = candidate
-                break
-            current = current.parent
-
-        if config_path:
+        if scope == "user":
+            config_path = Path.home() / ".config" / "opencode" / "opencode.json"
             console.print(
-                f"[blue]Found OpenCode config at {config_path}. Updating...[/blue]"
+                f"[blue]Installing Task Agent MCP globally at {config_path}...[/blue]"
             )
-            try:
+        else:
+            config_path = Path.cwd() / "opencode.json"
+
+        try:
+            if config_path.exists():
                 with config_path.open("r", encoding="utf-8") as f:
                     config = json.load(f)
-                if "mcp" not in config:
-                    config["mcp"] = {}
-                config["mcp"]["task-agent"] = {
-                    "type": "local",
-                    "command": ["ta", "mcp"],
-                }
-                with config_path.open("w", encoding="utf-8") as f:
-                    json.dump(config, f, indent=2)
-                console.print(
-                    "[bold green]Successfully updated opencode.json with Task Agent MCP![/bold green]"
-                )
-            except Exception as e:
-                console.print(f"[red]Failed to update opencode.json: {e}[/red]")
-        else:
+            else:
+                config = {}
+            if "mcp" not in config:
+                config["mcp"] = {}
+            config["mcp"]["task-agent"] = {
+                "type": "local",
+                "command": [mcp_command, *mcp_args],
+            }
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with config_path.open("w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
             console.print(
-                "[yellow]Could not find opencode.json. Please add this configuration manually:[/yellow]"
+                f"[bold green]Successfully registered Task Agent MCP at {config_path}![/bold green]"
             )
-            console.print(json.dumps(mcp_config, indent=2))
+        except Exception as e:
+            console.print(f"[red]Failed to register Task Agent MCP: {e}[/red]")
 
 
 def cmd_version(
