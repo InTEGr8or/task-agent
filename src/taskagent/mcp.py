@@ -1,3 +1,7 @@
+import os
+import subprocess
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
@@ -194,6 +198,128 @@ def update_task(name: str, content: str) -> str:
         return f"Successfully updated task '{slug}'."
     except Exception as e:
         return f"Error updating task: {e}"
+
+
+@mcp.tool()
+def commit_repo(message: str = "", push: bool = False) -> str:
+    """Commit changes to the current project's tasks directory (host repo).
+
+    Args:
+        message: Optional commit message. Auto-generated if omitted.
+        push: Whether to push after committing.
+    """
+    manager = get_manager()
+    tasks_dir = manager.issues_root
+    if not tasks_dir or not tasks_dir.exists():
+        return "Tasks directory not found."
+
+    git_root = manager.mission_root
+    if not git_root:
+        return "No git repository found for tasks directory."
+
+    if not message:
+        message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    try:
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", str(tasks_dir / ".")],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        result = subprocess.run(
+            ["git", "-C", str(git_root), "diff", "--cached", "--quiet"],
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        if result.returncode == 0:
+            return "No changes to commit."
+
+        subprocess.run(
+            ["git", "-C", str(git_root), "commit", "--no-verify", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        if push:
+            manager.push_mission_repo()
+        return f"Committed: {message}"
+    except subprocess.CalledProcessError as e:
+        return f"Error: {e.stderr}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def commit_tasks(message: str = "", push: bool = False) -> str:
+    """Commit changes to the task-agent's own tasks directory.
+
+    Always targets the task-agent project's ``docs/tasks/`` regardless of
+    the current working directory.
+
+    Args:
+        message: Optional commit message. Auto-generated if omitted.
+        push: Whether to push after committing.
+    """
+    project_root = Path(__file__).resolve().parent.parent.parent
+    tasks_dir = project_root / "docs" / "tasks"
+
+    if not tasks_dir.exists():
+        return "Task-agent tasks directory not found."
+
+    git_result = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        shell=(os.name == "nt"),
+    )
+    if git_result.returncode != 0:
+        return "No git repository found for task-agent project."
+    git_root = Path(git_result.stdout.strip())
+
+    if not message:
+        message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    try:
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "--force", str(tasks_dir / ".")],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        result = subprocess.run(
+            ["git", "-C", str(git_root), "diff", "--cached", "--quiet"],
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        if result.returncode == 0:
+            return "No changes to commit."
+
+        subprocess.run(
+            ["git", "-C", str(git_root), "commit", "--no-verify", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        if push:
+            subprocess.run(
+                ["git", "-C", str(git_root), "push"],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+        return f"Committed: {message}"
+    except subprocess.CalledProcessError as e:
+        return f"Error: {e.stderr}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 def run_mcp_server():

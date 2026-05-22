@@ -102,6 +102,63 @@ def test_mcp_get_task_details(mock_manager, tmp_path):
     assert "Content" in result
 
 
+def test_mcp_commit_repo_no_tasks_dir(mock_manager):
+    mock_manager.issues_root = None
+    result = mcp.commit_repo("msg")
+    assert result == "Tasks directory not found."
+
+
+def test_mcp_commit_repo_no_git_root(mock_manager, tmp_path):
+    mock_manager.issues_root = tmp_path / "tasks"
+    (tmp_path / "tasks").mkdir()
+    mock_manager.mission_root = None
+    result = mcp.commit_repo("msg")
+    assert result == "No git repository found for tasks directory."
+
+
+def test_mcp_commit_repo_no_changes(mock_manager, tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    mock_manager.issues_root = tasks_dir
+    mock_manager.mission_root = tmp_path
+
+    with patch("taskagent.mcp.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        result = mcp.commit_repo("msg")
+        assert result == "No changes to commit."
+
+
+def test_mcp_commit_repo_success(mock_manager, tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    mock_manager.issues_root = tasks_dir
+    mock_manager.mission_root = tmp_path
+
+    with patch("taskagent.mcp.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1)
+        result = mcp.commit_repo("test commit")
+        assert "Committed: test commit" in result
+
+
+def test_mcp_commit_tasks_no_git_root():
+    with patch("taskagent.mcp.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1)
+        result = mcp.commit_tasks("msg")
+        assert result == "No git repository found for task-agent project."
+
+
+def test_mcp_commit_tasks_success():
+    with patch("taskagent.mcp.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="/fake/root\n"),  # rev-parse
+            MagicMock(),  # git add
+            MagicMock(returncode=1),  # diff shows changes
+            MagicMock(),  # git commit
+        ]
+        result = mcp.commit_tasks("test commit")
+        assert "Committed: test commit" in result
+
+
 EXPECTED_TOOLS = {
     "list_tasks",
     "create_task",
@@ -113,6 +170,8 @@ EXPECTED_TOOLS = {
     "restore_task",
     "get_task_details",
     "update_task",
+    "commit_repo",
+    "commit_tasks",
 }
 
 

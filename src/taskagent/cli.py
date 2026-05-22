@@ -787,6 +787,91 @@ def cmd_commit(
         console.print(f"[red]Unexpected error: {e}[/red]")
 
 
+def cmd_commit_tasks(
+    console: Console,
+    message: Optional[str] = None,
+    should_push: bool = True,
+):
+    """Commit and optionally push changes in the task-agent's own tasks/ directory.
+
+    Always targets the task-agent project's ``docs/tasks/`` regardless of the
+    current working directory.
+    """
+    import subprocess
+    from datetime import datetime
+
+    project_root = Path(__file__).resolve().parent.parent.parent
+    tasks_dir = project_root / "docs" / "tasks"
+
+    if not tasks_dir.exists():
+        console.print("[red]Task-agent tasks directory not found.[/red]")
+        return
+
+    git_result = subprocess.run(
+        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        shell=(os.name == "nt"),
+    )
+    if git_result.returncode != 0:
+        console.print("[red]No git repository found for task-agent project.[/red]")
+        return
+
+    git_root = Path(git_result.stdout.strip())
+
+    if not message:
+        message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    console.print(
+        f"[blue]Committing changes in {tasks_dir} (task-agent own tasks)...[/blue]"
+    )
+
+    try:
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "--force", str(tasks_dir / ".")],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+
+        result = subprocess.run(
+            ["git", "-C", str(git_root), "diff", "--cached", "--quiet"],
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+
+        if result.returncode == 0:
+            console.print("[yellow]No changes to commit in tasks/ directory.[/yellow]")
+            return
+
+        subprocess.run(
+            ["git", "-C", str(git_root), "commit", "--no-verify", "-m", message],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=(os.name == "nt"),
+        )
+        console.print(f"[bold green]Committed: {message}[/bold green]")
+
+        if should_push:
+            console.print("[blue]Pushing to remote...[/blue]")
+            subprocess.run(
+                ["git", "-C", str(git_root), "push"],
+                check=True,
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+            console.print("[bold green]Successfully pushed.[/bold green]")
+
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Error: {e.stderr}[/red]")
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+
+
 def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
     """Automate the move of docs/tasks to a separate repository."""
     source_dir = manager.issues_root
@@ -2561,9 +2646,14 @@ def main():
     # push
     subparsers.add_parser("push", help="Push the mission repository to origin")
 
-    # commit - commit and push changes in tasks/ directory
+    # commit - commit changes to task-agent's own tasks or the host project's tasks
     commit_parser = subparsers.add_parser(
-        "commit", help="Commit and push changes in tasks/ directory"
+        "commit", help="Commit changes in the tasks directory"
+    )
+    commit_parser.add_argument(
+        "target",
+        choices=["repo", "tasks"],
+        help="'repo' commits the current project's tasks, 'tasks' commits the task-agent's own tasks",
     )
     commit_parser.add_argument(
         "-m", "--message", help="Commit message (default: auto-generated)"
@@ -2709,7 +2799,10 @@ def main():
     elif args.command == "plan":
         cmd_plan(console, manager)
     elif args.command == "commit":
-        cmd_commit(console, manager, message=args.message, should_push=args.push)
+        if args.target == "repo":
+            cmd_commit(console, manager, message=args.message, should_push=args.push)
+        elif args.target == "tasks":
+            cmd_commit_tasks(console, message=args.message, should_push=args.push)
     elif args.command == "mr":
         if args.mr_command == "list":
             cmd_mr_list(console, manager)

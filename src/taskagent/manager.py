@@ -803,6 +803,10 @@ class TaskAgent:
                 ).strip()
             except Exception:
                 return "unknown"
+
+        if "nothing to commit" in res.stderr or "nothing added to commit" in res.stderr:
+            return "no_changes"
+
         return "failed"
 
     def _git_push(self, repo_root: Path) -> bool:
@@ -881,6 +885,7 @@ class TaskAgent:
 
         # 4. Commit Logic
         code_hash = "unknown"
+        committed = False
         if should_commit:
             msg = commit_message or f"feat: complete {target_issue.slug}"
 
@@ -889,6 +894,10 @@ class TaskAgent:
                 code_hash = self._git_commit(self.code_root, msg)
                 if code_hash == "failed":
                     raise RuntimeError("Failed to commit changes to code repository.")
+                if code_hash == "no_changes":
+                    code_hash = self.get_git_commit()
+                else:
+                    committed = True
 
             # B. Commit Mission Changes (Mission Repo)
             # If they are different, we perform a second commit
@@ -899,6 +908,8 @@ class TaskAgent:
                     raise RuntimeError(
                         "Failed to commit changes to mission repository."
                     )
+                if mission_hash != "no_changes":
+                    committed = True
 
         # 5. Update issue file with the code hash
         # If we didn't commit, we use the current HEAD or 'pending'
@@ -910,7 +921,7 @@ class TaskAgent:
         final_file.write_text(file_text, encoding="utf-8")
 
         # 6. Amend the mission commit if in dual mode, or the code commit if single mode
-        if should_commit:
+        if committed:
             if self.is_dual_repo and self.mission_root:
                 res = self._git_commit(
                     self.mission_root, "", amend=True, files=[str(final_file)]
@@ -922,9 +933,6 @@ class TaskAgent:
                     self.code_root, "", amend=True, files=[str(final_file)]
                 )
                 if res == "failed":
-                    # We might want to be more lenient here or use a separate commit?
-                    # For now, if amend fails, we still consider the issue finished
-                    # but maybe warn? Let's raise for now to be safe.
                     raise RuntimeError("Failed to amend code commit.")
 
         # 7. Optional Push
