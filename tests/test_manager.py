@@ -144,6 +144,20 @@ def test_api_demote_issue(manager):
     assert (manager.issues_root / "draft" / "demote-me" / "README.md").exists()
 
 
+def test_api_demote_active_to_pending(manager):
+    manager.create_issue("Active Demote")
+    manager.move_to_active("active-demote")
+    assert (manager.issues_root / "active" / "active-demote" / "README.md").exists()
+
+    manager.demote_issue("active-demote")
+    assert not (manager.issues_root / "active" / "active-demote" / "README.md").exists()
+    assert (manager.issues_root / "pending" / "active-demote" / "README.md").exists()
+
+    issues = manager.load_mission()
+    issue = next(i for i in issues if i.slug == "active-demote")
+    assert issue.status == "pending"
+
+
 def test_api_promote_cascades_to_children(manager):
     """When a parent is promoted, draft children are also promoted."""
     manager.create_issue("Parent", draft=True)

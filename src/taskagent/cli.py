@@ -1278,16 +1278,21 @@ def cmd_promote(console: Console, manager: TaskAgent, slug_part: str):
 
 
 def cmd_demote(console: Console, manager: TaskAgent, slug_part: str):
-    """Demote an issue from pending to draft."""
+    """Demote an issue: active -> pending, or pending -> draft."""
     issues = manager.load_mission()
-    target = select_issue(console, issues, slug_part, status_filter=["pending"])
+    target = select_issue(
+        console, issues, slug_part, status_filter=["pending", "active"]
+    )
     if not target:
-        console.print(f"[red]No pending issue found matching '{slug_part}'.[/red]")
+        console.print(
+            f"[red]No pending or active issue found matching '{slug_part}'.[/red]"
+        )
         return
     try:
+        to_status = "pending" if target.status == "active" else "draft"
         manager.demote_issue(target.slug)
         console.print(
-            f"[bold green]Issue '{target.slug}' demoted to draft.[/bold green]"
+            f"[bold green]Issue '{target.slug}' demoted to {to_status}.[/bold green]"
         )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -2358,7 +2363,7 @@ def cmd_triage(
                         pass
             elif key == "d" and not show_completed:  # demote
                 issue = indexed_issues[cursor][0]
-                if issue.status == "pending":
+                if issue.status in ("pending", "active"):
                     try:
                         manager.demote_issue(issue.slug)
                         issues = get_display_issues(search_query, show_completed)

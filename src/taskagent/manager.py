@@ -621,13 +621,16 @@ class TaskAgent:
         return target
 
     def demote_issue(self, slug: str) -> Issue:
-        """Demote an issue from pending to draft. Also demotes any pending children."""
+        """Demote an issue: active -> pending -> draft. Also cascades children."""
         issues = self.load_mission()
         target = next(
-            (i for i in issues if i.slug == slug and i.status == "pending"), None
+            (i for i in issues if i.slug == slug and i.status in ("pending", "active")),
+            None,
         )
         if not target:
-            raise ValueError(f"Pending issue '{slug}' not found.")
+            raise ValueError(f"Pending or active issue '{slug}' not found.")
+
+        to_status = "pending" if target.status == "active" else "draft"
 
         def demote_single(s: str):
             self.migrate_to_folder(s)
@@ -636,7 +639,7 @@ class TaskAgent:
                 return
             is_dir_based = issue_file.name == "README.md"
             source = issue_file.parent if is_dir_based else issue_file
-            dest = self.issues_root / "draft" / source.name
+            dest = self.issues_root / to_status / source.name
             shutil.move(str(source), str(dest))
 
         demote_single(target.slug)
@@ -644,13 +647,13 @@ class TaskAgent:
         children = [
             i.slug
             for i in issues
-            if target.slug in i.dependencies and i.status == "pending"
+            if target.slug in i.dependencies and i.status == target.status
         ]
         for child_slug in children:
             demote_single(child_slug)
 
         self.sync_mission()
-        target.status = "draft"
+        target.status = to_status
         return target
 
     def move_to_active(self, slug: str) -> Issue:
