@@ -1,5 +1,3 @@
-Agent sandboxing via Linux accountsagent-sandboxing-via-linux-accounts
-READMEphase-3-per-task-isolationagent-sandboxing-via-linux-accounts
 Improve subtasking MCP/CLI discoverabilityimprove-subtasking-mcpcli-discoverability
 Create a soft-delete featurecreate-a-soft-delete-feature
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders
