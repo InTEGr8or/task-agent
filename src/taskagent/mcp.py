@@ -19,7 +19,12 @@ def get_manager() -> TaskAgent:
 
 @mcp.tool()
 def list_tasks() -> str:
-    """List all tasks in the current project's mission queue."""
+    """List all tasks in the current project's mission queue.
+
+    Tasks may have dependencies on other tasks, shown as "(depends on: ...)".
+    Use this to understand the task hierarchy before creating new tasks
+    that need to declare dependencies.
+    """
     manager = get_manager()
     issues = manager.sync_mission()
     if not issues:
@@ -42,12 +47,33 @@ def create_task(
 ) -> str:
     """Create a new task in the mission queue.
 
+    Dependencies define the task hierarchy: if task B depends on task A,
+    then A is a parent of B. This controls status promotion cascading —
+    promoting a task also promotes all tasks that depend on it.
+
     Args:
         title: The title of the task.
         completion_criteria: Clear, measurable criteria for task completion.
         body: Detailed description of the task.
         draft: If True, creates the task in 'draft' status. Default is False (pending).
         depends_on: Comma-separated list of existing task slugs this task depends on.
+            Example: "setup-infra, configure-db" means this task depends on
+            both "setup-infra" and "configure-db" being completed first.
+
+    Examples:
+        # Create a task that depends on two others
+        create_task(
+            title="Deploy to staging",
+            completion_criteria="Staging deployment passes smoke tests",
+            depends_on="setup-ci, build-artifacts"
+        )
+
+        # Create a standalone draft task
+        create_task(
+            title="Research options",
+            completion_criteria="Document comparing at least 3 approaches",
+            draft=True
+        )
     """
     manager = get_manager()
     try:

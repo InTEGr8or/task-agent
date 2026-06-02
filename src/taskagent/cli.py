@@ -1157,6 +1157,61 @@ def cmd_new(
         sys.exit(1)
 
 
+def cmd_tree(console: Console, manager: TaskAgent):
+    """Display the task hierarchy as a dependency tree."""
+    issues = manager.sync_mission()
+    if not issues:
+        console.print("[yellow]No tasks found.[/yellow]")
+        return
+
+    slug_to_issue = {i.slug: i for i in issues}
+    children_map: Dict[str, List[str]] = {}
+    for i in issues:
+        for dep in i.dependencies:
+            if dep in slug_to_issue:
+                if dep not in children_map:
+                    children_map[dep] = []
+                children_map[dep].append(i.slug)
+
+    visited: Set[str] = set()
+    tree_lines: List[Tuple[Issue, int]] = []
+
+    def build_rows(issue: Issue, depth: int):
+        if issue.slug in visited:
+            return
+        visited.add(issue.slug)
+        tree_lines.append((issue, depth))
+        if issue.slug in children_map:
+            for child_slug in children_map[issue.slug]:
+                if child_slug in slug_to_issue:
+                    build_rows(slug_to_issue[child_slug], depth + 1)
+
+    for issue in issues:
+        has_internal_dep = any(dep in slug_to_issue for dep in issue.dependencies)
+        if not has_internal_dep:
+            build_rows(issue, 0)
+
+    for issue in issues:
+        if issue.slug not in visited:
+            build_rows(issue, 0)
+
+    for issue, depth in tree_lines:
+        indent = "  " * depth
+        connector = "└─ " if depth > 0 else ""
+        status_symbol = {
+            "active": "●",
+            "pending": "○",
+            "draft": "◌",
+            "completed": "✔",
+        }.get(issue.status, "?")
+        deps = (
+            f"  [dim](depends on: {', '.join(issue.dependencies)})[/dim]"
+            if issue.dependencies
+            else ""
+        )
+        console.print(f"{indent}{connector}{status_symbol} {issue.slug}{deps}")
+
+
 def cmd_list(
     console: Console,
     manager: TaskAgent,
@@ -2664,6 +2719,7 @@ def main():
     report_parser.add_argument("slug", help="Slug of the issue")
 
     list_parser = subparsers.add_parser("list")
+    subparsers.add_parser("tree", help="Display task hierarchy as a dependency tree")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
     history_parser = subparsers.add_parser("history")
@@ -2870,7 +2926,11 @@ def main():
     new_parser.add_argument(
         "-i", "--interactive", action="store_true", help="Open editor to fill in task"
     )
-    new_parser.add_argument("--depends-on")
+    new_parser.add_argument(
+        "--depends-on",
+        help="Comma-separated slugs this task depends on, e.g. 'setup-ci,build-artifacts'. "
+        "Use 'ta list' or 'ta tree' to find existing task slugs.",
+    )
     version_parser = subparsers.add_parser("version")
     v_sub = version_parser.add_subparsers(dest="version_command")
     p_v = v_sub.add_parser("promote")
@@ -2920,6 +2980,8 @@ def main():
         elif args.text:
             fmt = "text"
         cmd_list(console, manager, fmt)
+    elif args.command == "tree":
+        cmd_tree(console, manager)
     elif args.command == "history":
         cmd_history(console, manager, args.limit)
     elif args.command == "ingest":
