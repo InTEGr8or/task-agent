@@ -691,13 +691,13 @@ def cmd_done(
         if commit_hash:
             console.print(f"Commit: {commit_hash}")
 
-        # Destroy per-task agent if one exists
-        agent.destroy_per_task_agent(slug)
-
         promote_version(console, manager)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
+    finally:
+        # Destroy per-task agent even if commit fails
+        agent.destroy_per_task_agent(slug)
 
 
 def cmd_push(console: Console, manager: TaskAgent):
