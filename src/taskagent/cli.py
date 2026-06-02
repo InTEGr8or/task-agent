@@ -666,6 +666,21 @@ def cmd_mcp_api(console: Console):
         console.print(f"  {docstring}\n")
 
 
+def cmd_soft_delete(console: Console, manager: TaskAgent, slug: str):
+    """Soft-delete a task: archive it without committing."""
+    try:
+        issue = manager.soft_delete_issue(slug)
+        console.print(
+            f"[bold yellow]Task '{issue.slug}' soft-deleted.[/bold yellow] "
+            f"Archived to [bold]docs/tasks/deleted/[/bold]. "
+            f"Use [bold]git checkout docs/tasks/deleted/{issue.slug}[/bold] and "
+            f"[bold]ta restore {issue.slug}[/bold] to bring it back."
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
 def cmd_done(
     console: Console,
     manager: TaskAgent,
@@ -2899,6 +2914,10 @@ def main():
         "--public", action="store_true", help="Make the new mission repo public"
     )
 
+    delete_parser = subparsers.add_parser(
+        "delete", help="Soft-delete a task (archive without commit, restorable)"
+    )
+    delete_parser.add_argument("slug")
     done_parser = subparsers.add_parser("done")
     done_parser.add_argument("slug", nargs="?")
     done_parser.add_argument("-m", "--message")
@@ -3047,6 +3066,8 @@ def main():
             args.push,
             args.solution,
         )
+    elif args.command == "delete":
+        cmd_soft_delete(console, manager, args.slug)
     elif args.command == "new":
         cmd_new(
             console,

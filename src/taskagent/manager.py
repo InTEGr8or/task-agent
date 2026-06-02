@@ -945,6 +945,48 @@ class TaskAgent:
         target_issue.status = "completed"
         return target_issue, code_hash
 
+    def soft_delete_issue(self, slug: str) -> Issue:
+        """Soft-delete an issue: move to deleted/ folder and remove from mission.usv.
+
+        Does NOT create a git commit — the task is archived for later reassessment.
+        """
+        issues = self.load_mission()
+        target = next((i for i in issues if i.slug == slug), None)
+        if not target:
+            raise ValueError(f"Issue '{slug}' not found.")
+
+        self.migrate_to_folder(target.slug)
+        issue_file = self.find_issue_file(target.slug)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue file not found for slug: {target.slug}")
+
+        # 1. Create deleted/ directory
+        deleted_dir = self.issues_root / "deleted"
+        deleted_dir.mkdir(parents=True, exist_ok=True)
+
+        # 2. Move the task file/folder
+        is_dir_based = issue_file.name == "README.md"
+        source_to_move = issue_file.parent if is_dir_based else issue_file
+        dest_path = deleted_dir / source_to_move.name
+        if dest_path.exists():
+            shutil.rmtree(str(dest_path)) if dest_path.is_dir() else dest_path.unlink()
+        shutil.move(str(source_to_move), str(dest_path))
+
+        # 3. Append to deleted.usv with timestamp and original status
+        deleted_usv = deleted_dir / "deleted.usv"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        deps_str = ",".join(target.dependencies)
+        line = f"{target.name}\x1f{target.slug}\x1f{deps_str}\x1f{target.status}\x1f{timestamp}\n"
+        with deleted_usv.open("a", encoding="utf-8", newline="\n") as f:
+            f.write(line)
+
+        # 4. Remove from mission.usv
+        new_issues = [i for i in issues if i.slug != slug]
+        self.save_mission(new_issues)
+
+        target.status = "deleted"
+        return target
+
     def prioritize_issue(self, slug: str, direction: str) -> Issue:
         """Move an issue up or down in priority."""
         issues = self.load_mission()

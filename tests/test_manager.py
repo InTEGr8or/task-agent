@@ -296,3 +296,27 @@ def test_api_add_multiple_dependencies(manager):
     deps = manager.extract_deps(issue_file)
     assert "task-a" in deps
     assert "task-b" in deps
+
+
+def test_api_soft_delete(manager):
+    manager.create_issue("Delete Me", body="Will be archived")
+    assert manager.find_issue_file("delete-me")
+
+    issue = manager.soft_delete_issue("delete-me")
+
+    assert issue.slug == "delete-me"
+    assert issue.status == "deleted"
+
+    # File should be in deleted/ now
+    assert (manager.issues_root / "deleted" / "delete-me" / "README.md").exists()
+
+    # deleted.usv should exist with the entry
+    deleted_usv = manager.issues_root / "deleted" / "deleted.usv"
+    assert deleted_usv.exists()
+    content = deleted_usv.read_text()
+    assert "delete-me" in content
+    assert "pending" in content  # original status
+
+    # Should be removed from mission
+    issues = manager.load_mission()
+    assert not any(i.slug == "delete-me" for i in issues)
