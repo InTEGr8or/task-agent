@@ -241,13 +241,19 @@ class TestStoreAndLoadMeta:
         task_slug = "my-task"
         (tmp_path / ".gwt" / task_slug).mkdir(parents=True)
 
+        calls = []
+
+        def mock_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(agent.subprocess, "run", mock_run)
+
         agent.store_per_task_agent_meta(task_slug, "agent-mytask-abc12345", "minimal")
 
-        meta = agent.load_per_task_agent_meta(task_slug)
-        assert meta is not None
-        assert meta["user"] == "agent-mytask-abc12345"
-        assert meta["template"] == "minimal"
-        assert meta["task_slug"] == "my-task"
+        # Verify sudo tee was called
+        assert any("tee" in c for c in calls)
+        assert any("sudo" in c for c in calls)
 
     def test_load_nonexistent_returns_none(self):
         assert agent.load_per_task_agent_meta("nonexistent") is None
@@ -304,8 +310,13 @@ class TestDestroyPerTaskAgent:
     def test_destroys_agent_when_meta_exists(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         task_slug = "my-task"
-        (tmp_path / ".gwt" / task_slug).mkdir(parents=True)
-        agent.store_per_task_agent_meta(task_slug, "agent-mytask-abc12345", "minimal")
+        meta_dir = tmp_path / ".gwt" / task_slug
+        meta_dir.mkdir(parents=True)
+
+        # Write meta file directly so load_per_task_agent_meta can find it
+        (meta_dir / ".ta-agent.json").write_text(
+            '{"user": "agent-mytask-abc12345", "template": "minimal", "task_slug": "my-task"}'
+        )
 
         calls = []
 

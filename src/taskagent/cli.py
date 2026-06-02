@@ -1389,8 +1389,8 @@ def cmd_start(
             template_dir = Path(".ta") / "agents" / agent_name
             template_meta = template_dir / "meta.toml"
             if template_meta.exists():
-                result = agent.init_per_task_agent(slug, agent_name)
-                agent_user = result["user"]
+                agent_info = agent.init_per_task_agent(slug, agent_name)
+                agent_user = agent_info["user"]
                 console.print(
                     f"[dim]Created per-task agent '{agent_user}' "
                     f"from template '{agent_name}'.[/dim]"

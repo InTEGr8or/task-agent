@@ -496,12 +496,15 @@ def store_per_task_agent_meta(
         "task_slug": task_slug,
     }
     subprocess.run(
-        ["sudo", "mkdir", "-p", str(meta_path.parent)], check=True,
+        ["sudo", "mkdir", "-p", str(meta_path.parent)],
+        check=True,
     )
     subprocess.run(
         ["sudo", "-u", agent_user, "tee", str(meta_path)],
         input=json.dumps(meta, indent=2),
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
 
 
