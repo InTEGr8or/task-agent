@@ -17,6 +17,7 @@ import importlib.metadata
 import urllib.request
 import questionary
 import subprocess
+import shlex
 import shutil
 import pyperclip  # type: ignore
 
@@ -40,6 +41,7 @@ from rich.live import Live
 from taskagent.models.issue import Issue
 from taskagent.manager import TaskAgent
 from taskagent.discovery import discover
+from taskagent import agent
 
 
 def get_tool_version() -> str:
@@ -1336,6 +1338,7 @@ def cmd_start(
     manager: TaskAgent,
     slug_part: Optional[str] = None,
     run: bool = False,
+    agent_name: Optional[str] = None,
 ):
     """Move an issue to active and set up a git worktree."""
     target = cmd_active(console, manager, slug_part, silent=False)
@@ -1378,9 +1381,20 @@ def cmd_start(
         )
         console.print(f"[bold green]Successfully started issue '{slug}'.[/bold green]")
 
+        # Set agent permissions if requested
+        if agent_name:
+            try:
+                agent_user = agent.get_agent_user(agent_name)
+                agent.set_worktree_permissions(slug, agent_user)
+                console.print(
+                    f"[dim]Worktree permissions set for agent '{agent_user}'.[/dim]"
+                )
+            except RuntimeError as e:
+                console.print(f"[yellow]Warning: {e}[/yellow]")
+
         if run:
             console.print("[blue]Invoking worker as requested...[/blue]")
-            cmd_run(console, manager, slug)
+            cmd_run(console, manager, slug, agent_name=agent_name)
 
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Error: {e.stderr.strip()}[/red]")
@@ -1426,8 +1440,13 @@ def cmd_self_up(console: Console):
             console.print("  [cyan]uv tool upgrade task-agent[/cyan]\n")
 
 
-def cmd_run(console: Console, manager: TaskAgent, slug_part: Optional[str] = None):
-    """Run the sidecar worker for an issue."""
+def cmd_run(
+    console: Console,
+    manager: TaskAgent,
+    slug_part: Optional[str] = None,
+    agent_name: Optional[str] = None,
+):
+    """Run the sidecar worker for an issue. Optionally run as an agent user."""
     issues = manager.load_mission()
     target = select_issue(console, issues, slug_part, status_filter=["active"])
     if not target:
@@ -1451,12 +1470,30 @@ def cmd_run(console: Console, manager: TaskAgent, slug_part: Optional[str] = Non
     env["TA_ROOT"] = str(Path.cwd().absolute())
 
     try:
-        subprocess.run(
-            [str(worker_executable.absolute())],
-            env=env,
-            check=True,
-            shell=(os.name == "nt"),
-        )
+        if agent_name:
+            agent_user = agent.get_agent_user(agent_name)
+            worktree_path = agent.get_worktree_path(target.slug)
+
+            ta_file = shlex.quote(str(issue_file.absolute())) if issue_file else ""
+            shell_cmd = (
+                f"cd {shlex.quote(str(worktree_path))} && "
+                f"exec env "
+                f"TA_SLUG={shlex.quote(target.slug)} "
+                f"TA_FILE={ta_file} "
+                f"TA_ROOT={shlex.quote(str(Path.cwd().absolute()))} "
+                f"{shlex.quote(str(worker_executable.absolute()))}"
+            )
+            subprocess.run(
+                ["sudo", "-u", agent_user, "bash", "-l", "-c", shell_cmd],
+                check=True,
+            )
+        else:
+            subprocess.run(
+                [str(worker_executable.absolute())],
+                env=env,
+                check=True,
+                shell=(os.name == "nt"),
+            )
         console.print(
             f"[bold green]Worker for '{target.slug}' finished successfully.[/bold green]"
         )
@@ -1483,6 +1520,64 @@ def cmd_init(console: Console, manager: TaskAgent):
             f"[dim]Ingested {num_new} new issues, removed {num_removed} missing ones.[/dim]"
         )
     console.print("[dim]Mission files are protected (Read-Only).[/dim]")
+
+
+def cmd_list_templates(console: Console):
+    """List available agent templates from .ta/agents/."""
+    from taskagent import templates
+
+    agents_dir = Path(".ta") / "agents"
+    if not agents_dir.is_dir():
+        console.print("[yellow]No templates found in .ta/agents/[/yellow]")
+        return
+
+    table = Table(title="Available Templates", box=box.MINIMAL)
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+
+    for d in sorted(agents_dir.iterdir()):
+        if d.is_dir():
+            meta_file = d / "meta.toml"
+            if meta_file.exists():
+                try:
+                    t = templates.load_template(d.name)
+                    table.add_row(t.name, t.description)
+                except Exception:
+                    table.add_row(d.name, "[dim]invalid meta.toml[/dim]")
+            else:
+                table.add_row(d.name, "[dim]no meta.toml[/dim]")
+
+    console.print(table)
+
+
+def cmd_init_agent(console: Console, name: str, template: Optional[str] = None):
+    """Create a dedicated Linux user for agent isolation."""
+    try:
+        result = agent.init_agent(name, template_name=template)
+        console.print(
+            f"[bold green]Agent user '{result['user']}' created.[/bold green]"
+        )
+        console.print(f"  Home:    [cyan]{result['home']}[/cyan]")
+        console.print(f"  SSH key: [cyan]{result['ssh_key']}[/cyan]")
+        console.print(f"  Gitconfig: [cyan]{result['gitconfig']}[/cyan]")
+        console.print(f"  Sudoers:  [cyan]{result['sudoers']}[/cyan]")
+        console.print(
+            "\n[dim]Use [bold]ta run <slug> --agent <name>[/bold] "
+            "to run tasks as this agent.[/dim]"
+        )
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def cmd_destroy_agent(console: Console, name: str):
+    """Remove an agent Linux user."""
+    try:
+        agent.destroy_agent(name)
+        console.print(f"[bold green]Agent user 'agent-{name}' removed.[/bold green]")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 def cmd_init_worker(console: Console, template: str = "adk"):
@@ -2617,9 +2712,33 @@ def main():
     start_parser.add_argument(
         "--run", action="store_true", help="Immediately run the sidecar worker"
     )
+    start_parser.add_argument("--agent", help="Agent user to grant worktree access to")
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("slug", nargs="?")
+    run_parser.add_argument("--agent", help="Run worker as this agent user (uses sudo)")
     init_parser = subparsers.add_parser("init-worker")
+
+    init_agent_parser = subparsers.add_parser(
+        "init-agent", help="Create a dedicated Linux user for agent isolation"
+    )
+    init_agent_parser.add_argument(
+        "name", nargs="?", help="Agent name (creates user agent-<name>)"
+    )
+    init_agent_parser.add_argument(
+        "--template",
+        help="Template name from .ta/agents/<name>/meta.toml",
+    )
+    init_agent_parser.add_argument(
+        "--list-templates",
+        action="store_true",
+        help="List available agent templates",
+    )
+
+    destroy_agent_parser = subparsers.add_parser(
+        "destroy-agent",
+        help="Remove an agent Linux user created by init-agent",
+    )
+    destroy_agent_parser.add_argument("name", help="Agent name to remove")
     init_parser.add_argument("--template", default="adk")
 
     # mcp
@@ -2790,9 +2909,18 @@ def main():
     elif args.command == "active":
         cmd_active(console, manager, args.slug)
     elif args.command == "start":
-        cmd_start(console, manager, args.slug, run=args.run)
+        cmd_start(console, manager, args.slug, run=args.run, agent_name=args.agent)
     elif args.command == "run":
-        cmd_run(console, manager, args.slug)
+        cmd_run(console, manager, args.slug, agent_name=args.agent)
+    elif args.command == "init-agent":
+        if args.list_templates:
+            cmd_list_templates(console)
+        elif not args.name:
+            init_agent_parser.error("the following arguments are required: name")
+        else:
+            cmd_init_agent(console, args.name, template=args.template)
+    elif args.command == "destroy-agent":
+        cmd_destroy_agent(console, args.name)
     elif args.command == "init-worker":
         cmd_init_worker(console, args.template)
     elif args.command == "mcp":

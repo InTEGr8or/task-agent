@@ -1,0 +1,13 @@
+name = "gh"
+description = "GitHub-only agent (clone issues, open PRs)"
+
+[dotfiles]
+".gitconfig" = { source = "inline", content = """
+[user]
+    name = Agent
+    email = agent@localhost
+[safe]
+    directory = *
+""" }
+".ssh/id_ed25519" = { source = "generate" }
+".config/gh/hosts.yml" = { source = "op://Private/GitHub Agent/credential" }

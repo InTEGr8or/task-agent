@@ -1,0 +1,19 @@
+name = "uat-aws"
+description = "AWS UAT deployment agent"
+
+[dotfiles]
+".gitconfig" = { source = "inline", content = """
+[user]
+    name = UAT Deploy Bot
+    email = uat-bot@domain.com
+[safe]
+    directory = *
+""" }
+".ssh/id_ed25519" = { source = "generate" }
+".aws/config" = { source = "inline", content = """
+[profile uat]
+region = us-east-1
+output = json
+""" }
+".aws/credentials" = { source = "op://Private/AWS UAT/credential" }
+".config/gh/hosts.yml" = { source = "op://Private/GitHub Agent/credential" }

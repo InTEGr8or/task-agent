@@ -14,6 +14,9 @@ build: ## Build the package
 test: lint ## Run unit tests
 	@uv run pytest
 
+test-e2e: ## Run end-to-end agent sandboxing tests (requires sudo)
+	@sudo bash tests/e2e/test_agent_sandboxing.sh
+
 lint: ## Run linting and type checks
 	@uv run ruff check . --fix
 	@uv run ruff format --check .
