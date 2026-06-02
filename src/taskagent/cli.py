@@ -685,11 +685,15 @@ def cmd_done(
             solution_explanation=solution,
         )
         console.print(
-            f"[bold green]Issue '{issue.slug}' marked as done and removed from mission.usv[/bold green]"
+            f"[bold green]Issue '{issue.slug}' marked as done and "
+            f"removed from mission.usv[/bold green]"
         )
         if commit_hash:
             console.print(f"Commit: {commit_hash}")
-        # Auto-promote project version if needed
+
+        # Destroy per-task agent if one exists
+        agent.destroy_per_task_agent(slug)
+
         promote_version(console, manager)
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -1363,7 +1367,7 @@ def cmd_start(
         )
         if run:
             console.print("[blue]Invoking worker as requested...[/blue]")
-            cmd_run(console, manager, slug)
+            cmd_run(console, manager, slug, agent_name=agent_name)
         return
 
     console.print(
@@ -1381,16 +1385,25 @@ def cmd_start(
         )
         console.print(f"[bold green]Successfully started issue '{slug}'.[/bold green]")
 
-        # Set agent permissions if requested
         if agent_name:
-            try:
-                agent_user = agent.get_agent_user(agent_name)
-                agent.set_worktree_permissions(slug, agent_user)
+            template_dir = Path(".ta") / "agents" / agent_name
+            template_meta = template_dir / "meta.toml"
+            if template_meta.exists():
+                result = agent.init_per_task_agent(slug, agent_name)
+                agent_user = result["user"]
                 console.print(
-                    f"[dim]Worktree permissions set for agent '{agent_user}'.[/dim]"
+                    f"[dim]Created per-task agent '{agent_user}' "
+                    f"from template '{agent_name}'.[/dim]"
                 )
-            except RuntimeError as e:
-                console.print(f"[yellow]Warning: {e}[/yellow]")
+            else:
+                try:
+                    agent_user = agent.get_agent_user(agent_name)
+                    agent.set_worktree_permissions(slug, agent_user)
+                    console.print(
+                        f"[dim]Worktree permissions set for agent '{agent_user}'.[/dim]"
+                    )
+                except RuntimeError as e:
+                    console.print(f"[yellow]Warning: {e}[/yellow]")
 
         if run:
             console.print("[blue]Invoking worker as requested...[/blue]")
@@ -1471,7 +1484,18 @@ def cmd_run(
 
     try:
         if agent_name:
-            agent_user = agent.get_agent_user(agent_name)
+            meta = agent.load_per_task_agent_meta(target.slug)
+            if meta:
+                agent_user = meta["user"]
+            else:
+                template_dir = Path(".ta") / "agents" / agent_name
+                template_meta = template_dir / "meta.toml"
+                if template_meta.exists():
+                    result = agent.init_per_task_agent(target.slug, agent_name)
+                    agent_user = result["user"]
+                else:
+                    agent_user = agent.get_agent_user(agent_name)
+
             worktree_path = agent.get_worktree_path(target.slug)
 
             ta_file = shlex.quote(str(issue_file.absolute())) if issue_file else ""
@@ -2712,10 +2736,16 @@ def main():
     start_parser.add_argument(
         "--run", action="store_true", help="Immediately run the sidecar worker"
     )
-    start_parser.add_argument("--agent", help="Agent user to grant worktree access to")
+    start_parser.add_argument(
+        "--agent",
+        help="Template name (creates per-task agent) or existing agent user name",
+    )
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("slug", nargs="?")
-    run_parser.add_argument("--agent", help="Run worker as this agent user (uses sudo)")
+    run_parser.add_argument(
+        "--agent",
+        help="Template name (creates per-task agent) or existing agent user name",
+    )
     init_parser = subparsers.add_parser("init-worker")
 
     init_agent_parser = subparsers.add_parser(
