@@ -29,6 +29,39 @@ def test_slugify_hashes(manager):
     assert manager.slugify("### Heavily Hashed ###") == "heavily-hashed"
 
 
+def test_slugify_with_dots(manager):
+    assert manager.slugify("1.1 Setup CI") == "1.1-setup-ci"
+    assert manager.slugify("v2.0") == "v2.0"
+
+
+def test_create_issue_with_dotted_title(manager):
+    issue = manager.create_issue("1.1 Dotted Task", "Body with dots: v2.0 here")
+    assert issue.slug == "1.1-dotted-task"
+    issue_file = manager.find_issue_file(issue.slug)
+    assert issue_file is not None
+    assert issue_file.exists()
+    content = issue_file.read_text()
+    assert "# 1.1 Dotted Task" in content
+    assert "v2.0" in content
+
+
+def test_ingest_with_dotted_slug(manager):
+    issues_root = manager.issues_root
+    slug = "1.1.dotted.task"
+    (issues_root / "pending" / slug).mkdir(parents=True)
+    (issues_root / "pending" / slug / "README.md").write_text(
+        "# 1.1 Dotted Task\nContent"
+    )
+
+    manager.save_mission([])
+    manager.ingest_issues()
+
+    issues = manager.load_mission()
+    assert len(issues) == 1
+    assert issues[0].slug == slug
+    assert issues[0].name == "1.1 Dotted Task"
+
+
 def test_api_ingest_with_titles(manager):
     issues_root = manager.issues_root
     # Create file manually with a specific title

@@ -224,8 +224,8 @@ class TaskAgent:
     def slugify(text: str) -> str:
         """Convert text to a slug. Converts underscores and spaces to hyphens."""
         text = text.lower()
-        # Remove everything except alphanumeric, spaces, underscores, and hyphens.
-        text = re.sub(r"[^\w\s-]", "", text)
+        # Remove everything except alphanumeric, spaces, underscores, hyphens, and dots.
+        text = re.sub(r"[^\w\s.-]", "", text)
         # Convert both spaces and underscores to hyphens
         text = re.sub(r"[\s_]+", "-", text)
         # Collapse multiple hyphens

@@ -32,6 +32,13 @@ def test_slugify(manager):
     assert manager.slugify("Already-Slugified") == "already-slugified"
 
 
+def test_slugify_dots(manager):
+    assert manager.slugify("1.1 Setup CI") == "1.1-setup-ci"
+    assert manager.slugify("v2.0 Migration") == "v2.0-migration"
+    assert manager.slugify("bug.1.2.3 Fix") == "bug.1.2.3-fix"
+    assert manager.slugify("no.dots") == "no.dots"
+
+
 def test_cmd_new_file(manager, temp_issues_dir):
     console = Console()
     cmd_new(console, manager, "Test Task", "Task Body", draft=False)
