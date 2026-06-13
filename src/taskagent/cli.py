@@ -1736,6 +1736,7 @@ def cmd_init_mcp(
     agent: str = "gemini",
     print_json: bool = False,
     scope: str = "project",
+    claude: bool = False,
 ):
     """Register the Task Agent as an MCP server.
 
@@ -1757,6 +1758,47 @@ def cmd_init_mcp(
 
     if print_json:
         console.print(json.dumps(mcp_config, indent=2))
+        return
+
+    if claude:
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                config_dir = Path(appdata) / "Claude"
+            else:
+                config_dir = Path.home() / "AppData" / "Roaming" / "Claude"
+        elif sys.platform == "darwin":
+            config_dir = Path.home() / "Library" / "Application Support" / "Claude"
+        else:
+            config_dir = Path.home() / ".config" / "Claude"
+
+        config_path = config_dir / "claude_desktop_config.json"
+        console.print(
+            f"[blue]Registering Task Agent MCP with Claude Desktop at {config_path}...[/blue]"
+        )
+        try:
+            if config_path.exists():
+                with config_path.open("r", encoding="utf-8") as f:
+                    config = json.load(f)
+            else:
+                config = {}
+
+            if "mcpServers" not in config:
+                config["mcpServers"] = {}
+
+            config["mcpServers"]["task-agent"] = {
+                "command": mcp_command,
+                "args": mcp_args,
+            }
+
+            config_dir.mkdir(parents=True, exist_ok=True)
+            with config_path.open("w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+            console.print(
+                "[bold green]Successfully registered Task Agent MCP server with Claude Desktop![/bold green]"
+            )
+        except Exception as e:
+            console.print(f"[red]Failed to register Claude MCP server: {e}[/red]")
         return
 
     if agent == "gemini":
@@ -2864,6 +2906,11 @@ def main():
         default="project",
         help="Registration scope (default: project)",
     )
+    init_mcp_parser.add_argument(
+        "--claude",
+        action="store_true",
+        help="Register as an MCP server with Claude Desktop",
+    )
 
     # plan
     subparsers.add_parser("plan", help="View or edit the project plan")
@@ -3037,7 +3084,13 @@ def main():
     elif args.command == "mcp":
         cmd_mcp()
     elif args.command == "init-mcp":
-        cmd_init_mcp(console, agent=args.agent, print_json=args.print, scope=args.scope)
+        cmd_init_mcp(
+            console,
+            agent=args.agent,
+            print_json=args.print,
+            scope=args.scope,
+            claude=args.claude,
+        )
     elif args.command == "push":
         cmd_push(console, manager)
     elif args.command == "plan":
