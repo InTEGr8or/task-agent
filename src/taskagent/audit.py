@@ -20,9 +20,7 @@ class AuditLog:
 
     def __init__(self, issues_root: Path):
         self.log_dir = issues_root / ".task-agent" / "logs"
-        self.retention_days = int(
-            os.environ.get("TA_LOG_RETENTION_DAYS", "30")
-        )
+        self.retention_days = int(os.environ.get("TA_LOG_RETENTION_DAYS", "30"))
 
     def log(
         self,
@@ -36,7 +34,7 @@ class AuditLog:
         today = date.today().isoformat()
         path = self.log_dir / f"{today}.jsonl"
 
-        record = {
+        record: Dict[str, Any] = {
             "t": datetime.now(timezone.utc).isoformat(),
             "e": event,
             "slug": slug,
@@ -94,7 +92,11 @@ class AuditLog:
                 continue
             ev = rec.get("e", "")
             if ev == "agent.created":
-                state[slug] = {"slug": slug, "user": rec.get("user", ""), "detail": rec.get("detail", {})}
+                state[slug] = {
+                    "slug": slug,
+                    "user": rec.get("user", ""),
+                    "detail": rec.get("detail", {}),
+                }
             elif ev == "agent.destroyed":
                 state.pop(slug, None)
 
