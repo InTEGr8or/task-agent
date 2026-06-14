@@ -267,28 +267,21 @@ def test_version_detection_priority(tmp_path):
 
 
 def test_cmd_init_mcp_claude(tmp_path):
-    from unittest.mock import patch
+    from unittest.mock import patch, MagicMock
     from taskagent.cli import cmd_init_mcp
-    import json
 
     console = Console()
-    home_dir = tmp_path / "home"
-    home_dir.mkdir()
 
-    with (
-        patch("pathlib.Path.home", return_value=home_dir),
-        patch("sys.platform", "linux"),
-        patch("os.environ", {}),
-    ):
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock()
         cmd_init_mcp(console, claude=True)
 
-        expected_config_file = (
-            home_dir / ".config" / "Claude" / "claude_desktop_config.json"
-        )
-        assert expected_config_file.exists()
-
-        data = json.loads(expected_config_file.read_text())
-        assert "mcpServers" in data
-        assert "task-agent" in data["mcpServers"]
-        assert data["mcpServers"]["task-agent"]["command"] == "uv"
-        assert "run" in data["mcpServers"]["task-agent"]["args"]
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0] == "claude"
+        assert call_args[1] == "mcp"
+        assert call_args[2] == "add"
+        assert call_args[3] == "task-agent"
+        assert call_args[4] == "--"
+        assert call_args[5] == "uv"
+        assert "run" in call_args
