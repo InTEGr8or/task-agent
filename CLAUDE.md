@@ -214,19 +214,30 @@ Dev dependencies:
 
 ## Release & Versioning
 
-Versions in `pyproject.toml` follow semver. The release workflow is:
+Versions in `pyproject.toml` follow semver. The release workflow is **atomic**:
 
 ```bash
 ta version promote patch   # or minor/major
                            # Auto-commits: pyproject.toml, uv.lock
-ta version tag             # Create git tag (matches pyproject.toml version)
-git push origin master --tags
-                           # GitHub Actions auto-publishes to PyPI when v* tag pushed
+                           # Shows success/failure of commit
+ta version tag             # Create git tag (matches code version)
+git push origin vX.Y.Z     # Push tag to trigger CI publish
 ```
 
-**Important:** `ta version promote` automatically commits the version bump. The tag will then point to that commit, ensuring the version in the tag matches the version in the code.
+### How It Works
 
-If you accidentally bump the version without committing, or create a tag that doesn't match the code version, PyPI will reject the publish with "File already exists".
+1. **`ta version promote`**: Bumps version, auto-commits with message `chore: bump version to X.Y.Z`, warns if auto-commit fails
+2. **`ta version tag`**: Creates git tag matching the version in code
+3. **`git push origin vX.Y.Z`**: Triggers GitHub Actions publish workflow
+
+### Critical: Version-Tag Matching
+
+The tag **must** point to a commit where `pyproject.toml` has the matching version. If they mismatch, PyPI will reject with "File already exists" (different file hash for same version).
+
+**If publishing fails:**
+- Check PyPI version: `ta version` shows "Latest PyPI version"
+- If mismatch: delete bad tag (`git tag -d vX.Y.Z`), bump to next version, re-tag
+- The `ta version` command queries PyPI in real-time, so you always know what's published
 
 ## Common Tasks for Claude
 
