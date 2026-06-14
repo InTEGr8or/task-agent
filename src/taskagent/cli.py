@@ -71,9 +71,12 @@ def display_version_info(console: Console):
 
     # 2. Check PyPI
     latest_v = get_latest_pypi_version()
-    if latest_v and latest_v != tool_v:
-        console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
-        console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
+    if latest_v:
+        if latest_v != tool_v:
+            console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
+            console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
+        else:
+            console.print(f"[dim]Latest PyPI version:[/dim] {latest_v} (up to date)")
 
     # 3. Optional: show local project version if available
     try:
