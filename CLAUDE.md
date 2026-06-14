@@ -214,30 +214,32 @@ Dev dependencies:
 
 ## Release & Versioning
 
-Versions in `pyproject.toml` follow semver. The release workflow is **atomic**:
+Versions in `pyproject.toml` follow semver. The release workflow is **two commands**:
 
 ```bash
-ta version promote patch   # or minor/major
-                           # Auto-commits: pyproject.toml, uv.lock
-                           # Shows success/failure of commit
-ta version tag             # Create git tag (matches code version)
-git push origin vX.Y.Z     # Push tag to trigger CI publish
+ta version promote patch   # or minor/major: bumps version AND amends previous commit
+ta version tag             # Creates tag AND pushes to trigger CI publish
 ```
 
 ### How It Works
 
-1. **`ta version promote`**: Bumps version, auto-commits with message `chore: bump version to X.Y.Z`, warns if auto-commit fails
-2. **`ta version tag`**: Creates git tag matching the version in code
-3. **`git push origin vX.Y.Z`**: Triggers GitHub Actions publish workflow
+1. **Commit your work** with a meaningful message (e.g., `feat: add new feature`, `fix: resolve issue`)
+2. **`ta version promote patch`**: 
+   - Bumps version in `pyproject.toml` and `uv.lock`
+   - **Amends previous commit** with `--amend --no-edit` (preserves original message)
+   - Version bump is metadata—release notes on PyPI reflect your actual work
+3. **`ta version tag`**: 
+   - Creates git tag matching the version in code
+   - Pushes tag to trigger GitHub Actions publish to PyPI
 
 ### Critical: Version-Tag Matching
 
-The tag **must** point to a commit where `pyproject.toml` has the matching version. If they mismatch, PyPI will reject with "File already exists" (different file hash for same version).
+The tag **must** point to a commit where `pyproject.toml` has the matching version. The amended commit ensures they always stay in sync.
 
 **If publishing fails:**
 - Check PyPI version: `ta version` shows "Latest PyPI version"
+- Verify with: `git show HEAD:pyproject.toml | grep version`
 - If mismatch: delete bad tag (`git tag -d vX.Y.Z`), bump to next version, re-tag
-- The `ta version` command queries PyPI in real-time, so you always know what's published
 
 ## Common Tasks for Claude
 

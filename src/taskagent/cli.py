@@ -1957,7 +1957,7 @@ def cmd_version(
         new_v, _ = get_project_version()
         console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
-        # Auto-commit version bump
+        # Auto-amend version bump into previous commit
         try:
             for file in ["pyproject.toml", "package.json", "uv.lock"]:
                 if Path(file).exists():
@@ -1968,30 +1968,30 @@ def cmd_version(
                         shell=(os.name == "nt"),
                     )
             result = subprocess.run(
-                ["git", "commit", "-m", f"chore: bump version to {new_v}"],
+                ["git", "commit", "--amend", "--no-edit"],
                 capture_output=True,
                 shell=(os.name == "nt"),
             )
             if result.returncode == 0:
-                console.print("[dim]Committed version bump[/dim]")
+                console.print("[dim]Version bump amended into previous commit[/dim]")
             elif (
                 b"nothing to commit" in result.stdout
                 or b"nothing to commit" in result.stderr
             ):
                 console.print(
-                    "[yellow]No changes to commit (already committed?)[/yellow]"
+                    "[yellow]No changes to commit (already amended?)[/yellow]"
                 )
             else:
                 console.print(
-                    "[yellow]Warning: Could not auto-commit version bump. "
-                    "Run 'git add' and 'git commit' manually.[/yellow]"
+                    "[yellow]Warning: Could not auto-amend version bump. "
+                    "Run 'git add' and 'git commit --amend --no-edit' manually.[/yellow]"
                 )
                 if result.stderr:
                     console.print(f"[dim]{result.stderr.decode()}[/dim]")
         except Exception as e:
             console.print(
-                f"[yellow]Warning: Auto-commit failed: {e}. "
-                "Run 'git commit' manually.[/yellow]"
+                f"[yellow]Warning: Auto-amend failed: {e}. "
+                "Run 'git commit --amend --no-edit' manually.[/yellow]"
             )
 
 
