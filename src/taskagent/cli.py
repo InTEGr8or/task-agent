@@ -87,8 +87,43 @@ def display_version_info(console: Console):
         pass
 
 
+def get_committed_version() -> Tuple[str, Optional[str]]:
+    """Read the version from HEAD (committed code), not working tree."""
+    files_to_check = [
+        ("pyproject.toml", r'version\s*=\s*"(.*?)"'),
+        ("package.json", None),  # Special handling below
+        ("Cargo.toml", r'^version\s*=\s*"(.*?)"'),
+    ]
+
+    for filename, pattern in files_to_check:
+        try:
+            result = subprocess.run(
+                ["git", "show", f"HEAD:{filename}"],
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=(os.name == "nt"),
+            )
+            if result.returncode == 0:
+                if filename == "package.json":
+                    try:
+                        data = json.loads(result.stdout)
+                        if "version" in data:
+                            return data["version"], "package.json"
+                    except Exception:
+                        pass
+                elif pattern:
+                    match = re.search(pattern, result.stdout, re.MULTILINE)
+                    if match:
+                        return match.group(1), filename
+        except Exception:
+            pass
+
+    return "unknown", None
+
+
 def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
-    """Read the current project version from various project files."""
+    """Read the current project version from various project files (working tree)."""
     root = root or Path.cwd()
 
     # Check pyproject.toml
@@ -1855,12 +1890,23 @@ def cmd_version(
     display_version_info(console)
 
     if tag:
-        v, _ = get_project_version()
+        v, source = get_committed_version()
         if v == "unknown":
             console.print(
                 "[red]Error: Could not determine project version to tag.[/red]"
             )
             return
+
+        # Warn if working tree differs from committed version
+        working_v, _ = get_project_version()
+        if working_v != v:
+            console.print(
+                f"[yellow]Warning: Working tree has version {working_v}, "
+                f"but HEAD has {v}[/yellow]"
+            )
+            console.print(
+                "[yellow]Committing changes with 'ta version promote' first is recommended.[/yellow]"
+            )
 
         tag_name = f"v{v}"
         result = subprocess.run(
