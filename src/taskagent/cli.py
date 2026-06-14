@@ -1912,17 +1912,41 @@ def cmd_version(
         console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
         # Auto-commit version bump
-        subprocess.run(
-            ["git", "add", "pyproject.toml", "package.json", "uv.lock"],
-            capture_output=True,
-            shell=(os.name == "nt"),
-        )
-        subprocess.run(
-            ["git", "commit", "-m", f"chore: bump version to {new_v}"],
-            capture_output=True,
-            shell=(os.name == "nt"),
-        )
-        console.print("[dim]Committed version bump[/dim]")
+        try:
+            for file in ["pyproject.toml", "package.json", "uv.lock"]:
+                if Path(file).exists():
+                    subprocess.run(
+                        ["git", "add", file],
+                        capture_output=True,
+                        check=False,
+                        shell=(os.name == "nt"),
+                    )
+            result = subprocess.run(
+                ["git", "commit", "-m", f"chore: bump version to {new_v}"],
+                capture_output=True,
+                shell=(os.name == "nt"),
+            )
+            if result.returncode == 0:
+                console.print("[dim]Committed version bump[/dim]")
+            elif (
+                b"nothing to commit" in result.stdout
+                or b"nothing to commit" in result.stderr
+            ):
+                console.print(
+                    "[yellow]No changes to commit (already committed?)[/yellow]"
+                )
+            else:
+                console.print(
+                    "[yellow]Warning: Could not auto-commit version bump. "
+                    "Run 'git add' and 'git commit' manually.[/yellow]"
+                )
+                if result.stderr:
+                    console.print(f"[dim]{result.stderr.decode()}[/dim]")
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Auto-commit failed: {e}. "
+                "Run 'git commit' manually.[/yellow]"
+            )
 
 
 def promote_version(console: Console, manager: TaskAgent):
