@@ -1908,6 +1908,19 @@ def cmd_version(
         new_v, _ = get_project_version()
         console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
+        # Auto-commit version bump
+        subprocess.run(
+            ["git", "add", "pyproject.toml", "package.json", "uv.lock"],
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"chore: bump version to {new_v}"],
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        console.print("[dim]Committed version bump[/dim]")
+
 
 def promote_version(console: Console, manager: TaskAgent):
     """Auto-promote project version when a task is completed."""

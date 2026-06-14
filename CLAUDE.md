@@ -214,15 +214,19 @@ Dev dependencies:
 
 ## Release & Versioning
 
-Versions in `pyproject.toml` follow semver. Bump with:
+Versions in `pyproject.toml` follow semver. The release workflow is:
 
 ```bash
 ta version promote patch   # or minor/major
-ta version tag             # Create git tag
+                           # Auto-commits: pyproject.toml, uv.lock
+ta version tag             # Create git tag (matches pyproject.toml version)
 git push origin master --tags
+                           # GitHub Actions auto-publishes to PyPI when v* tag pushed
 ```
 
-GitHub Actions auto-publishes to PyPI when tagged.
+**Important:** `ta version promote` automatically commits the version bump. The tag will then point to that commit, ensuring the version in the tag matches the version in the code.
+
+If you accidentally bump the version without committing, or create a tag that doesn't match the code version, PyPI will reject the publish with "File already exists".
 
 ## Common Tasks for Claude
 
