@@ -1,6 +1,6 @@
-Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 Add --post-setup hook to ta init-agent for per-repo secretsadd-post-setup-hook-to-ta-init-agent-for-per-repo-secrets
 Fix ta done pre-commit hook timeout killing process before commit finishesfix-ta-done-pre-commit-hook-timeout-killing-process-before-commit-finishes
 Implement op:// 1Password secret resolution for template dotfilesimplement-op-1password-secret-resolution-for-template-dotfiles
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
+Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders
