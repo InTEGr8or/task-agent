@@ -719,16 +719,78 @@ def cmd_soft_delete(console: Console, manager: TaskAgent, slug: str):
         sys.exit(1)
 
 
+def detect_current_slug_from_git() -> Optional[str]:
+    """Detect the current task slug from the current git branch name."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = result.stdout.strip()
+        if branch.startswith("issue/"):
+            return branch[len("issue/") :]
+    except Exception:
+        pass
+    return None
+
+
+def find_worktree_path_for_slug(slug: str) -> Optional[Path]:
+    """Find the registered worktree path for a given task slug."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        current_worktree = None
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current_worktree = Path(line[len("worktree ") :].strip())
+            elif line.startswith("branch refs/heads/issue/"):
+                branch_slug = line[len("branch refs/heads/issue/") :].strip()
+                if branch_slug == slug:
+                    return current_worktree
+    except Exception:
+        pass
+    # Fallback to local .gwt/slug if it exists
+    p = Path(".gwt") / slug
+    if p.exists():
+        return p
+    return None
+
+
 def cmd_done(
     console: Console,
     manager: TaskAgent,
-    slug: str,
+    slug: Optional[str] = None,
     commit_message: Optional[str] = None,
     should_commit: bool = True,
     push_mission: bool = False,
     solution: Optional[str] = None,
 ):
     """Mark an issue as done."""
+    if not slug:
+        slug = detect_current_slug_from_git()
+        if not slug:
+            console.print(
+                "[red]Error: Please specify the task slug or run this command from within the task's worktree/branch.[/red]"
+            )
+            sys.exit(1)
+
+    worktree_path = find_worktree_path_for_slug(slug)
+    abs_worktree = (
+        worktree_path.resolve() if worktree_path and worktree_path.exists() else None
+    )
+    is_cwd_inside_worktree = False
+    if abs_worktree:
+        try:
+            is_cwd_inside_worktree = Path.cwd().resolve().is_relative_to(abs_worktree)
+        except Exception:
+            pass
+
     try:
         issue, commit_hash = manager.complete_issue(
             slug,
@@ -751,6 +813,78 @@ def cmd_done(
     finally:
         # Destroy per-task agent even if commit fails
         agent.destroy_per_task_agent(slug)
+
+    # Perform git worktree and branch cleanup after successful completion
+    if worktree_path and worktree_path.exists():
+        if is_cwd_inside_worktree:
+            console.print(
+                f"[yellow]Note: Worktree at '{worktree_path}' and branch 'issue/{slug}' were not removed because your shell is currently inside the worktree directory.[/yellow]"
+            )
+            console.print(
+                "[yellow]To clean up, please change directory to the main repository directory and run:[/yellow]"
+            )
+            console.print("  [bold]git worktree prune[/bold]")
+            console.print(f"  [bold]git branch -D issue/{slug}[/bold]")
+        else:
+            console.print(f"[blue]Cleaning up git worktree for '{slug}'...[/blue]")
+            try:
+                # Remove worktree
+                subprocess.run(
+                    ["git", "worktree", "remove", str(worktree_path)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                console.print(
+                    f"[green]Successfully removed worktree at '{worktree_path}'.[/green]"
+                )
+
+                # Delete branch
+                branch_name = f"issue/{slug}"
+                console.print(f"[blue]Deleting local branch '{branch_name}'...[/blue]")
+                subprocess.run(
+                    ["git", "branch", "-d", branch_name],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                console.print(
+                    f"[green]Successfully deleted branch '{branch_name}'.[/green]"
+                )
+            except subprocess.CalledProcessError as e:
+                console.print(
+                    f"[yellow]Warning: Cleanup failed. {e.stderr.strip()}[/yellow]"
+                )
+                console.print(
+                    f"[yellow]You can clean up manually by running: git worktree remove --force {worktree_path} && git branch -D issue/{slug}[/yellow]"
+                )
+    else:
+        # If worktree doesn't exist, we still try to delete the branch if it exists
+        branch_name = f"issue/{slug}"
+        try:
+            result = subprocess.run(
+                ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                console.print(f"[blue]Deleting local branch '{branch_name}'...[/blue]")
+                subprocess.run(
+                    ["git", "branch", "-d", branch_name],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                console.print(
+                    f"[green]Successfully deleted branch '{branch_name}'.[/green]"
+                )
+        except subprocess.CalledProcessError as e:
+            console.print(
+                f"[yellow]Warning: Could not delete branch '{branch_name}' safely: {e.stderr.strip()}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Run 'git branch -D {branch_name}' to force delete it.[/yellow]"
+            )
 
 
 def cmd_push(console: Console, manager: TaskAgent):
@@ -1417,9 +1551,28 @@ def cmd_active(
     manager: TaskAgent,
     slug_part: Optional[str] = None,
     silent: bool = False,
+    list_if_none: bool = False,
 ) -> Optional[Issue]:
-    """Move an issue to active status."""
+    """Move an issue to active status, or list active tasks."""
     issues = manager.load_mission()
+    if not slug_part and list_if_none:
+        active_issues = [i for i in issues if i.status == "active"]
+        if not silent:
+            if active_issues:
+                from rich.table import Table
+
+                table = Table(title="Active Tasks")
+                table.add_column("Priority")
+                table.add_column("Slug")
+                table.add_column("Dependencies")
+                for i in active_issues:
+                    deps = ", ".join(i.dependencies) if i.dependencies else "-"
+                    table.add_row(str(i.priority), i.slug, deps)
+                console.print(table)
+            else:
+                console.print("[yellow]No active tasks found.[/yellow]")
+        return None
+
     target = select_issue(
         console, issues, slug_part, status_filter=["pending", "draft", "active"]
     )
@@ -1443,6 +1596,38 @@ def cmd_active(
         if not silent:
             console.print(f"[red]Error: {e}[/red]")
         return None
+
+
+def cmd_update(
+    console: Console,
+    manager: TaskAgent,
+    slug_part: str,
+    depends_on: Optional[str] = None,
+):
+    """Update task properties."""
+    issues = manager.load_mission()
+    target = select_issue(
+        console, issues, slug_part, status_filter=["pending", "draft", "active"]
+    )
+    if not target:
+        console.print(
+            f"[red]No active/pending/draft task found matching '{slug_part}'.[/red]"
+        )
+        sys.exit(1)
+
+    if depends_on is not None:
+        try:
+            manager.update_dependencies(target.slug, depends_on)
+            console.print(
+                f"[bold green]Successfully updated dependencies for task '{target.slug}'.[/bold green]"
+            )
+        except Exception as e:
+            console.print(f"[red]Error: {e}[/red]")
+            sys.exit(1)
+    else:
+        console.print(
+            "[yellow]No updates specified. Use --depends-on to update dependencies.[/yellow]"
+        )
 
 
 def cmd_start(
@@ -2916,10 +3101,42 @@ def main():
     promote_parser.add_argument("slug")
     demote_parser = subparsers.add_parser("demote")
     demote_parser.add_argument("slug")
-    active_parser = subparsers.add_parser("active")
-    active_parser.add_argument("slug", nargs="?")
-    start_parser = subparsers.add_parser("start")
-    start_parser.add_argument("slug", nargs="?")
+    active_parser = subparsers.add_parser(
+        "active",
+        help="Move an issue to active status, or list active tasks if no slug is provided",
+    )
+    active_parser.add_argument(
+        "slug", nargs="?", help="Optional slug of the task to mark as active"
+    )
+    update_parser = subparsers.add_parser(
+        "update", help="Update task properties (e.g. dependencies)"
+    )
+    update_parser.add_argument("slug", help="Slug of the task to update")
+    update_parser.add_argument(
+        "-d",
+        "--depends-on",
+        help="Comma-separated list of task slugs this task depends on (use empty string to clear)",
+    )
+    start_parser = subparsers.add_parser(
+        "start",
+        help="Activate a task and set up its git worktree/branch",
+        description="""
+Start working on a task. This command automates the following workflow:
+  1. Marks the task (identified by its slug) as ACTIVE in the task manager.
+     If no slug is provided, prompts you to select one from pending tasks.
+  2. Creates a new git branch named 'issue/<slug>' (branched from main/current).
+  3. Creates and checks out a new git worktree located at '.gwt/<slug>'.
+  4. If --agent is specified:
+     - If it matches a template in '.ta/agents/<agent_name>/meta.toml',
+       creates a dedicated per-task agent user 'agent-<slug>-<agent_name>'.
+     - Otherwise, configures worktree permissions for an existing agent user.
+  5. If --run is specified, immediately runs the sidecar worker on the worktree.
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    start_parser.add_argument(
+        "slug", nargs="?", help="Slug or partial slug of the task to start"
+    )
     start_parser.add_argument(
         "--run", action="store_true", help="Immediately run the sidecar worker"
     )
@@ -3140,7 +3357,9 @@ def main():
     elif args.command == "demote":
         cmd_demote(console, manager, args.slug)
     elif args.command == "active":
-        cmd_active(console, manager, args.slug)
+        cmd_active(console, manager, args.slug, list_if_none=True)
+    elif args.command == "update":
+        cmd_update(console, manager, args.slug, depends_on=args.depends_on)
     elif args.command == "start":
         cmd_start(console, manager, args.slug, run=args.run, agent_name=args.agent)
     elif args.command == "run":

@@ -35,6 +35,36 @@ class TaskAgent:
         except subprocess.CalledProcessError:
             return None
 
+    @staticmethod
+    def _check_dependency_cycle(
+        issues: List[Issue], target_slug: str, new_deps: List[str]
+    ) -> bool:
+        """Check if adding new_deps to target_slug creates a cycle.
+
+        Returns True if a cycle is detected, False otherwise.
+        """
+        dep_map = {i.slug: list(i.dependencies) for i in issues}
+        dep_map[target_slug] = list(new_deps)
+        visited = {}  # None: unvisited, 0: visiting, 1: visited
+
+        def has_cycle(node: str) -> bool:
+            visited[node] = 0
+            for neighbor in dep_map.get(node, []):
+                state = visited.get(neighbor)
+                if state == 0:
+                    return True
+                elif state is None:
+                    if has_cycle(neighbor):
+                        return True
+            visited[node] = 1
+            return False
+
+        for node in dep_map:
+            if visited.get(node) is None:
+                if has_cycle(node):
+                    return True
+        return False
+
     @property
     def is_dual_repo(self) -> bool:
         """Check if mission files live in a different repo than the code."""
@@ -1019,10 +1049,27 @@ class TaskAgent:
         if not issue_file:
             raise FileNotFoundError(f"Issue '{slug}' not found.")
 
+        # Extract temporary deps from new content to validate them
+        match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
+        new_deps = []
+        if match:
+            new_deps = [d.strip() for d in match.group(1).split(",") if d.strip()]
+
+        if slug in new_deps:
+            raise ValueError("A task cannot depend on itself.")
+
+        issues = self.load_mission()
+        existing_slugs = {i.slug for i in issues}
+        for dep in new_deps:
+            if dep not in existing_slugs:
+                raise ValueError(f"Dependency task '{dep}' does not exist.")
+
+        if self._check_dependency_cycle(issues, slug, new_deps):
+            raise ValueError("Adding these dependencies would introduce a cycle.")
+
         issue_file.write_text(content, encoding="utf-8")
 
         # Re-extract name and deps in case they changed
-        issues = self.load_mission()
         updated = False
         for i in issues:
             if i.slug == slug:
@@ -1040,7 +1087,87 @@ class TaskAgent:
                 return i
 
         # If it was completed, it's not in mission.usv
-        return Issue(name=self.extract_title(issue_file), slug=slug, status="completed")
+        return Issue(
+            name=self.extract_title(issue_file),
+            slug=slug,
+            dependencies=self.extract_deps(issue_file),
+            status="completed",
+        )
+
+    def update_dependencies(self, slug: str, depends_on: str) -> Issue:
+        """Update dependencies of an issue."""
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+
+        # Parse new dependencies
+        new_deps = [d.strip() for d in depends_on.split(",") if d.strip()]
+
+        if slug in new_deps:
+            raise ValueError("A task cannot depend on itself.")
+
+        issues = self.load_mission()
+        existing_slugs = {i.slug for i in issues}
+        for dep in new_deps:
+            if dep not in existing_slugs:
+                raise ValueError(f"Dependency task '{dep}' does not exist.")
+
+        # Check for cycles
+        if self._check_dependency_cycle(issues, slug, new_deps):
+            raise ValueError("Adding these dependencies would introduce a cycle.")
+
+        # Update Markdown content
+        content = issue_file.read_text(encoding="utf-8")
+        if re.search(r"\*\*Depends on:\*\*\s*(.*)", content):
+            if new_deps:
+                content = re.sub(
+                    r"\*\*Depends on:\*\*\s*(.*)",
+                    f"**Depends on:** {', '.join(new_deps)}",
+                    content,
+                )
+            else:
+                # Remove the line and any trailing blank lines
+                content = re.sub(r"\*\*Depends on:\*\*\s*(.*)\n*", "", content)
+        else:
+            if new_deps:
+                # Insert it right after the H1 title
+                lines = content.splitlines()
+                inserted = False
+                for idx, line in enumerate(lines):
+                    if line.strip().startswith("# "):
+                        lines.insert(idx + 1, "")
+                        lines.insert(idx + 2, f"**Depends on:** {', '.join(new_deps)}")
+                        inserted = True
+                        break
+                if inserted:
+                    content = "\n".join(lines) + "\n"
+                else:
+                    content = f"**Depends on:** {', '.join(new_deps)}\n\n" + content
+
+        issue_file.write_text(content, encoding="utf-8")
+
+        # Sync and reload
+        updated = False
+        for i in issues:
+            if i.slug == slug:
+                i.dependencies = new_deps
+                updated = True
+                break
+
+        if updated:
+            self.save_mission(issues)
+
+        # Return the updated issue object
+        for i in issues:
+            if i.slug == slug:
+                return i
+
+        return Issue(
+            name=self.extract_title(issue_file),
+            slug=slug,
+            dependencies=new_deps,
+            status="completed",
+        )
 
     def ingest_issues(self) -> Tuple[int, int]:
         """Ingest existing markdown files. Returns (num_new, num_removed)."""

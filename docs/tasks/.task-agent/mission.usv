@@ -1,6 +1,8 @@
-Add --post-setup hook to ta init-agent for per-repo secretsadd-post-setup-hook-to-ta-init-agent-for-per-repo-secrets
+Allow editing task dependencies in task-agent CLI and MCPallow-editing-task-dependencies-in-task-agent-cli-and-mcp
+Add date created to `ta list` and `ta prior`add-date-created-to-ta-list-and-ta-prior
 Fix ta done pre-commit hook timeout killing process before commit finishesfix-ta-done-pre-commit-hook-timeout-killing-process-before-commit-finishes
 Implement op:// 1Password secret resolution for template dotfilesimplement-op-1password-secret-resolution-for-template-dotfiles
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
+Create agy-cli agent workflow template with validator verificationcreate-agy-cli-agent-workflow-template-with-validator-verification
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders

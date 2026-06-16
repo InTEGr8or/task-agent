@@ -159,8 +159,48 @@ def test_mcp_commit_tasks_success():
         assert "Committed: test commit" in result
 
 
+def test_mcp_list_active_tasks(monkeypatch):
+    class DummyIssue:
+        def __init__(self, priority, status, name, dependencies=None):
+            self.priority = priority
+            self.status = status
+            self.name = name
+            self.dependencies = dependencies or []
+
+    class DummyManager:
+        def sync_mission(self):
+            return [
+                DummyIssue(1, "active", "Task 1"),
+                DummyIssue(2, "pending", "Task 2"),
+                DummyIssue(3, "active", "Task 3", ["Task 1"]),
+            ]
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.list_active_tasks()
+    assert "[1] ACTIVE: Task 1" in result
+    assert "Task 2" not in result
+    assert "[3] ACTIVE: Task 3 (depends on: Task 1)" in result
+
+
+def test_mcp_update_task_dependencies(monkeypatch):
+    called = []
+
+    class DummyManager:
+        def slugify(self, name):
+            return name.lower().replace(" ", "-")
+
+        def update_dependencies(self, slug, depends_on):
+            called.append((slug, depends_on))
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.update_task_dependencies("Task One", "task-two,task-three")
+    assert result == "Successfully updated dependencies for task 'task-one'."
+    assert called == [("task-one", "task-two,task-three")]
+
+
 EXPECTED_TOOLS = {
     "list_tasks",
+    "list_active_tasks",
     "create_task",
     "promote_task",
     "demote_task",
@@ -170,6 +210,7 @@ EXPECTED_TOOLS = {
     "restore_task",
     "get_task_details",
     "update_task",
+    "update_task_dependencies",
     "commit_repo",
     "commit_tasks",
 }

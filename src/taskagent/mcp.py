@@ -38,6 +38,22 @@ def list_tasks() -> str:
 
 
 @mcp.tool()
+def list_active_tasks() -> str:
+    """List only the currently active tasks in the mission queue."""
+    manager = get_manager()
+    issues = manager.sync_mission()
+    active_issues = [i for i in issues if i.status == "active"]
+    if not active_issues:
+        return "No active tasks found."
+
+    lines = []
+    for i in active_issues:
+        deps = f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
+        lines.append(f"[{i.priority}] ACTIVE: {i.name}{deps}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def create_task(
     title: str,
     completion_criteria: str,
@@ -224,6 +240,23 @@ def update_task(name: str, content: str) -> str:
         return f"Successfully updated task '{slug}'."
     except Exception as e:
         return f"Error updating task: {e}"
+
+
+@mcp.tool()
+def update_task_dependencies(name: str, depends_on: str) -> str:
+    """Update the dependencies of a task.
+
+    Args:
+        name: The title or partial name of the task to update.
+        depends_on: Comma-separated list of task slugs this task depends on (use empty string to clear).
+    """
+    manager = get_manager()
+    slug = manager.slugify(name)
+    try:
+        manager.update_dependencies(slug, depends_on)
+        return f"Successfully updated dependencies for task '{slug}'."
+    except Exception as e:
+        return f"Error updating task dependencies: {e}"
 
 
 @mcp.tool()

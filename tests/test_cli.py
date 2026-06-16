@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from taskagent.cli import (
     cmd_new,
     cmd_done,
@@ -285,3 +286,80 @@ def test_cmd_init_mcp_claude(tmp_path):
         assert call_args[4] == "--"
         assert call_args[5] == "uv"
         assert "run" in call_args
+
+
+def test_detect_current_slug_from_git():
+    from unittest.mock import patch, MagicMock
+    from taskagent.cli import detect_current_slug_from_git
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="issue/my-cool-task\n", returncode=0)
+        assert detect_current_slug_from_git() == "my-cool-task"
+
+        mock_run.return_value = MagicMock(stdout="main\n", returncode=0)
+        assert detect_current_slug_from_git() is None
+
+        mock_run.side_effect = Exception("git failed")
+        assert detect_current_slug_from_git() is None
+
+
+def test_find_worktree_path_for_slug(tmp_path):
+    from unittest.mock import patch, MagicMock
+    from taskagent.cli import find_worktree_path_for_slug
+
+    with patch("subprocess.run") as mock_run:
+        mock_output = (
+            "worktree /path/to/main-repo\n"
+            "branch refs/heads/main\n"
+            "\n"
+            "worktree /path/to/worktrees/some-slug\n"
+            "branch refs/heads/issue/some-slug\n"
+        )
+        mock_run.return_value = MagicMock(stdout=mock_output, returncode=0)
+        assert find_worktree_path_for_slug("some-slug") == Path(
+            "/path/to/worktrees/some-slug"
+        )
+        assert find_worktree_path_for_slug("other-slug") is None
+
+
+def test_cmd_done_cleanup(manager, temp_issues_dir, tmp_path):
+    from unittest.mock import patch
+    from taskagent.cli import cmd_done
+
+    console = Console()
+    cmd_new(console, manager, "Done Clean Task", "Body", draft=False)
+
+    # Let's mock subprocess.run to simulate:
+    # 1. find_worktree_path_for_slug finds a registered worktree under tmp_path
+    # 2. CWD is NOT inside the worktree
+    # 3. Removing the worktree and branch succeeds
+    worktree_mock_path = tmp_path / "gwt-mock"
+    worktree_mock_path.mkdir()
+
+    mock_worktree_output = (
+        f"worktree {worktree_mock_path}\nbranch refs/heads/issue/done-clean-task\n"
+    )
+
+    def mock_run(cmd, **kwargs):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+
+        class MockCompletedProcess:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        res = MockCompletedProcess()
+        if "worktree list" in cmd_str:
+            res.stdout = mock_worktree_output
+        elif "worktree remove" in cmd_str:
+            # Delete mock directory to simulate success
+            import shutil
+
+            shutil.rmtree(worktree_mock_path)
+        elif "rev-parse" in cmd_str:
+            res.stdout = "abcdef12"
+        return res
+
+    with patch("subprocess.run", side_effect=mock_run):
+        cmd_done(console, manager, "done-clean-task", should_commit=False)
+        assert not worktree_mock_path.exists()

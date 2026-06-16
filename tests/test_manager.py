@@ -353,3 +353,34 @@ def test_api_soft_delete(manager):
     # Should be removed from mission
     issues = manager.load_mission()
     assert not any(i.slug == "delete-me" for i in issues)
+
+
+def test_api_update_dependencies(manager):
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+    manager.create_issue("Task C")
+
+    # Update dependencies of B to depend on A
+    manager.update_dependencies("task-b", "task-a")
+    issue_file = manager.find_issue_file("task-b")
+    assert manager.extract_deps(issue_file) == ["task-a"]
+
+    # Try updating B to depend on C and A
+    manager.update_dependencies("task-b", "task-c, task-a")
+    assert manager.extract_deps(issue_file) == ["task-c", "task-a"]
+
+    # Try introducing a self-loop (should fail)
+    with pytest.raises(ValueError, match="cannot depend on itself"):
+        manager.update_dependencies("task-b", "task-b")
+
+    # Try introducing a cycle: A depends on B (B already depends on A)
+    with pytest.raises(ValueError, match="introduce a cycle"):
+        manager.update_dependencies("task-a", "task-b")
+
+    # Try updating with non-existent task
+    with pytest.raises(ValueError, match="does not exist"):
+        manager.update_dependencies("task-b", "non-existent-task")
+
+    # Clear dependencies
+    manager.update_dependencies("task-b", "")
+    assert manager.extract_deps(issue_file) == []
