@@ -3,8 +3,8 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def clean_git_env(monkeypatch):
-    """Remove all git-related environment variables from the test process to prevent leakage."""
+def clean_test_env(monkeypatch):
+    """Remove git and task-agent environment variables from the test process to prevent leakage."""
     for key in list(os.environ.keys()):
-        if key.startswith("GIT_"):
+        if key.startswith("GIT_") or key.startswith("TA_"):
             monkeypatch.delenv(key, raising=False)
