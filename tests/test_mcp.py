@@ -219,8 +219,8 @@ def test_mcp_list_tasks_with_strategy(mock_manager):
     )
 
     result = mcp.list_tasks()
-    assert "=== PROJECT STRATEGY: Core Strategy ===" in result
-    assert "Focus on quality." in result
+    assert "> 📐 **Core Strategy**" in result
+    assert "> Focus on quality." in result
     assert "[1] PENDING: Task 1" in result
     mock_manager.update_strategy_last_shown.assert_called_once()
 
@@ -232,7 +232,7 @@ def test_mcp_list_tasks_without_strategy(mock_manager):
     mock_manager.should_show_strategy.return_value = False
 
     result = mcp.list_tasks()
-    assert "=== PROJECT STRATEGY" not in result
+    assert "> 📐" not in result
     assert "[1] PENDING: Task 1" in result
 
 

@@ -382,14 +382,14 @@ def maybe_show_strategy(console: Console, manager: TaskAgent) -> bool:
     else:
         subtitle = "ta strategy"
 
-    panel = Panel(
-        Markdown(body),
-        title=f"[bold blue]📐 {title}[/bold blue]",
-        subtitle=f"[dim]{subtitle}[/dim]",
-        border_style="blue",
-        padding=(1, 2),
-    )
-    console.print(panel)
+    # Construct a clean Markdown blockquote
+    lines = [f"> 📐 **{title}**", ">"]
+    for line in body.split("\n"):
+        lines.append(f"> {line}")
+    lines.append(">")
+    lines.append(f"> *{subtitle}*")
+
+    console.print(Markdown("\n".join(lines)))
     console.print()
     manager.update_strategy_last_shown()
     return True
@@ -440,16 +440,17 @@ def cmd_strategy(
     meta = manager.get_strategy_meta()
     last_shown = meta.get("last_shown_at", "never")
 
-    panel = Panel(
-        Markdown(body)
-        if body
-        else "[dim]Empty strategy — edit it with: ta strategy edit[/dim]",
-        title=f"[bold blue]📐 {title}[/bold blue]",
-        subtitle=f"[dim]last shown: {last_shown} · ta strategy edit[/dim]",
-        border_style="blue",
-        padding=(1, 2),
-    )
-    console.print(panel)
+    # Construct a clean Markdown blockquote
+    lines = [f"> 📐 **{title}**", ">"]
+    if body:
+        for line in body.split("\n"):
+            lines.append(f"> {line}")
+    else:
+        lines.append("> *Empty strategy — edit it with: ta strategy edit*")
+    lines.append(">")
+    lines.append(f"> *last shown: {last_shown} · ta strategy edit*")
+
+    console.print(Markdown("\n".join(lines)))
 
 
 def cmd_next(console: Console, manager: TaskAgent):

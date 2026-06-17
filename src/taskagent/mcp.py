@@ -45,7 +45,11 @@ def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
                 ):
                     if hasattr(manager, "update_strategy_last_shown"):
                         manager.update_strategy_last_shown()
-                    prefix = f"=== PROJECT STRATEGY: {title} ===\n{body}\n=================================\n\n"
+                    # Construct clean Markdown blockquote for LLM/agent
+                    strategy_lines = [f"> 📐 **{title}**", ">"]
+                    for line in body.split("\n"):
+                        strategy_lines.append(f"> {line}")
+                    prefix = "\n".join(strategy_lines) + "\n\n"
                     return prefix + response
     return response
 
