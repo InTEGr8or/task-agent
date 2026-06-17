@@ -363,3 +363,66 @@ def test_cmd_done_cleanup(manager, temp_issues_dir, tmp_path):
     with patch("subprocess.run", side_effect=mock_run):
         cmd_done(console, manager, "done-clean-task", should_commit=False)
         assert not worktree_mock_path.exists()
+
+
+def test_maybe_show_strategy(manager):
+    from taskagent.cli import maybe_show_strategy
+
+    console = Console()
+
+    # 1. No strategy defined -> should return False
+    assert not maybe_show_strategy(console, manager)
+
+    # 2. Strategy initialized but has default starter content -> should return False
+    manager.init_strategy()
+    assert not maybe_show_strategy(console, manager)
+
+    # 3. Strategy has real content -> should return True
+    manager.strategy_file.write_text(
+        "# Real Strategy\nSome real strategic goals.", encoding="utf-8"
+    )
+    assert maybe_show_strategy(console, manager)
+
+    # 4. Strategy within cooldown -> should return False
+    assert not maybe_show_strategy(console, manager)
+
+
+def test_cmd_strategy(manager, monkeypatch):
+    from taskagent.cli import cmd_strategy
+
+    console = Console()
+
+    # Test action=None (view) when not initialized
+    # Should print message "No strategy defined yet"
+    with console.capture() as capture:
+        cmd_strategy(console, manager, action=None)
+    assert "No strategy defined yet" in capture.get()
+
+    # Test action="init"
+    with console.capture() as capture:
+        cmd_strategy(console, manager, action="init")
+    assert "Strategy initialized:" in capture.get()
+    assert manager.strategy_file.exists()
+
+    # Test action="edit"
+    import subprocess
+    import taskagent.cli as cli_module
+
+    called_run = []
+
+    def mock_run(args, **kwargs):
+        called_run.append(args)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(cli_module, "get_editor", lambda: "nano")
+
+    with console.capture() as capture:
+        cmd_strategy(console, manager, action="edit")
+    assert "Strategy updated." in capture.get()
+    assert len(called_run) == 1
+    assert called_run[0] == ["nano", str(manager.strategy_file)]
+
+    # Test action=None (view) after initialization
+    with console.capture() as capture:
+        cmd_strategy(console, manager, action=None)
+    assert "Strategy" in capture.get()

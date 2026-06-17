@@ -384,3 +384,62 @@ def test_api_update_dependencies(manager):
     # Clear dependencies
     manager.update_dependencies("task-b", "")
     assert manager.extract_deps(issue_file) == []
+
+
+def test_get_strategy_returns_none_when_no_file(manager):
+    assert manager.get_strategy() is None
+
+
+def test_get_strategy_reads_content(manager):
+    manager.strategy_dir.mkdir(parents=True, exist_ok=True)
+    manager.strategy_file.write_text("# Test Strategy\nContent here", encoding="utf-8")
+    assert manager.get_strategy() == "# Test Strategy\nContent here"
+
+
+def test_strategy_meta_roundtrip(manager):
+    assert manager.get_strategy_meta() == {}
+    manager.update_strategy_last_shown()
+    meta = manager.get_strategy_meta()
+    assert "last_shown_at" in meta
+    # Try parsing it
+    datetime.fromisoformat(meta["last_shown_at"])
+
+
+def test_should_show_strategy_no_file_returns_false(manager):
+    assert not manager.should_show_strategy()
+
+
+def test_should_show_strategy_first_time_returns_true(manager):
+    manager.init_strategy()
+    assert manager.should_show_strategy()
+
+
+def test_should_show_strategy_within_cooldown_returns_false(manager):
+    manager.init_strategy()
+    manager.update_strategy_last_shown()
+    assert not manager.should_show_strategy()
+
+
+def test_should_show_strategy_after_cooldown_returns_true(manager):
+    from datetime import datetime as dt, timedelta
+    import json
+
+    manager.init_strategy()
+    # Mock last shown far in the past
+    past_time = dt.now() - timedelta(hours=3)
+    manager.strategy_dir.mkdir(parents=True, exist_ok=True)
+    with manager.strategy_meta_file.open("w", encoding="utf-8") as f:
+        json.dump({"last_shown_at": past_time.isoformat()}, f)
+    assert manager.should_show_strategy(cooldown_hours=2.0)
+    assert not manager.should_show_strategy(cooldown_hours=4.0)
+
+
+def test_init_strategy_creates_files(manager):
+    assert not manager.strategy_dir.exists()
+    assert not manager.strategy_file.exists()
+    path = manager.init_strategy()
+    assert path == manager.strategy_file
+    assert manager.strategy_dir.exists()
+    assert manager.strategy_file.exists()
+    content = manager.strategy_file.read_text(encoding="utf-8")
+    assert "# Strategy" in content

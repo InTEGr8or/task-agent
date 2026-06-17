@@ -332,8 +332,129 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         console.print(md)
 
 
+def maybe_show_strategy(console: Console, manager: TaskAgent) -> bool:
+    """Show the project strategy panel if the cooldown has elapsed.
+
+    Returns True if the strategy was displayed.
+    """
+    if not manager.should_show_strategy():
+        return False
+
+    content = manager.get_strategy()
+    if not content:
+        return False
+
+    # Strip the H1 header if present — we use it as the panel title instead
+    lines = content.split("\n")
+    title = "Strategy"
+    body_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# ") and title == "Strategy":
+            title = stripped.lstrip("# ").strip()
+            continue
+        # Skip HTML comments (the hint comment)
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        body_lines.append(line)
+
+    body = "\n".join(body_lines).strip()
+    if not body or body == "_Define the current strategic direction for this project._":
+        return False
+
+    meta = manager.get_strategy_meta()
+    last_shown = meta.get("last_shown_at", "never")
+    if last_shown != "never":
+        try:
+            from datetime import datetime as dt
+
+            last_dt = dt.fromisoformat(last_shown)
+            elapsed = (dt.now() - last_dt).total_seconds()
+            if elapsed < 3600:
+                age = f"{int(elapsed / 60)}m ago"
+            elif elapsed < 86400:
+                age = f"{int(elapsed / 3600)}h ago"
+            else:
+                age = f"{int(elapsed / 86400)}d ago"
+            subtitle = f"last shown {age} · ta strategy"
+        except Exception:
+            subtitle = "ta strategy"
+    else:
+        subtitle = "ta strategy"
+
+    panel = Panel(
+        Markdown(body),
+        title=f"[bold blue]📐 {title}[/bold blue]",
+        subtitle=f"[dim]{subtitle}[/dim]",
+        border_style="blue",
+        padding=(1, 2),
+    )
+    console.print(panel)
+    console.print()
+    manager.update_strategy_last_shown()
+    return True
+
+
+def cmd_strategy(
+    console: Console,
+    manager: TaskAgent,
+    action: Optional[str] = None,
+):
+    """View, edit, or initialize the project strategy."""
+    if action == "init":
+        path = manager.init_strategy()
+        console.print(f"[bold green]Strategy initialized:[/bold green] {path}")
+        console.print("[dim]Edit it with: ta strategy edit[/dim]")
+        return
+
+    if action == "edit":
+        path = manager.init_strategy()
+        editor = get_editor()
+        subprocess.run([editor, str(path)])
+        console.print("[bold green]Strategy updated.[/bold green]")
+        return
+
+    # Default: view
+    content = manager.get_strategy()
+    if not content:
+        console.print(
+            "[yellow]No strategy defined yet.[/yellow]\n"
+            "[dim]Run [bold]ta strategy init[/bold] to create one.[/dim]"
+        )
+        return
+
+    lines = content.split("\n")
+    title = "Strategy"
+    body_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# ") and title == "Strategy":
+            title = stripped.lstrip("# ").strip()
+            continue
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        body_lines.append(line)
+
+    body = "\n".join(body_lines).strip()
+
+    meta = manager.get_strategy_meta()
+    last_shown = meta.get("last_shown_at", "never")
+
+    panel = Panel(
+        Markdown(body)
+        if body
+        else "[dim]Empty strategy — edit it with: ta strategy edit[/dim]",
+        title=f"[bold blue]📐 {title}[/bold blue]",
+        subtitle=f"[dim]last shown: {last_shown} · ta strategy edit[/dim]",
+        border_style="blue",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+
 def cmd_next(console: Console, manager: TaskAgent):
     """Show the top issue."""
+    maybe_show_strategy(console, manager)
     next_issue = manager.get_next_issue()
     if not next_issue:
         console.print(f"[yellow]No issues found in {manager.mission_path}[/yellow]")
@@ -1405,6 +1526,8 @@ def cmd_list(
     output_format: str = "table",
 ):
     """List all issues in mission.usv."""
+    if output_format == "table":
+        maybe_show_strategy(console, manager)
     issues = manager.sync_mission()
     if not issues:
         if output_format == "json":
@@ -1555,6 +1678,8 @@ def cmd_active(
 ) -> Optional[Issue]:
     """Move an issue to active status, or list active tasks."""
     issues = manager.load_mission()
+    if not slug_part and list_if_none and not silent:
+        maybe_show_strategy(console, manager)
     if not slug_part and list_if_none:
         active_issues = [i for i in issues if i.status == "active"]
         if not silent:
@@ -3207,6 +3332,31 @@ Start working on a task. This command automates the following workflow:
     # plan
     subparsers.add_parser("plan", help="View or edit the project plan")
 
+    # strategy
+    strategy_parser = subparsers.add_parser(
+        "strategy",
+        help="View, edit, or initialize the project strategy",
+        description="""
+Manage the project's strategic direction document.
+
+The strategy is a concise statement of the project's current direction, goals,
+and priorities. It is displayed periodically at the top of 'list', 'next', and
+'active' commands to keep all workers aligned.
+
+Usage:
+  ta strategy          View the current strategy
+  ta strategy edit     Open the strategy in your $EDITOR
+  ta strategy init     Create a starter strategy file
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    strategy_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["edit", "init"],
+        help="Action to perform (default: view)",
+    )
+
     # push
     subparsers.add_parser("push", help="Push the mission repository to origin")
 
@@ -3389,6 +3539,8 @@ Start working on a task. This command automates the following workflow:
         cmd_push(console, manager)
     elif args.command == "plan":
         cmd_plan(console, manager)
+    elif args.command == "strategy":
+        cmd_strategy(console, manager, action=args.action)
     elif args.command == "commit":
         if args.target == "repo":
             cmd_commit(console, manager, message=args.message, should_push=args.push)

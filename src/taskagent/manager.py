@@ -1210,3 +1210,84 @@ class TaskAgent:
         self.sync_mission()
 
         return len(new_issues), len(existing_issues) - len(present_issues)
+
+    # ── Strategy ─────────────────────────────────────────────────────
+
+    @property
+    def strategy_dir(self) -> Path:
+        """Path to the strategy directory."""
+        return self.issues_root / "strategy"
+
+    @property
+    def strategy_file(self) -> Path:
+        """Path to the strategy README."""
+        return self.strategy_dir / "README.md"
+
+    @property
+    def strategy_meta_file(self) -> Path:
+        """Path to the strategy metadata file."""
+        return self.strategy_dir / ".meta.json"
+
+    def get_strategy(self) -> Optional[str]:
+        """Read the strategy content. Returns None if no strategy file exists."""
+        if not self.strategy_file.exists():
+            return None
+        try:
+            content = self.strategy_file.read_text(encoding="utf-8").strip()
+            return content if content else None
+        except Exception:
+            return None
+
+    def get_strategy_meta(self) -> dict:
+        """Read strategy metadata (last_shown_at, cooldown_hours)."""
+        if not self.strategy_meta_file.exists():
+            return {}
+        try:
+            with self.strategy_meta_file.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def update_strategy_last_shown(self) -> None:
+        """Update the timestamp of when the strategy was last displayed."""
+        self.strategy_dir.mkdir(parents=True, exist_ok=True)
+        meta = self.get_strategy_meta()
+        meta["last_shown_at"] = datetime.now().isoformat()
+        with self.strategy_meta_file.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    def should_show_strategy(self, cooldown_hours: float = 2.0) -> bool:
+        """Check if enough time has elapsed to display the strategy again.
+
+        Returns True if:
+        - A strategy file exists with content, AND
+        - The strategy has never been shown, OR
+        - At least `cooldown_hours` have passed since last shown.
+        """
+        content = self.get_strategy()
+        if not content:
+            return False
+
+        meta = self.get_strategy_meta()
+        last_shown = meta.get("last_shown_at")
+        if not last_shown:
+            return True
+
+        try:
+            last_dt = datetime.fromisoformat(last_shown)
+            elapsed = (datetime.now() - last_dt).total_seconds()
+            return elapsed >= cooldown_hours * 3600
+        except (ValueError, TypeError):
+            return True
+
+    def init_strategy(self) -> Path:
+        """Create the strategy directory and a starter README if it doesn't exist."""
+        self.strategy_dir.mkdir(parents=True, exist_ok=True)
+        if not self.strategy_file.exists():
+            self.strategy_file.write_text(
+                "# Strategy\n\n"
+                "_Define the current strategic direction for this project._\n\n"
+                "<!-- Keep this concise — it will be displayed periodically in CLI output. -->\n",
+                encoding="utf-8",
+            )
+        return self.strategy_file

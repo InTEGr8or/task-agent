@@ -17,6 +17,63 @@ def get_manager() -> TaskAgent:
     return discover()
 
 
+def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
+    """If the strategy cooldown has elapsed, prepend the strategy to the response."""
+    if hasattr(manager, "should_show_strategy") and manager.should_show_strategy():
+        if hasattr(manager, "get_strategy"):
+            strategy = manager.get_strategy()
+            if strategy:
+                # Strip the H1 header if present — we want to keep it clean and concise
+                lines = strategy.split("\n")
+                title = "Strategy"
+                body_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("# ") and title == "Strategy":
+                        title = stripped.lstrip("# ").strip()
+                        continue
+                    # Skip HTML comments (the hint comment)
+                    if stripped.startswith("<!--") and stripped.endswith("-->"):
+                        continue
+                    body_lines.append(line)
+
+                body = "\n".join(body_lines).strip()
+                if (
+                    body
+                    and body
+                    != "_Define the current strategic direction for this project._"
+                ):
+                    if hasattr(manager, "update_strategy_last_shown"):
+                        manager.update_strategy_last_shown()
+                    prefix = f"=== PROJECT STRATEGY: {title} ===\n{body}\n=================================\n\n"
+                    return prefix + response
+    return response
+
+
+@mcp.tool()
+def get_strategy() -> str:
+    """Retrieve the current project strategy statement.
+
+    This provides high-level principles, constraints, or goals that should guide development.
+    """
+    manager = get_manager()
+    if not hasattr(manager, "get_strategy"):
+        return "No strategy defined yet."
+    strategy = manager.get_strategy()
+    if not strategy:
+        return "No strategy defined yet."
+
+    # Strip HTML comments for the tool output to keep it clean
+    lines = strategy.split("\n")
+    body_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        body_lines.append(line)
+    return "\n".join(body_lines).strip()
+
+
 @mcp.tool()
 def list_tasks() -> str:
     """List all tasks in the current project's mission queue.
@@ -28,13 +85,16 @@ def list_tasks() -> str:
     manager = get_manager()
     issues = manager.sync_mission()
     if not issues:
-        return "No tasks found in the queue."
-
-    lines = []
-    for i in issues:
-        deps = f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
-        lines.append(f"[{i.priority}] {i.status.upper()}: {i.name}{deps}")
-    return "\n".join(lines)
+        res = "No tasks found in the queue."
+    else:
+        lines = []
+        for i in issues:
+            deps = (
+                f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
+            )
+            lines.append(f"[{i.priority}] {i.status.upper()}: {i.name}{deps}")
+        res = "\n".join(lines)
+    return _maybe_prepend_strategy(manager, res)
 
 
 @mcp.tool()
@@ -44,13 +104,16 @@ def list_active_tasks() -> str:
     issues = manager.sync_mission()
     active_issues = [i for i in issues if i.status == "active"]
     if not active_issues:
-        return "No active tasks found."
-
-    lines = []
-    for i in active_issues:
-        deps = f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
-        lines.append(f"[{i.priority}] ACTIVE: {i.name}{deps}")
-    return "\n".join(lines)
+        res = "No active tasks found."
+    else:
+        lines = []
+        for i in active_issues:
+            deps = (
+                f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
+            )
+            lines.append(f"[{i.priority}] ACTIVE: {i.name}{deps}")
+        res = "\n".join(lines)
+    return _maybe_prepend_strategy(manager, res)
 
 
 @mcp.tool()

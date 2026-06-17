@@ -8,6 +8,7 @@ from taskagent.models.issue import Issue
 def mock_manager():
     with patch("taskagent.mcp.get_manager") as mock:
         manager = MagicMock()
+        manager.should_show_strategy.return_value = False
         mock.return_value = manager
         yield manager
 
@@ -198,6 +199,43 @@ def test_mcp_update_task_dependencies(monkeypatch):
     assert called == [("task-one", "task-two,task-three")]
 
 
+def test_mcp_get_strategy(mock_manager):
+    mock_manager.get_strategy.return_value = None
+    assert mcp.get_strategy() == "No strategy defined yet."
+
+    mock_manager.get_strategy.return_value = (
+        "# Core Strategy\n<!-- comment -->\nFocus on quality."
+    )
+    assert mcp.get_strategy() == "# Core Strategy\nFocus on quality."
+
+
+def test_mcp_list_tasks_with_strategy(mock_manager):
+    mock_manager.sync_mission.return_value = [
+        Issue(name="Task 1", slug="task-1", status="pending", priority=1)
+    ]
+    mock_manager.should_show_strategy.return_value = True
+    mock_manager.get_strategy.return_value = (
+        "# Core Strategy\n<!-- comment -->\nFocus on quality."
+    )
+
+    result = mcp.list_tasks()
+    assert "=== PROJECT STRATEGY: Core Strategy ===" in result
+    assert "Focus on quality." in result
+    assert "[1] PENDING: Task 1" in result
+    mock_manager.update_strategy_last_shown.assert_called_once()
+
+
+def test_mcp_list_tasks_without_strategy(mock_manager):
+    mock_manager.sync_mission.return_value = [
+        Issue(name="Task 1", slug="task-1", status="pending", priority=1)
+    ]
+    mock_manager.should_show_strategy.return_value = False
+
+    result = mcp.list_tasks()
+    assert "=== PROJECT STRATEGY" not in result
+    assert "[1] PENDING: Task 1" in result
+
+
 EXPECTED_TOOLS = {
     "list_tasks",
     "list_active_tasks",
@@ -213,6 +251,7 @@ EXPECTED_TOOLS = {
     "update_task_dependencies",
     "commit_repo",
     "commit_tasks",
+    "get_strategy",
 }
 
 
