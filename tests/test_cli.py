@@ -426,3 +426,35 @@ def test_cmd_strategy(manager, monkeypatch):
     with console.capture() as capture:
         cmd_strategy(console, manager, action=None)
     assert "Strategy" in capture.get()
+
+
+def test_get_created_date(manager):
+    from taskagent.cli import get_created_date
+
+    manager.create_issue("Date Task")
+    # Date should be a string containing year/month/day
+    date_str = get_created_date(manager, "date-task")
+    assert date_str != "unknown"
+    assert len(date_str) == 16  # YYYY-MM-DD HH:MM
+
+    # Non-existent task should return "unknown"
+    assert get_created_date(manager, "non-existent") == "unknown"
+
+
+def test_cmd_list_includes_date(manager):
+    from taskagent.cli import cmd_list
+    import io
+    import json
+    from contextlib import redirect_stdout
+
+    console = Console()
+    manager.create_issue("Date Task")
+
+    f = io.StringIO()
+    with redirect_stdout(f):
+        cmd_list(console, manager, output_format="json")
+
+    data = json.loads(f.getvalue())
+    assert len(data) == 1
+    assert "created" in data[0]
+    assert len(data[0]["created"]) == 16

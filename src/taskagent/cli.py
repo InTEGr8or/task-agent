@@ -332,6 +332,20 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         console.print(md)
 
 
+def get_created_date(manager: TaskAgent, slug: str) -> str:
+    """Get the creation/modification date of a task file."""
+    try:
+        issue_file = manager.find_issue_file(slug, include_completed=True)
+        if issue_file and issue_file.exists():
+            stat = issue_file.stat()
+            birthtime = getattr(stat, "st_birthtime", None)
+            t = birthtime if birthtime is not None else stat.st_mtime
+            return datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return "unknown"
+
+
 def maybe_show_strategy(console: Console, manager: TaskAgent) -> bool:
     """Show the project strategy panel if the cooldown has elapsed.
 
@@ -1605,6 +1619,7 @@ def cmd_list(
             data.append(
                 {
                     "priority": i.priority,
+                    "created": get_created_date(manager, i.slug),
                     "status": i.status,
                     "name": i.name,
                     "slug": i.slug,
@@ -1623,13 +1638,15 @@ def cmd_list(
             deps = ",".join(i.dependencies)
             indent = "  " * depth
             prefix = "└─ " if depth > 0 else ""
+            created_date = get_created_date(manager, i.slug)
             console.print(
-                f"{i.priority:<3} {i.status:<8} {i.name:<30} {indent}{prefix}{i.slug:<30} {deps:<20} {location}"
+                f"{i.priority:<3} {created_date:<16} {i.status:<8} {i.name:<30} {indent}{prefix}{i.slug:<30} {deps:<20} {location}"
             )
         return
 
     table = Table(title="Task Queue", box=None, padding=(0, 2))
     table.add_column("Priority", justify="right", style="cyan")
+    table.add_column("Created", style="dim", width=16)
     table.add_column("Status", width=10)
     table.add_column("Slug")
 
@@ -1647,9 +1664,11 @@ def cmd_list(
         indent = "  " * depth
         prefix = "└─ " if depth > 0 else ""
         display_slug = f"{indent}{prefix}{issue.slug}"
+        created_date = get_created_date(manager, issue.slug)
 
         table.add_row(
             str(issue.priority),
+            f"[dim]{created_date}[/dim]",
             f"[{status_style}]{issue.status.upper()}[/{status_style}]",
             display_slug,
         )
@@ -2871,6 +2890,7 @@ def cmd_triage(
                 padding=(0, 2),
             )
             table.add_column("Pos", justify="right", style="dim")
+            table.add_column("Created", style="dim", width=16)
             table.add_column("Status", width=10)
             table.add_column("Slug")
 
@@ -2893,8 +2913,11 @@ def cmd_triage(
                 elif issue.status == "completed":
                     status_style = "bold blue"
 
+                created_date = get_created_date(manager, issue.slug)
+
                 table.add_row(
                     str(idx + 1) if not show_completed else "-",
+                    f"[dim]{created_date}[/dim]",
                     f"[{status_style}]{issue.status.upper()}[/{status_style}]",
                     display_slug,
                     style=style,
