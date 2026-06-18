@@ -4,5 +4,6 @@ Fix ta done pre-commit hook timeout killing process before commit finishesfix-t
 Implement op:// 1Password secret resolution for template dotfilesimplement-op-1password-secret-resolution-for-template-dotfiles
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Create agy-cli agent workflow template with validator verificationcreate-agy-cli-agent-workflow-template-with-validator-verification
+Done MCP function does not respond with a message that agents understanddone-mcp-function-does-not-respond-with-a-message-that-agents-understand
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders

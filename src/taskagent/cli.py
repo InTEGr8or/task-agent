@@ -382,14 +382,28 @@ def maybe_show_strategy(console: Console, manager: TaskAgent) -> bool:
     else:
         subtitle = "ta strategy"
 
-    # Construct a clean Markdown blockquote
-    lines = [f"> 📐 **{title}**", ">"]
-    for line in body.split("\n"):
-        lines.append(f"> {line}")
-    lines.append(">")
-    lines.append(f"> *{subtitle}*")
+    # Print the title, body (with custom theme), and subtitle
+    console.print(f"[bold blue]📐 {title}[/bold blue]")
 
-    console.print(Markdown("\n".join(lines)))
+    from rich.theme import Theme
+
+    strategy_theme = Theme(
+        {
+            "markdown.paragraph": "green",
+            "markdown.item": "green",
+            "markdown.h1": "bold blue",
+            "markdown.h2": "bold blue",
+            "markdown.h3": "bold blue",
+            "markdown.h4": "bold blue",
+            "markdown.h5": "bold blue",
+            "markdown.h6": "bold blue",
+        }
+    )
+
+    with console.use_theme(strategy_theme):
+        console.print(Markdown(body))
+
+    console.print(f"[dim]{subtitle}[/dim]")
     console.print()
     manager.update_strategy_last_shown()
     return True
@@ -440,17 +454,31 @@ def cmd_strategy(
     meta = manager.get_strategy_meta()
     last_shown = meta.get("last_shown_at", "never")
 
-    # Construct a clean Markdown blockquote
-    lines = [f"> 📐 **{title}**", ">"]
-    if body:
-        for line in body.split("\n"):
-            lines.append(f"> {line}")
-    else:
-        lines.append("> *Empty strategy — edit it with: ta strategy edit*")
-    lines.append(">")
-    lines.append(f"> *last shown: {last_shown} · ta strategy edit*")
+    # Print the title, body (with custom theme), and subtitle
+    console.print(f"[bold blue]📐 {title}[/bold blue]")
 
-    console.print(Markdown("\n".join(lines)))
+    from rich.theme import Theme
+
+    strategy_theme = Theme(
+        {
+            "markdown.paragraph": "green",
+            "markdown.item": "green",
+            "markdown.h1": "bold blue",
+            "markdown.h2": "bold blue",
+            "markdown.h3": "bold blue",
+            "markdown.h4": "bold blue",
+            "markdown.h5": "bold blue",
+            "markdown.h6": "bold blue",
+        }
+    )
+
+    if body:
+        with console.use_theme(strategy_theme):
+            console.print(Markdown(body))
+    else:
+        console.print("[dim]Empty strategy — edit it with: ta strategy edit[/dim]")
+
+    console.print(f"[dim]last shown: {last_shown} · ta strategy edit[/dim]")
 
 
 def cmd_next(console: Console, manager: TaskAgent):

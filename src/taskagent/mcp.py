@@ -45,11 +45,8 @@ def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
                 ):
                     if hasattr(manager, "update_strategy_last_shown"):
                         manager.update_strategy_last_shown()
-                    # Construct clean Markdown blockquote for LLM/agent
-                    strategy_lines = [f"> 📐 **{title}**", ">"]
-                    for line in body.split("\n"):
-                        strategy_lines.append(f"> {line}")
-                    prefix = "\n".join(strategy_lines) + "\n\n"
+                    # Prepend without a blockquote: just standard Markdown headers/body
+                    prefix = f"## 📐 {title}\n\n{body}\n\n"
                     return prefix + response
     return response
 
