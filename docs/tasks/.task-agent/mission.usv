@@ -1,4 +1,3 @@
-Allow editing task dependencies in task-agent CLI and MCPallow-editing-task-dependencies-in-task-agent-cli-and-mcp
 Add date created to `ta list` and `ta prior`add-date-created-to-ta-list-and-ta-prior
 Fix ta done pre-commit hook timeout killing process before commit finishesfix-ta-done-pre-commit-hook-timeout-killing-process-before-commit-finishes
 Implement op:// 1Password secret resolution for template dotfilesimplement-op-1password-secret-resolution-for-template-dotfiles
