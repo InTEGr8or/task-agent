@@ -786,10 +786,20 @@ class TaskAgent:
         files: Optional[List[str]] = None,
     ) -> str:
         """Helper to perform a git commit with retry logic for hooks."""
+
+        def _get_git_add_path(f: str) -> str:
+            resolved_f = Path(f).resolve()
+            try:
+                rel_f = resolved_f.relative_to(repo_root.resolve())
+                return str(rel_f)
+            except ValueError:
+                return f
+
         if files:
             for f in files:
+                git_add_path = _get_git_add_path(f)
                 subprocess.run(
-                    ["git", "-C", str(repo_root), "add", f],
+                    ["git", "-C", str(repo_root), "add", git_add_path],
                     check=False,
                     shell=(os.name == "nt"),
                 )
@@ -811,8 +821,9 @@ class TaskAgent:
             # Retry once for pre-commit hooks
             if files:
                 for f in files:
+                    git_add_path = _get_git_add_path(f)
                     subprocess.run(
-                        ["git", "-C", str(repo_root), "add", f],
+                        ["git", "-C", str(repo_root), "add", git_add_path],
                         check=False,
                         shell=(os.name == "nt"),
                     )

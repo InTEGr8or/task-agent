@@ -1097,8 +1097,9 @@ def cmd_commit(
 
     try:
         # Add all changes in tasks directory
+        resolved_tasks_dir = tasks_dir.resolve()
         subprocess.run(
-            ["git", "-C", str(git_root), "add", str(tasks_dir / ".")],
+            ["git", "-C", str(git_root), "add", str(resolved_tasks_dir / ".")],
             check=True,
             capture_output=True,
             text=True,
@@ -1184,8 +1185,9 @@ def cmd_commit_tasks(
     )
 
     try:
+        resolved_tasks_dir = tasks_dir.resolve()
         subprocess.run(
-            ["git", "-C", str(git_root), "add", "--force", str(tasks_dir / ".")],
+            ["git", "-C", str(git_root), "add", str(resolved_tasks_dir / ".")],
             check=True,
             capture_output=True,
             text=True,

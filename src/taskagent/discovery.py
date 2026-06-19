@@ -100,10 +100,24 @@ def _handle_ejected_symlink(current_root: Path):
             "TA_EJECTED_ISSUES_PATH"
         )
 
+    # Determine target_path
     if not eject_enabled or not target_path_str:
-        return
+        target_path = new_target
+    else:
+        target_path = Path(target_path_str).absolute()
+        # Fallback to local if the configured ejection path doesn't exist
+        if not target_path.exists() and not target_path.is_symlink():
+            target_path = new_target
+            if env_path.exists():
+                _update_env_var(
+                    env_path, "TA_EJECTED_TASKS_PATH", str(new_target.resolve())
+                )
+                _update_env_var(
+                    env_path, "TA_EJECTED_ISSUES_PATH", str(new_target.resolve())
+                )
 
-    target_path = Path(target_path_str).absolute()
+    # Ensure target directory exists
+    target_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure parent (docs/) exists
     tasks_link.parent.mkdir(parents=True, exist_ok=True)
@@ -113,14 +127,31 @@ def _handle_ejected_symlink(current_root: Path):
         if tasks_link.is_symlink() and str(tasks_link.readlink()) == str(target_path):
             return
         # If it's a directory or broken symlink, we might need to be careful.
-        # But if ejection is forced, we want the link.
         if tasks_link.is_symlink():
             tasks_link.unlink()
         elif tasks_link.is_dir() and not any(tasks_link.iterdir()):
             tasks_link.rmdir()
         else:
-            # It's a non-empty directory, we don't want to overwrite user data
-            return
+            # Recursive directory merge helper
+            def _move_recursive(src: Path, dst: Path):
+                if src.is_dir():
+                    dst.mkdir(parents=True, exist_ok=True)
+                    for child in src.iterdir():
+                        _move_recursive(child, dst / child.name)
+                    src.rmdir()
+                else:
+                    if dst.exists():
+                        dst.unlink()
+                    shutil.move(str(src), str(dst))
+
+            # Merge existing files into target, then remove tasks_link
+            try:
+                for item in tasks_link.iterdir():
+                    if item.resolve() != target_path.resolve():
+                        _move_recursive(item, target_path / item.name)
+                tasks_link.rmdir()
+            except Exception:
+                return
 
     # Create the absolute symlink
     try:

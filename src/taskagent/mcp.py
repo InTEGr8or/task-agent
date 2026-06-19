@@ -344,8 +344,9 @@ def commit_repo(message: str = "", push: bool = False) -> str:
         message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     try:
+        resolved_tasks_dir = tasks_dir.resolve()
         subprocess.run(
-            ["git", "-C", str(git_root), "add", str(tasks_dir / ".")],
+            ["git", "-C", str(git_root), "add", str(resolved_tasks_dir / ".")],
             check=True,
             capture_output=True,
             text=True,
@@ -407,8 +408,9 @@ def commit_tasks(message: str = "", push: bool = False) -> str:
         message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     try:
+        resolved_tasks_dir = tasks_dir.resolve()
         subprocess.run(
-            ["git", "-C", str(git_root), "add", "--force", str(tasks_dir / ".")],
+            ["git", "-C", str(git_root), "add", str(resolved_tasks_dir / ".")],
             check=True,
             capture_output=True,
             text=True,
