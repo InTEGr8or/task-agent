@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Implement op:// 1Password secret resolution for template dotfiles
 
 When a template meta.toml declares a dotfile with source = "op://vault/item/field", the materialization code in templates.py currently logs a warning and skips it. This task implements actual resolution via the 1Password CLI (op).

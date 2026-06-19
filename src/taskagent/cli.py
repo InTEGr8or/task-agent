@@ -337,6 +337,17 @@ def get_created_date(manager: TaskAgent, slug: str) -> str:
     try:
         issue_file = manager.find_issue_file(slug, include_completed=True)
         if issue_file and issue_file.exists():
+            try:
+                content = issue_file.read_text(encoding="utf-8")
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = parts[1]
+                        for line in frontmatter.splitlines():
+                            if line.strip().startswith("created_at:"):
+                                return line.split(":", 1)[1].strip()
+            except Exception:
+                pass
             stat = issue_file.stat()
             birthtime = getattr(stat, "st_birthtime", None)
             t = birthtime if birthtime is not None else stat.st_mtime
@@ -741,18 +752,29 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
         console.print("[yellow]No completed tasks found.[/yellow]")
         return
 
-    all_completed.sort(key=lambda x: x[0].stat().st_mtime, reverse=True)
-
-    cursor = 0
-    window_size = console.height - 8
-
     def get_mtime_iso(path: Path) -> str:
+        try:
+            content = path.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = parts[1]
+                    for line in frontmatter.splitlines():
+                        if line.strip().startswith("created_at:"):
+                            return line.split(":", 1)[1].strip()
+        except Exception:
+            pass
         try:
             return datetime.fromtimestamp(path.stat().st_mtime).strftime(
                 "%Y-%m-%d %H:%M"
             )
         except Exception:
             return ""
+
+    all_completed.sort(key=lambda x: get_mtime_iso(x[0]), reverse=True)
+
+    cursor = 0
+    window_size = console.height - 8
 
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:

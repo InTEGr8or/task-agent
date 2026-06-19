@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 We did some work in a prior task `add-configuration-file-support-for-github-plugin`. This task will probably obviate those changes and those files should be cleaned up after implementing this task.
 
 We want to assign different GH CLI accounts to different Git Worktree directories, when we create worktrees. 

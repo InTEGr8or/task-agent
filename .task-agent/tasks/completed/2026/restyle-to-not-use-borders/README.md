@@ -1,3 +1,7 @@
+---
+created_at: 2026-04-10 11:56
+---
+
 # Restyle to not use borders
 
 Use the textual theme that doesn't borders for everything

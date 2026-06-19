@@ -1,3 +1,7 @@
+---
+created_at: 2026-04-05 11:34
+---
+
 # Migrate from Markdown files to folders with README.md
 
 Create a migration mechanism to move existing items from task-slug.md format to task-slug/README.md format.

@@ -1,3 +1,7 @@
+---
+created_at: 2026-05-15 19:33
+---
+
 # Change ejected mission repo location to `.task-agent/tasks/`
 
 Currently `eject-mission` moves `docs/tasks/` to `../{repo_name}-tasks/` (a sibling directory). This scatters project files outside the repo root. Instead, move the ejected repo inside the project to `.task-agent/tasks/` so the project is self-contained.

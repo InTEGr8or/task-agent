@@ -1,3 +1,7 @@
+---
+created_at: 2026-05-15 09:34
+---
+
 # search should include completed items in the resultes
 
 Currently, search does not appear to include completed items. 

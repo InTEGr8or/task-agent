@@ -1,3 +1,7 @@
+---
+created_at: 2026-04-10 11:38
+---
+
 # Create a copy-slug feature in ta prior
 
 Create a shortcut in ta prior view that copies the slug to the clipboard

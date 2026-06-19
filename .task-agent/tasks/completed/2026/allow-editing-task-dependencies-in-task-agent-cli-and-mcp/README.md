@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-18 18:25
+---
+
 # Allow editing task dependencies in task-agent CLI and MCP
 
 Agents currently cannot easily update task dependencies once they are set. We need to implement editing capabilities in the CLI (e.g., an update command or flags on existing commands) and ensure the MCP server supports modifying the depends_on field safely (with cycle and task existence checks).

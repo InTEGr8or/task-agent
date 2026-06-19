@@ -1,3 +1,7 @@
+---
+created_at: 2026-05-05 12:41
+---
+
 # Search is not working
 
 I am getting results like this:

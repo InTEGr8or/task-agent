@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Auto-clean .code_signatures.json after no-verify commits
 
 After a --no-verify commit, the pre-commit hook re-hashes .code_signatures.json on the next git status, leaving a dirty working tree. This is purely cosmetic but annoying — developers see a dirty tree even though they made no intentional changes.

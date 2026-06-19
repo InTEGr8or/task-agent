@@ -1,3 +1,7 @@
+---
+created_at: 2026-04-10 11:38
+---
+
 # Define Task Metadata Standard
 
 **Depends on:** sub-agent-observability-and-transparency

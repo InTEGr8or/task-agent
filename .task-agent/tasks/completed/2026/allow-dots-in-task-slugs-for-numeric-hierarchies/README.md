@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Allow dots in task slugs for numeric hierarchies
 
 The `slugify` method in `manager.py` uses the regex `[^\w\s-]` which strips dots from task titles. This prevents agents from using numeric hierarchy notation like `1.1`, `1.2`, `2.1` etc. in task titles, which some agents natively produce when decomposing work.

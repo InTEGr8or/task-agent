@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Improve subtasking MCP/CLI discoverability
 
 The dependency-based subtasking system (via pipe-delimited deps in mission.usv) is powerful but not obvious. Improve discoverability by:

@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-18 18:25
+---
+
 # Create agy-cli agent workflow template with validator verification
 
 Introduce a new workflow agent template called 'agy-cli' that integrates with 'agy', 'claude', and 'opencode' CLI commands in non-interactive mode. The worker is prompted to solve the task or decompose it if too complex. A separate validator agent then verifies the correctness and completion of the output.

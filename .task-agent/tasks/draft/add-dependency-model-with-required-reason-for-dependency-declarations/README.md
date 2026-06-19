@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Add Dependency model with required reason for dependency declarations
 
 At the architecture level, enforce that every dependency declaration includes a human-readable reason. This prevents agents from creating false dependency chains (using `--depends-on` as a grouping mechanism rather than expressing a true prerequisite).

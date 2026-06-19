@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Add --post-setup hook to ta init-agent for per-repo secrets
 
 Add a --post-setup <script> flag to ta init-agent that runs an arbitrary script or command after the agent user is fully created (useradd, sudoers, SSH key, template dotfiles). This enables injecting per-repo secrets (GPG keys, npm tokens, custom SSH configs) that aren't in the template.

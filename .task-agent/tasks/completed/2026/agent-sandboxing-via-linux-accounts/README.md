@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 ### Task spec: agent-sandboxing-via-linux-accounts
 
 **Replaces:** `integrate-gh-cli-alt-accounts`

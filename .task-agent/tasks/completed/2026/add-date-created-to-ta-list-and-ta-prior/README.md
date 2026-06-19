@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-18 18:25
+---
+
 # Add date created to `ta list` and `ta prior`
 
 Add the date to the list. Put it between priorty and status. Make it the same color as "DRAFT". 

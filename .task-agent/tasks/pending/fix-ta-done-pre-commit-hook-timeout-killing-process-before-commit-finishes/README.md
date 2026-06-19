@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-14 10:03
+---
+
 # Fix ta done pre-commit hook timeout killing process before commit finishes
 
 When running ta done <slug>, the complete_issue() method calls subprocess.run(['git', 'commit', ...]) which triggers pre-commit hooks (ruff format check, taskhash, etc.). These hooks can take >30 seconds on large repos, and the timeout kills the entire ta process before the commit completes. The finally block usually saves the agent cleanup, but the commit is left in a partial state.
