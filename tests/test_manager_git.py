@@ -88,3 +88,29 @@ def test_complete_issue_dual_repo_flow(tmp_path, manager):
         assert mock_commit.call_args_list[0].args[0] == code_root
         # Verify second call is for mission repo
         assert mock_commit.call_args_list[1].args[0] == mission_root
+
+
+def test_git_commit_no_verify(manager):
+
+    with (
+        patch("subprocess.run") as mock_run,
+        patch("subprocess.check_output") as mock_check,
+    ):
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_check.return_value = "abc1234\n"
+
+        # Call with no_verify=True (default)
+        result = manager._git_commit(Path("/repo"), "feat: test", no_verify=True)
+        assert result == "abc1234"
+
+        # Verify the commit call included --no-verify
+        commit_call = mock_run.call_args_list[1]
+        assert "--no-verify" in commit_call.args[0]
+
+        # Call with no_verify=False
+        result = manager._git_commit(Path("/repo"), "feat: test", no_verify=False)
+        assert result == "abc1234"
+
+        # Verify the commit call did NOT include --no-verify
+        commit_call_2 = mock_run.call_args_list[3]
+        assert "--no-verify" not in commit_call_2.args[0]

@@ -1200,6 +1200,7 @@ def cmd_done(
     should_commit: bool = True,
     push_mission: bool = False,
     solution: Optional[str] = None,
+    no_verify: bool = True,
 ):
     """Mark an issue as done."""
     if not slug:
@@ -1228,6 +1229,7 @@ def cmd_done(
             should_commit=should_commit,
             push_mission=push_mission,
             solution_explanation=solution,
+            no_verify=no_verify,
         )
         console.print(
             f"[bold green]Issue '{issue.slug}' marked as done and "
@@ -3743,6 +3745,18 @@ Usage:
     done_parser.add_argument(
         "--push", action="store_true", help="Push the mission repo after completion"
     )
+    done_parser.add_argument(
+        "--no-verify",
+        action="store_true",
+        default=True,
+        help="Skip running git pre-commit hooks (default)",
+    )
+    done_parser.add_argument(
+        "--hooks",
+        dest="no_verify",
+        action="store_false",
+        help="Force running git pre-commit hooks",
+    )
 
     path_parser = subparsers.add_parser("path", help="Get the absolute path to a task")
     path_parser.add_argument("slug", help="Task slug")
@@ -3895,6 +3909,7 @@ Usage:
             True,
             args.push,
             args.solution,
+            args.no_verify,
         )
     elif args.command == "delete":
         cmd_soft_delete(console, manager, args.slug)

@@ -112,6 +112,16 @@ The agent is **always destroyed** in a `finally` block — even if the git
 commit fails (e.g. pre-commit hook times out). Run `git worktree prune` and
 `git branch -D issue/<slug>` manually if the branch needs cleanup.
 
+### Hook verification and timeouts
+
+When completing a task (`ta done`), pre-commit hooks (like formatting, linting, testing) can sometimes take longer than the shell session timeout, causing the process to get killed midway and leaving the commit in a partial/orphaned state.
+
+To prevent this timeout by default:
+- `ta done` runs with `--no-verify` by default (skipping pre-commit hooks during the automated commit).
+- If you explicitly want to run git pre-commit hooks during completion, you can pass the `--hooks` flag (e.g. `ta done my-task --hooks`).
+
+Note that you can always run pre-commit hooks manually via `pre-commit run --all-files` prior to task completion.
+
 ## Templates
 
 Templates are stored in `.ta/agents/<name>/meta.toml` in the project root.
