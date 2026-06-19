@@ -228,7 +228,15 @@ def complete_task(name: str, solution: str, message: Optional[str] = None) -> st
         issue, commit_hash = manager.complete_issue(
             slug, commit_message=message, solution_explanation=solution
         )
-        return f"Task '{slug}' completed. Commit: {commit_hash}"
+        return (
+            f"### Task Completed Successfully\n\n"
+            f"- **Slug**: `{slug}`\n"
+            f"- **Title**: {issue.name}\n"
+            f"- **Status**: `completed`\n"
+            f"- **Git Commit SHA**: `{commit_hash}`\n\n"
+            f"#### Solution Explanation\n"
+            f"{solution}\n"
+        )
     except Exception as e:
         return f"Error completing task: {e}"
 
