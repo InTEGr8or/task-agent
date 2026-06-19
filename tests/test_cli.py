@@ -458,3 +458,35 @@ def test_cmd_list_includes_date(manager):
     assert len(data) == 1
     assert "created" in data[0]
     assert len(data[0]["created"]) == 16
+
+
+def test_cmd_recover_history(manager, monkeypatch):
+    from taskagent.cli import cmd_recover_history
+    import subprocess
+
+    console = Console()
+
+    # Create dummy deleted files list
+    def mock_check_output(args, **kwargs):
+        if "log" in args and "--diff-filter=D" in args:
+            return "docs/issues/pending/deleted-task.md\n"
+        elif "log" in args and "--format=%H" in args:
+            return "commit123\n"
+        elif "show" in args:
+            return "---\ncreated_at: 2026-03-14T10:17:49-07:00\n---\n# Deleted Task\n"
+        elif "log" in args and "--format=%aI" in args:
+            return "2026-03-14T10:17:49-07:00\n"
+        return ""
+
+    monkeypatch.setattr(subprocess, "check_output", mock_check_output)
+
+    # Let's run the recover command
+    with console.capture():
+        cmd_recover_history(console, manager)
+
+    # Check that the file was restored
+    restored_path = manager.issues_root / "pending" / "deleted-task" / "README.md"
+    assert restored_path.exists()
+    content = restored_path.read_text(encoding="utf-8")
+    assert "Deleted Task" in content
+    assert "created_at: 2026-03-14T10:17:49-07:00" in content

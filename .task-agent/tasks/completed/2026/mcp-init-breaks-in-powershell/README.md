@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-14 13:59
+created_at: 2026-03-14T13:59:35-07:00
 ---
 
 # MCP init breaks in PowerShell

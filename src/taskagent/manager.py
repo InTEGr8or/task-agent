@@ -600,7 +600,9 @@ class TaskAgent:
             deps = [d.strip() for d in depends_on.split(",") if d.strip()]
 
         # Write the markdown file
+        created_at = datetime.now().astimezone().isoformat()
         with issue_file.open("w", encoding="utf-8") as f:
+            f.write(f"---\ncreated_at: {created_at}\n---\n\n")
             f.write(f"# {display_name}\n\n")
             if deps:
                 f.write(f"**Depends on:** {', '.join(deps)}\n\n")
@@ -1188,6 +1190,33 @@ class TaskAgent:
         existing_slugs = {i.slug for i in existing_issues}
         present_issues = [i for i in existing_issues if i.status != "unknown"]
 
+        def _ensure_created_at(file_path: Path):
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = parts[1]
+                        has_created_at = False
+                        for line in frontmatter.splitlines():
+                            if line.strip().startswith("created_at:"):
+                                has_created_at = True
+                                break
+                        if not has_created_at:
+                            created_at = datetime.now().astimezone().isoformat()
+                            new_frontmatter = (
+                                frontmatter.rstrip("\n")
+                                + f"\ncreated_at: {created_at}\n"
+                            )
+                            new_content = f"---{new_frontmatter}---{parts[2]}"
+                            file_path.write_text(new_content, encoding="utf-8")
+                else:
+                    created_at = datetime.now().astimezone().isoformat()
+                    new_content = f"---\ncreated_at: {created_at}\n---\n\n" + content
+                    file_path.write_text(new_content, encoding="utf-8")
+            except Exception:
+                pass
+
         new_issues = []
         for status in ["pending", "draft", "active"]:
             status_dir = self.issues_root / status
@@ -1204,6 +1233,7 @@ class TaskAgent:
                         Issue(name=name, slug=slug, dependencies=deps, status=status)
                     )
                     existing_slugs.add(slug)
+                _ensure_created_at(issue_file)
 
             # Directory-based
             for readme_file in list(status_dir.glob("*/README.md")):
@@ -1215,6 +1245,7 @@ class TaskAgent:
                         Issue(name=name, slug=slug, dependencies=deps, status=status)
                     )
                     existing_slugs.add(slug)
+                _ensure_created_at(readme_file)
 
         final_issues = present_issues + new_issues
         self.save_mission(final_issues)

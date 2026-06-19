@@ -1,5 +1,5 @@
 ---
-created_at: 2026-06-14 10:03
+created_at: 2026-06-14T10:03:52-07:00
 ---
 
 # Create a soft-delete feature

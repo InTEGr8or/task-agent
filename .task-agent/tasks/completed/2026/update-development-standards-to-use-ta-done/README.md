@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-11 13:06
+created_at: 2026-03-11T13:06:35-07:00
 ---
 
 # Update development standards to use ta done

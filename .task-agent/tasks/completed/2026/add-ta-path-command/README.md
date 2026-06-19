@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-20 20:27
+created_at: 2026-03-20T20:27:26-07:00
 ---
 
 # add ta path command

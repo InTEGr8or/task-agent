@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-10 12:32
+created_at: 2026-03-10T12:32:25-07:00
 ---
 
 # Make sure \x1e is not used as a record separator anywhere

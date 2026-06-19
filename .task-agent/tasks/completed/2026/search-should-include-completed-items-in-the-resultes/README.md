@@ -1,5 +1,5 @@
 ---
-created_at: 2026-05-15 09:34
+created_at: 2026-05-15T09:34:25-07:00
 ---
 
 # search should include completed items in the resultes

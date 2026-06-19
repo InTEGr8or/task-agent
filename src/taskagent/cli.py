@@ -345,7 +345,22 @@ def get_created_date(manager: TaskAgent, slug: str) -> str:
                         frontmatter = parts[1]
                         for line in frontmatter.splitlines():
                             if line.strip().startswith("created_at:"):
-                                return line.split(":", 1)[1].strip()
+                                raw_val = line.split(":", 1)[1].strip()
+                                try:
+                                    dt = datetime.fromisoformat(raw_val)
+                                    return dt.strftime("%Y-%m-%d %H:%M")
+                                except ValueError:
+                                    for fmt in (
+                                        "%Y-%m-%d %H:%M",
+                                        "%Y-%m-%d %H:%M:%S",
+                                        "%Y-%m-%d",
+                                    ):
+                                        try:
+                                            dt = datetime.strptime(raw_val, fmt)
+                                            return dt.strftime("%Y-%m-%d %H:%M")
+                                        except ValueError:
+                                            pass
+                                    return raw_val
             except Exception:
                 pass
             stat = issue_file.stat()
@@ -761,7 +776,22 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                     frontmatter = parts[1]
                     for line in frontmatter.splitlines():
                         if line.strip().startswith("created_at:"):
-                            return line.split(":", 1)[1].strip()
+                            raw_val = line.split(":", 1)[1].strip()
+                            try:
+                                dt = datetime.fromisoformat(raw_val)
+                                return dt.strftime("%Y-%m-%d %H:%M")
+                            except ValueError:
+                                for fmt in (
+                                    "%Y-%m-%d %H:%M",
+                                    "%Y-%m-%d %H:%M:%S",
+                                    "%Y-%m-%d",
+                                ):
+                                    try:
+                                        dt = datetime.strptime(raw_val, fmt)
+                                        return dt.strftime("%Y-%m-%d %H:%M")
+                                    except ValueError:
+                                        pass
+                                return raw_val
         except Exception:
             pass
         try:
@@ -839,6 +869,220 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                     console.print(f"[green]Copied slug to clipboard: {slug}[/green]")
                 except Exception as e:
                     console.print(f"[yellow]Failed to copy to clipboard: {e}[/yellow]")
+
+
+def cmd_recover_history(console: Console, manager: TaskAgent):
+    """Recover deleted task files from Git history and populate/restore task creation dates into YAML frontmatter."""
+    console.print("[blue]Checking Git history for deleted task files...[/blue]")
+    try:
+        out = subprocess.check_output(
+            [
+                "git",
+                "log",
+                "--all",
+                "--pretty=format:",
+                "--name-only",
+                "--diff-filter=D",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        deleted_paths = sorted(
+            list(set(line.strip() for line in out.splitlines() if line.strip()))
+        )
+    except Exception as e:
+        console.print(f"[red]Failed to query git history: {e}[/red]")
+        sys.exit(1)
+
+    existing_slugs = set()
+    for root, dirs, files in os.walk(manager.issues_root):
+        for f in files:
+            if f.endswith(".md"):
+                file_path = Path(root) / f
+                if f == "README.md":
+                    slug = file_path.parent.name
+                else:
+                    slug = file_path.stem
+                if slug != "tasks":
+                    existing_slugs.add(slug)
+
+    try:
+        for issue in manager.load_mission():
+            existing_slugs.add(issue.slug)
+    except Exception:
+        pass
+
+    def get_slug_from_path(path_str: str) -> str:
+        p = Path(path_str)
+        if p.name == "README.md":
+            return p.parent.name
+        return p.stem
+
+    def get_deleted_file_content(path: str) -> Optional[str]:
+        try:
+            commits = (
+                subprocess.check_output(
+                    ["git", "log", "--all", "--format=%H", "--", path],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                .strip()
+                .splitlines()
+            )
+            for commit in commits:
+                try:
+                    res = subprocess.check_output(
+                        ["git", "show", f"{commit}:{path}"],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                    )
+                    if res:
+                        return res
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
+    restored_count = 0
+    for path_str in deleted_paths:
+        parts = Path(path_str).parts
+        if not (("tasks" in parts or "issues" in parts) and path_str.endswith(".md")):
+            continue
+        if parts[-1] in ["plan.md", "README.md"] and (
+            len(parts) <= 2 or parts[-2] in ["tasks", "issues"]
+        ):
+            continue
+
+        slug = get_slug_from_path(path_str)
+        if slug in existing_slugs or slug == "tasks":
+            continue
+
+        content = get_deleted_file_content(path_str)
+        if not content:
+            continue
+
+        status = "pending"
+        year = None
+        for part in ["completed", "pending", "draft", "active"]:
+            if part in parts:
+                status = part
+                idx = parts.index(part)
+                if part == "completed" and idx + 1 < len(parts):
+                    next_part = parts[idx + 1]
+                    if next_part.isdigit() and len(next_part) == 4:
+                        year = next_part
+                break
+
+        if status == "completed":
+            year_str = year or str(datetime.now().year)
+            target_file = (
+                manager.issues_root / "completed" / year_str / slug / "README.md"
+            )
+        else:
+            target_file = manager.issues_root / status / slug / "README.md"
+
+        try:
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            target_file.write_text(content, encoding="utf-8")
+            console.print(f"[green]Restored: {slug} (status: {status})[/green]")
+            existing_slugs.add(slug)
+            restored_count += 1
+        except Exception as e:
+            console.print(f"[red]Failed to restore {slug}: {e}[/red]")
+
+    console.print(
+        f"[bold green]Restored {restored_count} task(s) from git history.[/bold green]"
+    )
+
+    # 2. Run folder migration for any loose files in workspace
+    migrated_count = manager.migrate_all_to_folders()
+    if migrated_count > 0:
+        console.print(
+            f"[green]Migrated {migrated_count} file-based task(s) to folder format.[/green]"
+        )
+
+    # 3. Recover dates and write/update frontmatter
+    console.print("[blue]Recovering task creation dates into frontmatter...[/blue]")
+    updated_dates_count = 0
+    for root, dirs, files in os.walk(manager.issues_root):
+        root_path = Path(root)
+        try:
+            rel_parts = root_path.relative_to(manager.issues_root).parts
+            if ".task-agent" in rel_parts:
+                continue
+        except ValueError:
+            pass
+
+        for file in files:
+            if file != "README.md":
+                continue
+
+            readme_path = root_path / "README.md"
+            slug = root_path.name
+            if slug == "tasks":
+                continue
+
+            # Query git log with wildcard pathspecs matching the slug in issues or tasks directories
+            earliest_date = None
+            pathspecs = [
+                f"*tasks*/{slug}/README.md",
+                f"*tasks*/{slug}.md",
+                f"*issues*/{slug}/README.md",
+                f"*issues*/{slug}.md",
+            ]
+            try:
+                out = subprocess.check_output(
+                    ["git", "log", "--all", "--format=%aI", "--reverse", "--"]
+                    + pathspecs,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                ).strip()
+                if out:
+                    earliest_date = out.splitlines()[0]
+            except Exception:
+                pass
+
+            if not earliest_date:
+                # Fallback to file creation/modification date
+                try:
+                    stat = readme_path.stat()
+                    birthtime = getattr(stat, "st_birthtime", None)
+                    t = birthtime if birthtime is not None else stat.st_mtime
+                    earliest_date = datetime.fromtimestamp(t).astimezone().isoformat()
+                except Exception:
+                    earliest_date = datetime.now().astimezone().isoformat()
+
+            content = readme_path.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                content_parts = content.split("---", 2)
+                if len(content_parts) >= 3:
+                    frontmatter = content_parts[1]
+                    lines = frontmatter.splitlines()
+                    has_created_at = False
+                    for i, line in enumerate(lines):
+                        if line.strip().startswith("created_at:"):
+                            lines[i] = f"created_at: {earliest_date}"
+                            has_created_at = True
+                            break
+                    if not has_created_at:
+                        lines.append(f"created_at: {earliest_date}")
+                    new_frontmatter = "\n".join(lines) + "\n"
+                    new_content = f"---{new_frontmatter}---{content_parts[2]}"
+                else:
+                    new_content = f"---\ncreated_at: {earliest_date}\n---\n\n" + content
+            else:
+                new_content = f"---\ncreated_at: {earliest_date}\n---\n\n" + content
+
+            readme_path.write_text(new_content, encoding="utf-8")
+            updated_dates_count += 1
+
+    console.print(
+        f"[bold green]Updated {updated_dates_count} task(s) with creation dates.[/bold green]"
+    )
+
+    # Run project initialization to sync the restored files with mission.usv
+    manager.init_project()
 
 
 def cmd_report(console: Console, manager: TaskAgent, slug: str):
@@ -1485,7 +1729,12 @@ def cmd_new(
         temp_dir.mkdir(parents=True, exist_ok=True)
         temp_file = temp_dir / "README.md"
 
-        template = f"""# {title or "New Task"}
+        created_at = datetime.now().astimezone().isoformat()
+        template = f"""---
+created_at: {created_at}
+---
+
+# {title or "New Task"}
 
 **Depends on:** {depends_on or ""}
 
@@ -3243,6 +3492,10 @@ def main():
     history_parser.add_argument(
         "-n", "--limit", type=int, default=20, help="Number of items to show"
     )
+    subparsers.add_parser(
+        "recover-history",
+        help="Recover deleted task files from git history and recover task creation dates into frontmatter",
+    )
     subparsers.add_parser("ingest")
     subparsers.add_parser("mcp-api", help="List available MCP tools and API")
     subparsers.add_parser("self-up")
@@ -3568,6 +3821,8 @@ Usage:
         cmd_tree(console, manager)
     elif args.command == "history":
         cmd_history(console, manager, args.limit)
+    elif args.command == "recover-history":
+        cmd_recover_history(console, manager)
     elif args.command == "ingest":
         cmd_ingest(console, manager)
     elif args.command == "mcp-api":

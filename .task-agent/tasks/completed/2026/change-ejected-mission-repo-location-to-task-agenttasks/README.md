@@ -1,5 +1,5 @@
 ---
-created_at: 2026-05-15 19:33
+created_at: 2026-05-15T19:33:43-07:00
 ---
 
 # Change ejected mission repo location to `.task-agent/tasks/`

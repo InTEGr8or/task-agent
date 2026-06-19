@@ -1,5 +1,5 @@
 ---
-created_at: 2026-06-18 18:25
+created_at: 2026-06-18T18:25:56-07:00
 ---
 
 # Allow editing task dependencies in task-agent CLI and MCP

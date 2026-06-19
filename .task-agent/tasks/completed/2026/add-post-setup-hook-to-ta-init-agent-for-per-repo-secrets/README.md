@@ -1,5 +1,5 @@
 ---
-created_at: 2026-06-14 10:03
+created_at: 2026-06-14T10:03:52-07:00
 ---
 
 # Add --post-setup hook to ta init-agent for per-repo secrets

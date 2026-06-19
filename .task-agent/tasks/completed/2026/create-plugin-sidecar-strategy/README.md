@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-11 21:44
+created_at: 2026-03-11T21:44:52-07:00
 ---
 
 # The "Plugin" Strategy: Technical Design

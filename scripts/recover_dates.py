@@ -27,7 +27,7 @@ def get_earliest_date(slug: str) -> str:
     for path in candidate_paths:
         try:
             out = subprocess.check_output(
-                ["git", "log", "--all", "--format=%ai", "--reverse", "--", path],
+                ["git", "log", "--all", "--format=%aI", "--reverse", "--", path],
                 stderr=subprocess.DEVNULL,
                 text=True,
             ).strip()
@@ -39,11 +39,7 @@ def get_earliest_date(slug: str) -> str:
 
     if dates:
         dates.sort()
-        # Format the earliest date to YYYY-MM-DD HH:MM
-        raw_date = dates[0]
-        if len(raw_date) >= 16:
-            return raw_date[:16]
-        return raw_date
+        return dates[0]
     return None
 
 

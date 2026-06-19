@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-13 19:29
+created_at: 2026-03-13T19:29:07-07:00
 ---
 
 # Dummy Task

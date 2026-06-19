@@ -1,5 +1,5 @@
 ---
-created_at: 2026-04-09 14:09
+created_at: 2026-04-09T14:09:00-07:00
 ---
 
 # History feature should be sorted newest at the top

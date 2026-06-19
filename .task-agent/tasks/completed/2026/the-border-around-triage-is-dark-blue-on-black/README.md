@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-15 23:55
+created_at: 2026-03-15T23:55:38-07:00
 ---
 
 # The border around triage is dark blue on black

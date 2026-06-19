@@ -1,3 +1,7 @@
+---
+created_at: 2026-06-18T18:25:56-07:00
+---
+
 # Strategy
 
 Build `task-agent` into a self-contained, production-grade task lifecycle manager

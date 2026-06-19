@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-10 01:49
+created_at: 2026-03-10T01:49:56-07:00
 ---
 
 # Refactor Models

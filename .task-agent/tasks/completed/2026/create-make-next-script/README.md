@@ -1,5 +1,5 @@
 ---
-created_at: 2026-03-09 23:01
+created_at: 2026-03-09T23:01:02-07:00
 ---
 
 # Create a `make next` Script

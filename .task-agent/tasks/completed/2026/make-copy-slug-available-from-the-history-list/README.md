@@ -1,5 +1,5 @@
 ---
-created_at: 2026-04-11 10:12
+created_at: 2026-04-11T10:12:52-07:00
 ---
 
 # Make copy-slug available from the History list
