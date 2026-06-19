@@ -41,3 +41,10 @@ Completion Criteria:
 - finally block still runs agent cleanup
 - Documentation of the trade-off
 - All existing tests pass
+
+## Solution
+
+Added --no-verify (default) and --hooks options to 'ta done' CLI parser, passed no_verify argument through complete_issue() and _git_commit() to bypass pre-commit hooks during task completion, updated docs/task-agents.md to document the timeout trade-off, and added a unit test.
+
+---
+**Completed in commit:** `91a8f9b`

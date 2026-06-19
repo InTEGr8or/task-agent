@@ -1,4 +1,3 @@
-Fix ta done pre-commit hook timeout killing process before commit finishesfix-ta-done-pre-commit-hook-timeout-killing-process-before-commit-finishes
 Implement op:// 1Password secret resolution for template dotfilesimplement-op-1password-secret-resolution-for-template-dotfiles
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Create agy-cli agent workflow template with validator verificationcreate-agy-cli-agent-workflow-template-with-validator-verification
