@@ -135,6 +135,20 @@ Templates are stored in `.ta/agents/<name>/meta.toml` in the project root.
 Custom templates can be added by creating a new directory under `.ta/agents/`
 with a `meta.toml` file. See [templates reference](#) for the full format.
 
+### 1Password Secrets Resolution
+
+Custom templates can resolve dotfile credentials directly from a 1Password vault using the `op://` URI scheme:
+
+```toml
+[dotfiles]
+".config/gh/hosts.yml" = { source = "op://private/github-cli-token/credential" }
+```
+
+When the template is materialized, the `op` CLI is run as the invoking user (since the agent system user doesn't have an active 1Password session) to fetch the secret securely.
+
+* **Graceful degradation**: If the `op` CLI is not installed, the user is not signed in, or the secret is not found, the agent creation skips the file with a warning instead of crashing. This ensures compatibility with CI/CD environments.
+* **Custom Timeout**: You can specify a custom timeout (default: 30s) using the `--op-timeout <seconds>` flag when running `ta init-agent`.
+
 ## Agent user naming
 
 Task agent users follow the pattern:

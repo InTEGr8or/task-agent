@@ -2315,10 +2315,12 @@ def cmd_list_templates(console: Console):
     console.print(table)
 
 
-def cmd_init_agent(console: Console, name: str, template: Optional[str] = None):
+def cmd_init_agent(
+    console: Console, name: str, template: Optional[str] = None, op_timeout: int = 30
+):
     """Create a dedicated Linux user for agent isolation."""
     try:
-        result = agent.init_agent(name, template_name=template)
+        result = agent.init_agent(name, template_name=template, op_timeout=op_timeout)
         console.print(
             f"[bold green]Agent user '{result['user']}' created.[/bold green]"
         )
@@ -3623,6 +3625,12 @@ Start working on a task. This command automates the following workflow:
         action="store_true",
         help="List available agent templates",
     )
+    init_agent_parser.add_argument(
+        "--op-timeout",
+        type=int,
+        default=30,
+        help="Timeout in seconds for 1Password CLI operations (default: 30)",
+    )
 
     destroy_agent_parser = subparsers.add_parser(
         "destroy-agent",
@@ -3865,7 +3873,9 @@ Usage:
         elif not args.name:
             init_agent_parser.error("the following arguments are required: name")
         else:
-            cmd_init_agent(console, args.name, template=args.template)
+            cmd_init_agent(
+                console, args.name, template=args.template, op_timeout=args.op_timeout
+            )
     elif args.command == "destroy-agent":
         cmd_destroy_agent(console, args.name)
     elif args.command == "init-worker":

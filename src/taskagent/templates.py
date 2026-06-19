@@ -81,7 +81,12 @@ def load_template(name: str) -> Template:
                 )
             )
         elif source.startswith("op://"):
-            pass
+            t.dotfiles.append(
+                DotfileDef(
+                    path=rel_path,
+                    source=source,
+                )
+            )
         else:
             raise RuntimeError(
                 f"Unknown dotfile source '{source}' in template '{name}'"
@@ -94,6 +99,7 @@ def materialize_dotfiles(
     template: Template,
     home_dir: Path,
     agent_user: str,
+    op_timeout: int = 30,
 ) -> None:
     """Write template dotfiles into the agent's home directory."""
     for df in template.dotfiles:
@@ -136,6 +142,57 @@ def materialize_dotfiles(
             )
             if df.source_path and df.source_path.exists():
                 content = df.source_path.read_text()
+                subprocess.run(
+                    ["sudo", "-u", agent_user, "tee", str(target_path)],
+                    input=content,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+        elif df.source.startswith("op://"):
+            target_path = home_dir / df.path
+            content = None
+            try:
+                res = subprocess.run(
+                    ["op", "read", df.source],
+                    capture_output=True,
+                    text=True,
+                    timeout=op_timeout,
+                )
+                if res.returncode == 0:
+                    content = res.stdout
+                else:
+                    print(
+                        f"Warning: Failed to read secret from 1Password for '{df.path}': "
+                        f"{res.stderr.strip()}"
+                    )
+            except FileNotFoundError:
+                print(
+                    f"Warning: 1Password CLI 'op' not installed or not in PATH. "
+                    f"Skipping '{df.path}'."
+                )
+            except subprocess.TimeoutExpired:
+                print(f"Warning: 1Password read timed out for '{df.path}'. Skipping.")
+            except Exception as e:
+                print(
+                    f"Warning: Unexpected error resolving 1Password secret for '{df.path}': "
+                    f"{e}. Skipping."
+                )
+
+            if content is not None:
+                subprocess.run(
+                    ["sudo", "mkdir", "-p", str(target_path.parent)],
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "sudo",
+                        "chown",
+                        f"{agent_user}:{agent_user}",
+                        str(target_path.parent),
+                    ],
+                    check=True,
+                )
                 subprocess.run(
                     ["sudo", "-u", agent_user, "tee", str(target_path)],
                     input=content,

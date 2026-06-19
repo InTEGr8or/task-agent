@@ -490,3 +490,34 @@ def test_cmd_recover_history(manager, monkeypatch):
     content = restored_path.read_text(encoding="utf-8")
     assert "Deleted Task" in content
     assert "created_at: 2026-03-14T10:17:49-07:00" in content
+
+
+def test_cli_init_agent_arguments(monkeypatch):
+    from taskagent.cli import main
+    import sys
+    from unittest.mock import patch
+
+    # Mock cmd_init_agent
+    called = []
+
+    def mock_cmd_init_agent(console, name, template, op_timeout):
+        called.append((name, template, op_timeout))
+
+    with (
+        patch("taskagent.cli.cmd_init_agent", mock_cmd_init_agent),
+        patch("taskagent.cli.Console"),
+        patch("taskagent.cli.TaskAgent"),
+    ):
+        # Test default op_timeout = 30
+        monkeypatch.setattr(sys, "argv", ["ta", "init-agent", "my-agent"])
+        main()
+        assert len(called) == 1
+        assert called[0] == ("my-agent", None, 30)
+
+        # Test custom --op-timeout 45
+        monkeypatch.setattr(
+            sys, "argv", ["ta", "init-agent", "my-agent", "--op-timeout", "45"]
+        )
+        main()
+        assert len(called) == 2
+        assert called[1] == ("my-agent", None, 45)

@@ -85,3 +85,78 @@ class TestHasDotfile:
     def test_has_dotfile_false(self):
         t = Template(name="test")
         assert not templates.has_dotfile(t, ".gitconfig")
+
+
+class TestMaterializeDotfiles:
+    def test_materialize_op_success(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        home_dir = tmp_path / "home"
+        t = Template(
+            name="test",
+            dotfiles=[
+                DotfileDef(path=".mysecret", source="op://vault/item/field"),
+            ],
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="secret-data", stderr=""
+            )
+
+            templates.materialize_dotfiles(t, home_dir, "agent-test", op_timeout=15)
+
+            # 1. Verify op read was called
+            op_calls = [
+                call for call in mock_run.call_args_list if "op" in call.args[0]
+            ]
+            assert len(op_calls) == 1
+            assert op_calls[0].args[0] == ["op", "read", "op://vault/item/field"]
+            assert op_calls[0].kwargs.get("timeout") == 15
+
+            # 2. Verify tee was called with input="secret-data"
+            tee_calls = [
+                call for call in mock_run.call_args_list if "tee" in call.args[0]
+            ]
+            assert len(tee_calls) == 1
+            assert tee_calls[0].kwargs.get("input") == "secret-data"
+
+    def test_materialize_op_missing_cli(self, tmp_path):
+        from unittest.mock import patch
+
+        home_dir = tmp_path / "home"
+        t = Template(
+            name="test",
+            dotfiles=[
+                DotfileDef(path=".mysecret", source="op://vault/item/field"),
+            ],
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError()
+
+            templates.materialize_dotfiles(t, home_dir, "agent-test")
+
+            assert mock_run.call_count == 1
+            assert mock_run.call_args.args[0] == ["op", "read", "op://vault/item/field"]
+
+    def test_materialize_op_timeout(self, tmp_path):
+        import subprocess
+        from unittest.mock import patch
+
+        home_dir = tmp_path / "home"
+        t = Template(
+            name="test",
+            dotfiles=[
+                DotfileDef(path=".mysecret", source="op://vault/item/field"),
+            ],
+        )
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                ["op", "read", "op://vault/item/field"], 30
+            )
+
+            templates.materialize_dotfiles(t, home_dir, "agent-test")
+
+            assert mock_run.call_count == 1

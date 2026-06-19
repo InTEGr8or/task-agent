@@ -40,6 +40,7 @@ def _system_user_exists(name: str) -> bool:
 def init_agent(
     name: str,
     template_name: Optional[str] = None,
+    op_timeout: int = 30,
 ) -> dict:
     """Create a dedicated agent Linux user.
 
@@ -138,7 +139,9 @@ def init_agent(
     # 4b. Materialize template dotfiles on top of defaults (overrides)
     if template_name:
         template = templates.load_template(template_name)
-        templates.materialize_dotfiles(template, home_dir, agent_user)
+        templates.materialize_dotfiles(
+            template, home_dir, agent_user, op_timeout=op_timeout
+        )
 
     # 4b. Provision tools into agent's ~/.local/bin/
     local_bin = home_dir / ".local" / "bin"
