@@ -29,3 +29,10 @@ Completion Criteria:
 - Unit tests mocking subprocess.run for op read success/failure
 - Documentation in docs/task-agents.md
 - All existing tests pass
+
+## Solution
+
+Implemented op:// 1Password secret resolution in templates.py using subprocess.run to call the op read command, catching errors and timeouts gracefully. Added --op-timeout option to ta init-agent and forwarded it. Documented the new feature in docs/task-agents.md and added unit tests.
+
+---
+**Completed in commit:** `d6b16ca`
