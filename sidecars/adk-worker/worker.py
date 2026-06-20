@@ -3,6 +3,7 @@ import sys
 import subprocess
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
@@ -206,6 +207,152 @@ root_agent = SequentialAgent(
 )
 
 
+def get_available_cli() -> Optional[str]:
+    for cli in ["agy", "claude", "opencode"]:
+        if shutil.which(cli):
+            return cli
+    return None
+
+
+def read_task_description(file_path: str) -> str:
+    try:
+        return Path(file_path).read_text(encoding="utf-8")
+    except Exception as e:
+        return f"Could not read task description from {file_path}: {e}"
+
+
+def run_agy_cli_workflow(slug: str, file_path: str, project_root: str):
+    from google.adk.runners import InMemoryRunner
+    from google.genai import types
+
+    cli = os.environ.get("TA_TEST_CLI") or get_available_cli()
+    if not cli:
+        console.print(
+            "[red]Error: No available CLI found. Checked for agy, claude, opencode.[/red]"
+        )
+        sys.exit(1)
+
+    task_desc = read_task_description(file_path)
+    feedback = "Initial run. No feedback yet."
+    validation_passed = False
+    solution = "Task completed by agy-cli worker."
+
+    for iteration in range(1, 6):
+        console.print(
+            f"[bold blue]Iteration {iteration}/5 for agy-cli worker[/bold blue]"
+        )
+
+        # 1. Construct prompt
+        if iteration == 1:
+            prompt = (
+                f"Solve the following task in the codebase:\n\n"
+                f"{task_desc}\n\n"
+                f"Instructions:\n"
+                f"1. Attempt to solve the task or make appropriate changes to the codebase.\n"
+                f"2. If the task is too complex, break it into smaller sub-tasks (decompose it) and report these actions in the task completion notes.\n"
+            )
+        else:
+            prompt = (
+                f"The previous attempt to solve the task failed validation with the following feedback:\n"
+                f"{feedback}\n\n"
+                f"Please address this feedback and solve the task:\n\n"
+                f"{task_desc}\n\n"
+                f"Instructions:\n"
+                f"1. Attempt to solve the task or make appropriate changes to the codebase.\n"
+                f"2. If the task is too complex, break it into smaller sub-tasks (decompose it) and report these actions in the task completion notes.\n"
+            )
+
+        # 2. Build the command
+        if cli == "agy":
+            cmd = ["agy", "-p", prompt]
+        elif cli == "claude":
+            cmd = ["claude", "-p", prompt]
+        elif cli == "opencode":
+            cmd = ["opencode", "run", prompt]
+        else:
+            # Fallback for custom/mock test CLI
+            cmd = [cli, prompt]
+
+        # 3. Run the CLI worker
+        console.print(f"[blue]Running worker command: {' '.join(cmd[:3])}...[/blue]")
+        try:
+            # Run in the current directory (which is the worktree path)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            worker_output = result.stdout
+            if result.stderr:
+                worker_output += f"\n--- STDERR ---\n{result.stderr}"
+            console.print("[green]Worker command finished successfully.[/green]")
+        except subprocess.CalledProcessError as e:
+            worker_output = e.stdout or ""
+            if e.stderr:
+                worker_output += f"\n--- STDERR ---\n{e.stderr}"
+            console.print(
+                f"[yellow]Worker command failed with exit code {e.returncode}. Proceeding to validation.[/yellow]"
+            )
+        except Exception as e:
+            console.print(f"[red]Error executing worker command: {e}[/red]")
+            worker_output = f"Execution error: {e}"
+
+        # 4. Run the post-completion validator
+        console.print("[blue]Running post-completion validator...[/blue]")
+        runner = InMemoryRunner(agent=validator)
+        user_message = types.Content(
+            parts=[types.Part(text=f"Verify the changes for issue {slug}")]
+        )
+
+        # Run validation
+        for event in runner.run(
+            user_id="user",
+            session_id=f"val-session-{iteration}",
+            new_message=user_message,
+            state_delta={
+                "TA_SLUG": slug,
+                "TA_FILE": file_path,
+                "TA_ROOT": project_root,
+                "master_plan": f"Executed CLI worker: {cli}",
+                "validation_feedback": feedback,
+            },
+        ):
+            if event.actions and event.actions.escalate:
+                validation_passed = True
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        console.print(f"[{event.author}]: {part.text}")
+
+        # Retrieve final validation feedback
+        session = runner.session_service._get_session_impl(
+            app_name=runner.app_name,
+            user_id="user",
+            session_id=f"val-session-{iteration}",
+        )
+        if session:
+            feedback = session.state.get(
+                "validation_feedback", "Validation failed without feedback."
+            )
+            solution = feedback
+
+        if validation_passed:
+            console.print("[bold green]Validation passed successfully![/bold green]")
+            break
+        else:
+            console.print(
+                f"[bold yellow]Validation failed. Feedback: {feedback}[/bold yellow]"
+            )
+
+    # Post Merge Request
+    mr_dir = Path(project_root) / "docs" / "tasks" / "mr"
+    mr_dir.mkdir(parents=True, exist_ok=True)
+    mr_file = mr_dir / f"{slug}.md"
+
+    console.print(f"[blue]Posting Merge Request to {mr_file}...[/blue]")
+    mr_file.write_text(solution, encoding="utf-8")
+
+    console.print(
+        f"[bold green]Task '{slug}' is ready for review. Run 'ta mr list' to see it.[/bold green]"
+    )
+
+
 def main():
     slug = os.environ.get("TA_SLUG")
     file_path = os.environ.get("TA_FILE")
@@ -219,20 +366,56 @@ def main():
 
     console.print(f"[bold blue]ADK Sidecar starting for issue: {slug}[/bold blue]")
 
+    # Determine template name from .ta-agent.json in the current working directory
+    template_name = "adk"
+    meta_path = Path(".ta-agent.json")
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+                template_name = meta.get("template", "adk")
+        except Exception:
+            pass
+
+    if template_name == "agy-cli":
+        run_agy_cli_workflow(slug, file_path, project_root)
+        return
+
     try:
-        # Start the ADK interaction
-        # We pass the metadata into the initial state via kwargs
-        state = root_agent.run(
-            input_text=f"Solve issue {slug} based on {file_path}",
-            TA_SLUG=slug,
-            TA_FILE=file_path,
-            TA_ROOT=project_root,
-            validation_feedback="Initial run. No feedback yet.",
+        from google.adk.runners import InMemoryRunner
+        from google.genai import types
+
+        runner = InMemoryRunner(agent=root_agent)
+        user_message = types.Content(
+            parts=[types.Part(text=f"Solve issue {slug} based on {file_path}")]
         )
+
+        # Run the agent and consume the events
+        for event in runner.run(
+            user_id="user",
+            session_id="session",
+            new_message=user_message,
+            state_delta={
+                "TA_SLUG": slug,
+                "TA_FILE": file_path,
+                "TA_ROOT": project_root,
+                "validation_feedback": "Initial run. No feedback yet.",
+            },
+        ):
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    if part.text:
+                        console.print(f"[{event.author}]: {part.text}")
+
+        # Retrieve final state from session service
+        session = runner.session_service._get_session_impl(
+            app_name=runner.app_name,
+            user_id="user",
+            session_id="session",
+        )
+        state = session.state if session else {}
         console.print("[bold green]ADK Sidecar execution finished.[/bold green]")
 
-        # Extract the "solution" - for now we use the validation feedback or worker plan
-        # In a real scenario, we might have a specific agent for the final report.
         solution = state.get("validation_feedback", "Task completed by ADK worker.")
 
         # Post Merge Request

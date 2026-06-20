@@ -1,0 +1,12 @@
+name = "agy-cli"
+description = "AGY CLI agent workflow template running agy, claude, or opencode non-interactively"
+
+[dotfiles]
+".gitconfig" = { source = "inline", content = """
+[user]
+    name = Agent
+    email = agent@localhost
+[safe]
+    directory = *
+""" }
+".ssh/id_ed25519" = { source = "generate" }

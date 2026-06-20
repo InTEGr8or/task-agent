@@ -15,6 +15,16 @@ class TestLoadTemplate:
         assert ".gitconfig" in paths
         assert ".ssh/id_ed25519" in paths
 
+    def test_load_agy_cli_meta(self):
+        t = templates.load_template("agy-cli")
+        assert t.name == "agy-cli"
+        assert t.description
+        assert len(t.dotfiles) >= 2
+
+        paths = {df.path for df in t.dotfiles}
+        assert ".gitconfig" in paths
+        assert ".ssh/id_ed25519" in paths
+
     def test_load_gh_meta(self):
         t = templates.load_template("gh")
         assert t.name == "gh"
