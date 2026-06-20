@@ -12,3 +12,6 @@ Introduce a new workflow agent template called 'agy-cli' that integrates with 'a
 2. Implement the prompt structure requesting the agent to complete the task or break it into smaller sub-tasks (reporting actions in task completion notes).
 3. Implement a post-completion validator agent that executes after the 'agy-cli' worker finishes to verify task completion.
 4. Provide unit or integration tests verifying the workflow template execution and validation logic.
+
+---
+**Completed in commit:** `779b1b1`
