@@ -824,25 +824,35 @@ class TaskAgent:
         res = subprocess.run(
             cmd, capture_output=True, text=True, shell=(os.name == "nt")
         )
-        if res.returncode != 0 and not amend:
-            # Retry once for pre-commit hooks
-            if files:
-                for f in files:
-                    git_add_path = _get_git_add_path(f)
+        if res.returncode != 0:
+            combined = (res.stdout or "") + (res.stderr or "")
+            if (
+                "nothing to commit" in combined
+                or "nothing added to commit" in combined
+                or "working tree clean" in combined
+                or "no changes added to commit" in combined
+            ):
+                return "no_changes"
+
+            if not amend:
+                # Retry once for pre-commit hooks
+                if files:
+                    for f in files:
+                        git_add_path = _get_git_add_path(f)
+                        subprocess.run(
+                            ["git", "-C", str(repo_root), "add", git_add_path],
+                            check=False,
+                            shell=(os.name == "nt"),
+                        )
+                else:
                     subprocess.run(
-                        ["git", "-C", str(repo_root), "add", git_add_path],
+                        ["git", "-C", str(repo_root), "add", "."],
                         check=False,
                         shell=(os.name == "nt"),
                     )
-            else:
-                subprocess.run(
-                    ["git", "-C", str(repo_root), "add", "."],
-                    check=False,
-                    shell=(os.name == "nt"),
+                res = subprocess.run(
+                    cmd, capture_output=True, text=True, shell=(os.name == "nt")
                 )
-            res = subprocess.run(
-                cmd, capture_output=True, text=True, shell=(os.name == "nt")
-            )
 
         if res.returncode == 0:
             try:
@@ -855,7 +865,13 @@ class TaskAgent:
             except Exception:
                 return "unknown"
 
-        if "nothing to commit" in res.stderr or "nothing added to commit" in res.stderr:
+        combined = (res.stdout or "") + (res.stderr or "")
+        if (
+            "nothing to commit" in combined
+            or "nothing added to commit" in combined
+            or "working tree clean" in combined
+            or "no changes added to commit" in combined
+        ):
             return "no_changes"
 
         return "failed"

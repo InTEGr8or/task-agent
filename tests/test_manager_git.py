@@ -114,3 +114,18 @@ def test_git_commit_no_verify(manager):
         # Verify the commit call did NOT include --no-verify
         commit_call_2 = mock_run.call_args_list[3]
         assert "--no-verify" not in commit_call_2.args[0]
+
+
+def test_git_commit_clean_tree(manager):
+    with patch("subprocess.run") as mock_run:
+        # First call: git add (succeeds)
+        # Second call: git commit (fails with returncode=1, but stdout says nothing to commit)
+        mock_run.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(
+                returncode=1, stdout="nothing to commit, working tree clean", stderr=""
+            ),
+        ]
+
+        result = manager._git_commit(Path("/repo"), "feat: test")
+        assert result == "no_changes"

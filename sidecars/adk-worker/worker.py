@@ -287,8 +287,29 @@ def run_agy_cli_workflow(slug: str, file_path: str, project_root: str):
             if e.stderr:
                 worker_output += f"\n--- STDERR ---\n{e.stderr}"
             console.print(
-                f"[yellow]Worker command failed with exit code {e.returncode}. Proceeding to validation.[/yellow]"
+                f"[yellow]Worker command failed with exit code {e.returncode}.[/yellow]"
             )
+            # Check if this failure was due to not being logged in or missing credentials
+            combined_output = worker_output.lower()
+            auth_keywords = [
+                "not logged in",
+                "login required",
+                "please log in",
+                "please login",
+                "gcloud auth",
+                "unauthenticated",
+                "unauthorized",
+                "credentials",
+                "sign in",
+            ]
+            if any(kw in combined_output for kw in auth_keywords):
+                console.print(
+                    "[red]Error: Worker command failed due to authentication/login issue.[/red]"
+                )
+                console.print(f"[red]{worker_output.strip()}[/red]")
+                sys.exit(1)
+
+            console.print("[yellow]Proceeding to validation.[/yellow]")
         except Exception as e:
             console.print(f"[red]Error executing worker command: {e}[/red]")
             worker_output = f"Execution error: {e}"

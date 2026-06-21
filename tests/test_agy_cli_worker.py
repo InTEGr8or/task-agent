@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -192,3 +193,32 @@ def test_main_agy_cli(tmp_path, monkeypatch):
         mock_workflow.assert_called_once_with(
             "test-slug", str(tmp_path / "task.md"), str(tmp_path)
         )
+
+
+def test_run_agy_cli_workflow_auth_failed(tmp_path):
+    import subprocess
+
+    slug = "test-slug"
+    file_path = tmp_path / "task.md"
+    file_path.write_text("Test Task Content", encoding="utf-8")
+    project_root = tmp_path
+
+    # Mock get_available_cli to return "agy"
+    # Mock subprocess.run to raise CalledProcessError with authentication error message
+    with (
+        patch("worker.get_available_cli", return_value="agy"),
+        patch("subprocess.run") as mock_run,
+    ):
+        mock_error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["agy", "-p", "..."],
+            output="Please login to Antigravity CLI",
+            stderr="gcloud auth login required",
+        )
+        mock_run.side_effect = mock_error
+
+        # Running this should call sys.exit(1)
+        with pytest.raises(SystemExit) as exc_info:
+            worker.run_agy_cli_workflow(slug, str(file_path), str(project_root))
+
+        assert exc_info.value.code == 1

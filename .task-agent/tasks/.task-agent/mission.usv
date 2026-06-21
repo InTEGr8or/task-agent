@@ -2,7 +2,7 @@ Investigate better integration with Antigravity CLI of Claude CLIinvestigate-be
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
 Allow create task in other repoallow-create-task-in-other-repo
-Agents report commands are hangingagents-report-commands-are-hanging
+Add secondary documents to the task viewadd-secondary-documents-to-the-task-view
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
