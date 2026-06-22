@@ -2658,6 +2658,41 @@ def promote_version(console: Console, manager: TaskAgent):
     new_v, _ = get_project_version()
     console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
+    # Auto-amend version bump into previous commit
+    try:
+        for file in ["pyproject.toml", "package.json", "uv.lock"]:
+            if Path(file).exists():
+                subprocess.run(
+                    ["git", "add", file],
+                    capture_output=True,
+                    check=False,
+                    shell=(os.name == "nt"),
+                )
+        result = subprocess.run(
+            ["git", "commit", "--amend", "--no-edit"],
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        if result.returncode == 0:
+            console.print("[dim]Version bump amended into previous commit[/dim]")
+        elif (
+            b"nothing to commit" in result.stdout
+            or b"nothing to commit" in result.stderr
+        ):
+            console.print("[yellow]No changes to commit (already amended?)[/yellow]")
+        else:
+            console.print(
+                "[yellow]Warning: Could not auto-amend version bump. "
+                "Run 'git add' and 'git commit --amend --no-edit' manually.[/yellow]"
+            )
+            if result.stderr:
+                console.print(f"[dim]{result.stderr.decode()}[/dim]")
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Auto-amend failed: {e}. "
+            "Run 'git commit --amend --no-edit' manually.[/yellow]"
+        )
+
 
 def cmd_worktree(console: Console, manager: TaskAgent, args):
     """Manage git worktrees for branches, tags, and commits."""
@@ -3351,21 +3386,84 @@ def cmd_triage(
             elif key == "l" and not show_completed:  # make current depend on above
                 if cursor > 0:
                     current_issue = indexed_issues[cursor][0]
-                    above_issue = indexed_issues[cursor - 1][0]
-                    try:
-                        manager.add_dependency(current_issue.slug, above_issue.slug)
-                        issues = get_display_issues(search_query, show_completed)
-                        indexed_issues = build_hierarchy(issues)
-                    except Exception as e:
-                        console.print(f"[red]Error: {e}[/red]")
+                    current_depth = indexed_issues[cursor][1]
+                    target_issue = None
+
+                    if current_depth == 0:
+                        # Link to the root of the above tree
+                        root_idx = cursor - 1
+                        while root_idx >= 0 and indexed_issues[root_idx][1] > 0:
+                            root_idx -= 1
+                        if root_idx >= 0:
+                            target_issue = indexed_issues[root_idx][0]
+                    else:
+                        # Link to the sibling immediately above it at the same depth
+                        sibling_idx = cursor - 1
+                        while (
+                            sibling_idx >= 0
+                            and indexed_issues[sibling_idx][1] > current_depth
+                        ):
+                            sibling_idx -= 1
+                        if (
+                            sibling_idx >= 0
+                            and indexed_issues[sibling_idx][1] == current_depth
+                        ):
+                            target_issue = indexed_issues[sibling_idx][0]
+
+                    if target_issue:
+                        try:
+                            # Check transitive dependencies recursively to avoid redundancy
+                            all_issues = manager.load_mission()
+
+                            def is_ancestor(ancestor_slug, desc_slug):
+                                slug_to_issue = {i.slug: i for i in all_issues}
+                                if desc_slug not in slug_to_issue:
+                                    return False
+                                todo = list(slug_to_issue[desc_slug].dependencies)
+                                visited = set(todo)
+                                while todo:
+                                    curr = todo.pop()
+                                    if curr == ancestor_slug:
+                                        return True
+                                    if curr in slug_to_issue:
+                                        for dep in slug_to_issue[curr].dependencies:
+                                            if dep not in visited:
+                                                visited.add(dep)
+                                                todo.append(dep)
+                                return False
+
+                            # Add dependency on target_issue
+                            manager.add_dependency(
+                                current_issue.slug, target_issue.slug
+                            )
+
+                            # Remove redundant direct dependencies that are transitively covered
+                            for dep in list(current_issue.dependencies):
+                                if dep != target_issue.slug and is_ancestor(
+                                    dep, target_issue.slug
+                                ):
+                                    manager.remove_dependency(current_issue.slug, dep)
+
+                            issues = get_display_issues(search_query, show_completed)
+                            indexed_issues = build_hierarchy(issues)
+                        except Exception as e:
+                            console.print(f"[red]Error: {e}[/red]")
             elif key == "h" and not show_completed:  # remove dependency on above
                 if cursor > 0:
                     current_issue = indexed_issues[cursor][0]
                     above_issue = indexed_issues[cursor - 1][0]
                     try:
-                        manager.remove_dependency(current_issue.slug, above_issue.slug)
-                        issues = get_display_issues(search_query, show_completed)
-                        indexed_issues = build_hierarchy(issues)
+                        if above_issue.slug in current_issue.dependencies:
+                            parents = list(above_issue.dependencies)
+                            manager.remove_dependency(
+                                current_issue.slug, above_issue.slug
+                            )
+                            # Move up: inherit the parent's dependencies
+                            for parent in parents:
+                                manager.add_dependency(current_issue.slug, parent)
+
+                            issues = get_display_issues(search_query, show_completed)
+                            indexed_issues = build_hierarchy(issues)
                     except Exception as e:
                         console.print(f"[red]Error: {e}[/red]")
 

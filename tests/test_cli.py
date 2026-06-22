@@ -521,3 +521,57 @@ def test_cli_init_agent_arguments(monkeypatch):
         main()
         assert len(called) == 2
         assert called[1] == ("my-agent", None, 45)
+
+
+def test_cmd_triage_depends_on_above(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Task 1")
+    manager.create_issue("Task 2")
+    manager.add_dependency("task-2", "task-1")
+    manager.create_issue("Task 3")
+    manager.add_dependency("task-3", "task-2")
+    manager.create_issue("Task 4")
+
+    mock_console = MagicMock()
+
+    # Test 1: Link task-4 (depth 0) to task-1 (root of the tree above it)
+    keys = ["j", "j", "j", "l", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    t4_updated = manager.find_issue_file("task-4")
+    assert "task-1" in manager.extract_deps(t4_updated)
+
+    # Test 2: Link task-4 (depth 1) to its sibling task-2 (depth 1), cleaning up task-1 dependency
+    keys = ["j", "j", "j", "l", "q"]
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    assert "task-2" in manager.extract_deps(t4_updated)
+    assert "task-1" not in manager.extract_deps(t4_updated)
+
+    # Test 3: Unlink dependency of task-3 (depends on task-2) to move it up to depend on task-1 (task-2's parent)
+    keys = ["j", "j", "h", "q"]
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    t3_updated = manager.find_issue_file("task-3")
+    assert "task-1" in manager.extract_deps(t3_updated)
+    assert "task-2" not in manager.extract_deps(t3_updated)
