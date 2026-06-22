@@ -154,10 +154,14 @@ class TaskAgent:
 
     def ensure_issues_dir(self):
         """Ensure the issues directory and its subdirectories exist."""
-        self.issues_root.mkdir(parents=True, exist_ok=True)
-        self.mission_dir.mkdir(parents=True, exist_ok=True)
+        if not self.issues_root.is_dir():
+            self.issues_root.mkdir(parents=True, exist_ok=True)
+        if not self.mission_dir.is_dir():
+            self.mission_dir.mkdir(parents=True, exist_ok=True)
         for subdir in ["pending", "draft", "active", "completed", "mr"]:
-            (self.issues_root / subdir).mkdir(parents=True, exist_ok=True)
+            sub_path = self.issues_root / subdir
+            if not sub_path.is_dir():
+                sub_path.mkdir(parents=True, exist_ok=True)
 
     def lock_mission_files(self):
         """Ensure mission.usv and datapackage.json are read-only."""

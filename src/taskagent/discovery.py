@@ -117,10 +117,12 @@ def _handle_ejected_symlink(current_root: Path):
                 )
 
     # Ensure target directory exists
-    target_path.mkdir(parents=True, exist_ok=True)
+    if not target_path.is_dir():
+        target_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure parent (docs/) exists
-    tasks_link.parent.mkdir(parents=True, exist_ok=True)
+    if not tasks_link.parent.is_dir():
+        tasks_link.parent.mkdir(parents=True, exist_ok=True)
 
     if tasks_link.exists() or tasks_link.is_symlink():
         # Check if it's already correct
