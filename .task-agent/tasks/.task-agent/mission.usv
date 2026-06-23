@@ -5,6 +5,7 @@ Allow create task in other repoallow-create-task-in-other-repo
 Add secondary documents to the task viewadd-secondary-documents-to-the-task-view
 shard-completed-tasks-by-month-and-index-historyshard-completed-tasks-by-month-and-index-history
 Create decompose feature to decompose a taskcreate-decompose-feature-to-decompose-a-task
+Allow bypass of commit on doneallow-bypass-of-commit-on-done
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
