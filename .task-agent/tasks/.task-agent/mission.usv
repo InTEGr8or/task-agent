@@ -6,6 +6,9 @@ Add secondary documents to the task viewadd-secondary-documents-to-the-task-vie
 shard-completed-tasks-by-month-and-index-historyshard-completed-tasks-by-month-and-index-history
 Create decompose feature to decompose a taskcreate-decompose-feature-to-decompose-a-task
 Allow bypass of commit on doneallow-bypass-of-commit-on-done
+Use the standard view for search resultuse-the-standard-view-for-search-result
+Agents are unable to close or mark done a task itemagents-are-unable-to-close-or-mark-done-a-task-item
+Allow new to create new task as active, if neeedeallow-new-to-create-new-task-as-active-if-neeede
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations

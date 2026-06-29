@@ -2422,7 +2422,7 @@ def cmd_init_mcp(
 
     mcp_config = {
         "mcpServers": {
-            "task-agent": {
+            "task_agent": {
                 "command": mcp_command,
                 "args": mcp_args,
             }
@@ -2440,7 +2440,7 @@ def cmd_init_mcp(
                 "claude",
                 "mcp",
                 "add",
-                "task-agent",
+                "task_agent",
                 "--",
                 mcp_command,
             ] + mcp_args
@@ -2470,7 +2470,7 @@ def cmd_init_mcp(
             "gemini",
             "mcp",
             "add",
-            "task-agent",
+            "task_agent",
             mcp_command,
             *mcp_args,
             "--trust",
@@ -2501,7 +2501,7 @@ def cmd_init_mcp(
                 config = {}
             if "mcp" not in config:
                 config["mcp"] = {}
-            config["mcp"]["task-agent"] = {
+            config["mcp"]["task_agent"] = {
                 "type": "local",
                 "command": [mcp_command, *mcp_args],
             }
@@ -3907,7 +3907,11 @@ Usage:
         display_version_info(console)
         return
 
-    manager = discover(Path(args.config_dir) if args.config_dir else None)
+    try:
+        manager = discover(Path(args.config_dir) if args.config_dir else None)
+    except (RuntimeError, ValueError, OSError) as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
     if args.command == "path":
         issue_file = manager.find_issue_file(args.slug)

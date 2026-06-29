@@ -282,7 +282,7 @@ def test_cmd_init_mcp_claude(tmp_path):
         assert call_args[0] == "claude"
         assert call_args[1] == "mcp"
         assert call_args[2] == "add"
-        assert call_args[3] == "task-agent"
+        assert call_args[3] == "task_agent"
         assert call_args[4] == "--"
         assert call_args[5] == "uv"
         assert "run" in call_args

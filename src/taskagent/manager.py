@@ -155,12 +155,27 @@ class TaskAgent:
     def ensure_issues_dir(self):
         """Ensure the issues directory and its subdirectories exist."""
         if not self.issues_root.is_dir():
+            if self.issues_root.exists() or self.issues_root.is_symlink():
+                raise RuntimeError(
+                    f"The tasks directory '{self.issues_root}' exists but is not a directory. "
+                    "Please delete it or configure a different path."
+                )
             self.issues_root.mkdir(parents=True, exist_ok=True)
         if not self.mission_dir.is_dir():
+            if self.mission_dir.exists() or self.mission_dir.is_symlink():
+                raise RuntimeError(
+                    f"The mission directory '{self.mission_dir}' exists but is not a directory. "
+                    "Please delete it or configure a different path."
+                )
             self.mission_dir.mkdir(parents=True, exist_ok=True)
         for subdir in ["pending", "draft", "active", "completed", "mr"]:
             sub_path = self.issues_root / subdir
             if not sub_path.is_dir():
+                if sub_path.exists() or sub_path.is_symlink():
+                    raise RuntimeError(
+                        f"The task subdirectory '{sub_path}' exists but is not a directory. "
+                        "Please delete it or configure a different path."
+                    )
                 sub_path.mkdir(parents=True, exist_ok=True)
 
     def lock_mission_files(self):

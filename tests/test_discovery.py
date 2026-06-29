@@ -136,3 +136,34 @@ def test_discover_non_git_subdir_in_nested_git_repo(tmp_path):
 
     manager = discover(start_path=subdir)
     assert manager.issues_root.resolve() == child_tasks.resolve()
+
+
+def test_discover_fails_when_docs_tasks_is_file(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+    # Create docs/tasks as a file, not a directory
+    docs_dir = root / "docs"
+    docs_dir.mkdir()
+    tasks_file = docs_dir / "tasks"
+    tasks_file.write_text("not a directory")
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc_info:
+        discover(start_path=root)
+    assert "exists but is not a directory" in str(exc_info.value)
+
+
+def test_discover_fails_when_parent_exists_but_is_file(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+    # Create docs as a file, not a directory
+    docs_file = root / "docs"
+    docs_file.write_text("not a directory")
+
+    import pytest
+    with pytest.raises(RuntimeError) as exc_info:
+        discover(start_path=root)
+    assert "exists but is not a directory" in str(exc_info.value)
+
