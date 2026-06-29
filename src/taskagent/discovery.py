@@ -118,10 +118,20 @@ def _handle_ejected_symlink(current_root: Path):
 
     # Ensure target directory exists
     if not target_path.is_dir():
+        if target_path.exists() or target_path.is_symlink():
+            raise RuntimeError(
+                f"The ejection target path '{target_path}' exists but is not a directory. "
+                "Please delete it or configure a different path."
+            )
         target_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure parent (docs/) exists
     if not tasks_link.parent.is_dir():
+        if tasks_link.parent.exists() or tasks_link.parent.is_symlink():
+            raise RuntimeError(
+                f"The path '{tasks_link.parent}' exists but is not a directory. "
+                "Please delete it or configure a different path."
+            )
         tasks_link.parent.mkdir(parents=True, exist_ok=True)
 
     if tasks_link.exists() or tasks_link.is_symlink():
