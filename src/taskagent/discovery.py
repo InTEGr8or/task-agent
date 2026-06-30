@@ -104,16 +104,26 @@ def _handle_ejected_symlink(current_root: Path):
     if not eject_enabled or not target_path_str:
         target_path = new_target
     else:
-        target_path = Path(target_path_str).absolute()
-        # Fallback to local if the configured ejection path doesn't exist
-        if not target_path.exists() and not target_path.is_symlink():
-            target_path = new_target
+        path_obj = Path(target_path_str).expanduser()
+        if path_obj.is_absolute():
+            target_path = path_obj
+        else:
+            target_path = (current_root / path_obj).resolve().absolute()
+        # Ensure the target directory exists – create it if missing
+        if not target_path.is_dir():
+            if target_path.exists() or target_path.is_symlink():
+                raise RuntimeError(
+                    f"The ejection target path '{target_path}' exists but is not a directory. "
+                    "Please delete it or configure a different path."
+                )
+            target_path.mkdir(parents=True, exist_ok=True)
+            # Update env vars to point to the created path
             if env_path.exists():
                 _update_env_var(
-                    env_path, "TA_EJECTED_TASKS_PATH", str(new_target.resolve())
+                    env_path, "TA_EJECTED_TASKS_PATH", str(target_path.resolve())
                 )
                 _update_env_var(
-                    env_path, "TA_EJECTED_ISSUES_PATH", str(new_target.resolve())
+                    env_path, "TA_EJECTED_ISSUES_PATH", str(target_path.resolve())
                 )
 
     # Ensure target directory exists
@@ -243,9 +253,45 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
                 # Fallback if tomllib is missing or parse fails
                 pass
 
-        # 3. Check for docs/tasks/.task-agent/ (new default with mission files in subdirectory)
-        tasks_dir = current / "docs" / "tasks"
+        # 3. Determine primary tasks directory (prefer docks/tasks, fallback to docs/tasks)
+        docks_tasks = current / "docks" / "tasks"
+        docs_tasks = current / "docs" / "tasks"
+        # Choose existing directory or default to docks/tasks
+        tasks_dir = docks_tasks if docks_tasks.exists() else docs_tasks
         if tasks_dir.exists() and tasks_dir.is_dir():
+            # If using docks, ensure migration from old .task-agent if present
+            if tasks_dir == docks_tasks:
+                # Migrate any .task-agent/tasks content into docks/tasks
+                old_task_root = current / ".task-agent" / "tasks"
+                if old_task_root.exists() and old_task_root.is_dir():
+                    for item in old_task_root.iterdir():
+                        target_path = tasks_dir / item.name
+                        if target_path.exists():
+                            # If target exists, merge recursively
+                            # Use same logic as later merge helper
+                            # Simple move: overwrite if file, merge if dir
+                            if item.is_dir() and target_path.is_dir():
+                                # Recursive merge
+                                for sub in item.rglob("*"):
+                                    rel = sub.relative_to(item)
+                                    dest = target_path / rel
+                                    if sub.is_dir():
+                                        dest.mkdir(parents=True, exist_ok=True)
+                                    else:
+                                        dest.parent.mkdir(parents=True, exist_ok=True)
+                                        shutil.move(str(sub), str(dest))
+                                shutil.rmtree(str(item))
+                            else:
+                                if target_path.is_dir():
+                                    shutil.rmtree(str(target_path))
+                                shutil.move(str(item), str(target_path))
+                        else:
+                            shutil.move(str(item), str(target_path))
+                    # Clean up old .task-agent/tasks directory
+                    try:
+                        shutil.rmtree(str(old_task_root))
+                    except Exception:
+                        pass
             # Check if mission files are in .task-agent/ subdirectory
             if (tasks_dir / ".task-agent").exists():
                 return TaskAgent(config_dir=str(tasks_dir))

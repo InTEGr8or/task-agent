@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 from taskagent.discovery import discover
+import os
 
 
 def _init_git_repo(path: Path):
@@ -149,6 +150,7 @@ def test_discover_fails_when_docs_tasks_is_file(tmp_path):
     tasks_file.write_text("not a directory")
 
     import pytest
+
     with pytest.raises(RuntimeError) as exc_info:
         discover(start_path=root)
     assert "exists but is not a directory" in str(exc_info.value)
@@ -163,7 +165,54 @@ def test_discover_fails_when_parent_exists_but_is_file(tmp_path):
     docs_file.write_text("not a directory")
 
     import pytest
+
     with pytest.raises(RuntimeError) as exc_info:
         discover(start_path=root)
     assert "exists but is not a directory" in str(exc_info.value)
 
+
+def test_discover_relative_ejected_path_resolved_relative_to_repo_root(
+    tmp_path, monkeypatch
+):
+    # Clear environment variables first to avoid inheriting from parent process
+    monkeypatch.delenv("TA_EJECT_TASKS", raising=False)
+    monkeypatch.delenv("TA_EJECTED_TASKS_PATH", raising=False)
+    monkeypatch.delenv("TA_EJECTED_ISSUES_PATH", raising=False)
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+
+    # Write a .env file with a relative ejected path
+    env_content = "TA_EJECT_TASKS=true\nTA_EJECTED_TASKS_PATH=custom_eject_dir\n"
+    (root / ".env").write_text(env_content)
+
+    # CWD is inside a subdirectory
+    subdir = root / "src" / "deep"
+    subdir.mkdir(parents=True)
+
+    # Use monkeypatch to run with cwd = subdir
+    monkeypatch.chdir(subdir)
+
+    # Run discover
+    print("BEFORE DISCOVER: CWD =", Path.cwd())
+    print("BEFORE DISCOVER: root .env exists =", (root / ".env").exists())
+    print("BEFORE DISCOVER: root .git exists =", (root / ".git").exists())
+
+    manager = discover(start_path=subdir)
+
+    print("AFTER DISCOVER: TA_EJECT_TASKS =", os.environ.get("TA_EJECT_TASKS"))
+    print(
+        "AFTER DISCOVER: TA_EJECTED_TASKS_PATH =",
+        os.environ.get("TA_EJECTED_TASKS_PATH"),
+    )
+    print("AFTER DISCOVER: manager.issues_root =", manager.issues_root)
+
+    # The ejection path should be resolved relative to root (where .env and .git exist),
+    # not relative to CWD (subdir)
+    expected_eject_path = root / "custom_eject_dir"
+    assert expected_eject_path.is_dir()
+
+    tasks_link = root / "docs" / "tasks"
+    assert tasks_link.is_symlink()
+    assert tasks_link.resolve() == expected_eject_path.resolve()
