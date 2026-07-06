@@ -40,7 +40,7 @@ from rich.live import Live
 
 from taskagent.models.issue import Issue
 from taskagent.manager import TaskAgent
-from taskagent.discovery import discover
+from taskagent.discovery import discover, get_task_agent_project_root
 from taskagent import agent
 
 
@@ -1426,7 +1426,7 @@ def cmd_commit_tasks(
     import subprocess
     from datetime import datetime
 
-    project_root = Path(__file__).resolve().parent.parent.parent
+    project_root = get_task_agent_project_root()
     tasks_dir = project_root / "docs" / "tasks"
 
     if not tasks_dir.exists():
@@ -2632,7 +2632,27 @@ def cmd_version(
 
 def promote_version(console: Console, manager: TaskAgent):
     """Auto-promote project version when a task is completed."""
-    _, source = get_project_version()
+    # Find the project root containing project files relative to manager's issues_root
+    project_root = None
+    if manager.issues_root:
+        curr = Path(manager.issues_root).resolve()
+        while curr.parent != curr:
+            if (
+                (curr / "pyproject.toml").exists()
+                or (curr / "package.json").exists()
+                or (curr / ".git").exists()
+            ):
+                project_root = curr
+                break
+            curr = curr.parent
+
+    if not project_root:
+        return
+
+    _, source = get_project_version(project_root)
+    if not source:
+        return
+
     if source == "pyproject.toml":
         subprocess.run(
             [
@@ -2645,31 +2665,50 @@ def promote_version(console: Console, manager: TaskAgent):
                 "--no-tag",
             ],
             check=True,
+            cwd=str(project_root),
             shell=(os.name == "nt"),
         )
-        if Path("uv.lock").exists():
-            subprocess.run(["uv", "lock"], check=True, shell=(os.name == "nt"))
+        if (project_root / "uv.lock").exists():
+            subprocess.run(
+                ["uv", "lock"],
+                check=True,
+                cwd=str(project_root),
+                shell=(os.name == "nt"),
+            )
     elif source == "package.json":
         subprocess.run(
             ["npm", "version", "patch", "--no-git-tag-version"],
             check=True,
+            cwd=str(project_root),
             shell=(os.name == "nt"),
         )
-    new_v, _ = get_project_version()
+    new_v, _ = get_project_version(project_root)
     console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
 
     # Auto-amend version bump into previous commit
     try:
+        git_root = None
+        curr = project_root
+        while curr.parent != curr:
+            if (curr / ".git").exists():
+                git_root = curr
+                break
+            curr = curr.parent
+
+        if not git_root:
+            return
+
         for file in ["pyproject.toml", "package.json", "uv.lock"]:
-            if Path(file).exists():
+            if (project_root / file).exists():
+                rel_path = (project_root / file).relative_to(git_root)
                 subprocess.run(
-                    ["git", "add", file],
+                    ["git", "-C", str(git_root), "add", str(rel_path)],
                     capture_output=True,
                     check=False,
                     shell=(os.name == "nt"),
                 )
         result = subprocess.run(
-            ["git", "commit", "--amend", "--no-edit"],
+            ["git", "-C", str(git_root), "commit", "--amend", "--no-edit"],
             capture_output=True,
             shell=(os.name == "nt"),
         )

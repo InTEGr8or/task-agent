@@ -8,3 +8,5 @@ taskhash.json
 docs/tasks
 .gwt/
 taskhash
+.task-agent/
+.task-agent
