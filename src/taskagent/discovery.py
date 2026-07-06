@@ -333,3 +333,40 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
     # We use start_path or cwd as the base
     fallback_base = Path(start_path or Path.cwd()).absolute()
     return TaskAgent(config_dir=str(fallback_base / "docs" / "tasks"))
+
+
+def get_task_agent_project_root() -> Path:
+    """Find the root directory of the task-agent repository.
+
+    Tries multiple resolution strategies:
+    1. Check if the current file's package path resolves to a directory containing docs/tasks.
+    2. Check the uv-receipt.toml for the task-agent tool to find its source directory.
+    3. Fall back to standard/well-known directories (e.g. ~/repos/task-agent).
+    """
+    # Strategy 1: Dev / editable installation
+    dev_root = Path(__file__).resolve().parent.parent.parent
+    if (dev_root / "docs" / "tasks").exists():
+        return dev_root
+
+    # Strategy 2: Parse uv-receipt.toml
+    uv_receipt = Path("~/.local/share/uv/tools/task-agent/uv-receipt.toml").expanduser()
+    if uv_receipt.exists():
+        try:
+            content = uv_receipt.read_text()
+            # Simple regex parser to extract directory
+            import re
+
+            m = re.search(r'directory\s*=\s*"([^"]+)"', content)
+            if m:
+                receipt_path = Path(m.group(1))
+                if (receipt_path / "docs" / "tasks").exists():
+                    return receipt_path
+        except Exception:
+            pass
+
+    # Strategy 3: Fall back to well-known directory
+    fallback = Path("~/repos/task-agent").expanduser()
+    if (fallback / "docs" / "tasks").exists():
+        return fallback
+
+    return dev_root

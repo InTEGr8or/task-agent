@@ -6,7 +6,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 from taskagent.manager import TaskAgent
-from taskagent.discovery import discover
+from taskagent.discovery import discover, get_task_agent_project_root
 
 # Create an MCP server
 mcp = FastMCP("TaskAgent")
@@ -396,7 +396,7 @@ def commit_tasks(message: str = "", push: bool = False) -> str:
         message: Optional commit message. Auto-generated if omitted.
         push: Whether to push after committing.
     """
-    project_root = Path(__file__).resolve().parent.parent.parent
+    project_root = get_task_agent_project_root()
     tasks_dir = project_root / "docs" / "tasks"
 
     if not tasks_dir.exists():
