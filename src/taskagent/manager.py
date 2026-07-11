@@ -92,36 +92,47 @@ class TaskAgent:
         if not path.exists():
             return
 
-        # First handle chattr (immutable attribute)
-        if writable:
+        import sys
+
+        is_linux = sys.platform.startswith("linux")
+
+        # First handle chattr (immutable attribute) on Linux
+        if writable and is_linux:
             # Remove immutable attribute before making writable
             try:
                 subprocess.run(
                     ["chattr", "-i", str(path)],
                     capture_output=True,
                     check=True,
-                    shell=(os.name == "nt"),
                 )
+            except FileNotFoundError:
+                pass  # chattr not available
             except subprocess.CalledProcessError:
-                raise RuntimeError(
-                    f"Cannot modify {path.name} (immutable attribute set).\n"
-                    f"Run: sudo chattr -i {path}\n"
-                    f"Or: sudo setcap cap_linux_immutable+ep $(which ta)"
-                )
+                pass  # Ignore here; if chmod fails later, we will handle it
 
         # Handle chmod
         current_mode = path.stat().st_mode
-        if writable:
-            os.chmod(path, current_mode | stat.S_IWRITE)
-        else:
-            os.chmod(path, current_mode & ~stat.S_IWRITE)
-            # Set immutable attribute after making read-only
+        try:
+            if writable:
+                os.chmod(path, current_mode | stat.S_IWRITE)
+            else:
+                os.chmod(path, current_mode & ~stat.S_IWRITE)
+        except PermissionError as e:
+            if writable and is_linux:
+                raise RuntimeError(
+                    f"Cannot modify {path.name} (immutable attribute set or permission denied).\n"
+                    f"Run: sudo chattr -i {path}\n"
+                    f"Or: sudo setcap cap_linux_immutable+ep $(which ta)"
+                ) from e
+            raise
+
+        # Set immutable attribute after making read-only on Linux
+        if not writable and is_linux:
             try:
                 subprocess.run(
                     ["chattr", "+i", str(path)],
                     capture_output=True,
                     check=False,
-                    shell=(os.name == "nt"),
                 )
             except Exception:
                 pass  # Best effort
