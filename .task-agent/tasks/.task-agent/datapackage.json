@@ -17,7 +17,11 @@
             "type": "string"
           },
           {
-            "name": "dependencies",
+            "name": "blocked_by",
+            "type": "string"
+          },
+          {
+            "name": "subtask_of",
             "type": "string"
           }
         ]

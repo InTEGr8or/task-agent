@@ -588,7 +588,7 @@ class TaskAgent:
 
                 # Parse blocked by
                 m_blocked = re.search(
-                    r"\*\*Blocked by:\*\*\s*(.*)", content, re.IGNORECASE
+                    r"\*\*Blocked by:\*\*[ \t]*(.*)", content, re.IGNORECASE
                 )
                 if m_blocked:
                     blocked_by = [
@@ -597,14 +597,14 @@ class TaskAgent:
 
                 # Parse subtask of
                 m_subtask = re.search(
-                    r"\*\*Subtask of:\*\*\s*(.*)", content, re.IGNORECASE
+                    r"\*\*Subtask of:\*\*[ \t]*(.*)", content, re.IGNORECASE
                 )
                 if m_subtask:
                     subtask_of = m_subtask.group(1).strip() or None
 
                 # Legacy depends on (alias for blocked_by)
                 m_depends = re.search(
-                    r"\*\*Depends on:\*\*\s*(.*)", content, re.IGNORECASE
+                    r"\*\*Depends on:\*\*[ \t]*(.*)", content, re.IGNORECASE
                 )
                 if m_depends:
                     legacy_deps = [
@@ -815,8 +815,8 @@ class TaskAgent:
         blocked_by.append(depends_on)
 
         # Update Markdown
-        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
-        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
 
         has_blocked = re.search(pattern_blocked, content)
         has_depends = re.search(pattern_depends, content)
@@ -866,8 +866,8 @@ class TaskAgent:
 
         blocked_by.remove(depends_on)
 
-        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
-        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
 
         has_blocked = re.search(pattern_blocked, content)
 
@@ -1209,15 +1209,15 @@ class TaskAgent:
         blocked_by = []
         subtask_of = None
 
-        m_blocked = re.search(r"\*\*Blocked by:\*\*\s*(.*)", content, re.IGNORECASE)
+        m_blocked = re.search(r"\*\*Blocked by:\*\*[ \t]*(.*)", content, re.IGNORECASE)
         if m_blocked:
             blocked_by = [d.strip() for d in m_blocked.group(1).split(",") if d.strip()]
 
-        m_subtask = re.search(r"\*\*Subtask of:\*\*\s*(.*)", content, re.IGNORECASE)
+        m_subtask = re.search(r"\*\*Subtask of:\*\*[ \t]*(.*)", content, re.IGNORECASE)
         if m_subtask:
             subtask_of = m_subtask.group(1).strip() or None
 
-        m_depends = re.search(r"\*\*Depends on:\*\*\s*(.*)", content, re.IGNORECASE)
+        m_depends = re.search(r"\*\*Depends on:\*\*[ \t]*(.*)", content, re.IGNORECASE)
         if m_depends and not blocked_by:
             blocked_by = [d.strip() for d in m_depends.group(1).split(",") if d.strip()]
 
@@ -1295,8 +1295,8 @@ class TaskAgent:
         content = issue_file.read_text(encoding="utf-8")
 
         # Replace either **Blocked by:** or **Depends on:**
-        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
-        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
 
         has_blocked = re.search(pattern_blocked, content)
         has_depends = re.search(pattern_depends, content)
@@ -1374,7 +1374,7 @@ class TaskAgent:
         # Update Markdown content
         content = issue_file.read_text(encoding="utf-8")
 
-        pattern_subtask = r"\*\*Subtask of:\*\*\s*(.*)"
+        pattern_subtask = r"\*\*Subtask of:\*\*[ \t]*(.*)"
         has_subtask = re.search(pattern_subtask, content)
 
         if has_subtask:
@@ -1466,7 +1466,7 @@ class TaskAgent:
         def _migrate_file_headers(file_path: Path):
             try:
                 content = file_path.read_text(encoding="utf-8")
-                pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+                pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
                 if re.search(pattern_depends, content, re.IGNORECASE):
                     content = re.sub(
                         pattern_depends,
@@ -1502,6 +1502,15 @@ class TaskAgent:
                         )
                     )
                     existing_slugs.add(slug)
+                else:
+                    for issue in present_issues:
+                        if issue.slug == slug:
+                            blocked_by, subtask_of = self.extract_relations(issue_file)
+                            issue.name = name
+                            issue.blocked_by = blocked_by
+                            issue.subtask_of = subtask_of
+                            issue.status = status
+                            break
                 _ensure_created_at(issue_file)
 
             # Directory-based
@@ -1521,6 +1530,15 @@ class TaskAgent:
                         )
                     )
                     existing_slugs.add(slug)
+                else:
+                    for issue in present_issues:
+                        if issue.slug == slug:
+                            blocked_by, subtask_of = self.extract_relations(readme_file)
+                            issue.name = name
+                            issue.blocked_by = blocked_by
+                            issue.subtask_of = subtask_of
+                            issue.status = status
+                            break
                 _ensure_created_at(readme_file)
 
         final_issues = present_issues + new_issues

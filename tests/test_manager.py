@@ -288,6 +288,16 @@ def test_api_ingest_issues(manager, tmp_path):
     assert "**Blocked by:** other-task" in updated_readme
     assert "Depends on" not in updated_readme
 
+    # Verify updating existing issue relationships from disk
+    (dir_task / "README.md").write_text("# Dir Task\n**Subtask of:** new-parent-task")
+    num_new, num_removed = manager.ingest_issues()
+    assert num_new == 0
+
+    issues = manager.load_mission()
+    dir_issue = next(i for i in issues if i.slug == "dir-task")
+    assert dir_issue.subtask_of == "new-parent-task"
+    assert dir_issue.blocked_by == []
+
 
 def test_api_add_dependency(manager):
     manager.create_issue("Task A")
