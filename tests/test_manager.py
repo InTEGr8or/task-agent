@@ -134,6 +134,26 @@ def test_api_complete_issue(manager):
     ).exists()
 
 
+def test_api_complete_issue_with_open_subtasks(manager):
+    manager.create_issue("Parent Epic")
+    manager.create_issue("Subtask Task", subtask_of="parent-epic")
+
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot complete task 'parent-epic' because it has open sub-tasks: subtask-task",
+    ):
+        manager.complete_issue("parent-epic", should_commit=False)
+
+    # Complete the subtask first
+    manager.complete_issue("subtask-task", should_commit=False)
+
+    # Now completing the parent epic should succeed
+    issue, commit = manager.complete_issue("parent-epic", should_commit=False)
+    assert issue.status == "completed"
+
+
 def test_api_restore_issue(manager):
     manager.create_issue("Restore Me")
     manager.complete_issue("restore-me", should_commit=False)

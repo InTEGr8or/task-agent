@@ -298,7 +298,12 @@ def select_issue(
     return next(i for i in matches if i.slug == selected_slug)
 
 
-def render_issue(console: Console, issue: Issue, issue_file: Path):
+def render_issue(
+    console: Console,
+    issue: Issue,
+    issue_file: Path,
+    issues: Optional[List[Issue]] = None,
+):
     """Render an issue's details to the console, using a pager if necessary."""
     with issue_file.open("r", encoding="utf-8") as f:
         content = f.read()
@@ -308,8 +313,19 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         deps_info += (
             f"[bold blue]SUBTASK OF:[/bold blue] [yellow]{issue.subtask_of}[/yellow]\n"
         )
-    if issue.blocked_by:
-        deps_info += f"[bold blue]BLOCKED BY:[/bold blue] [yellow]{', '.join(issue.blocked_by)}[/yellow]\n"
+
+    # Collect blockers: both explicit blocked_by and derived open subtasks
+    blockers = list(issue.blocked_by)
+    if issues:
+        open_subtasks = [
+            i.slug
+            for i in issues
+            if i.subtask_of == issue.slug and i.status != "completed"
+        ]
+        blockers.extend(open_subtasks)
+
+    if blockers:
+        deps_info += f"[bold blue]BLOCKED BY:[/bold blue] [yellow]{', '.join(blockers)}[/yellow]\n"
 
     panel = Panel(
         f"[bold blue]ISSUE:[/bold blue] [cyan]{issue.name}[/cyan]\n"
@@ -539,7 +555,8 @@ def cmd_next(console: Console, manager: TaskAgent):
         console.print(f"[red]Issue file not found for slug: {next_issue.slug}[/red]")
         sys.exit(1)
 
-    render_issue(console, next_issue, issue_file)
+    issues = manager.load_mission()
+    render_issue(console, next_issue, issue_file, issues)
 
 
 def cmd_search(console: Console, manager: TaskAgent, pattern: str):
@@ -608,7 +625,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
             console.print(f"[red]Issue file not found for {issue.slug}[/red]")
             return
 
-        render_issue(console, issue, issue_file)
+        render_issue(console, issue, issue_file, issues)
         console.print("[dim]Press 'e' to edit, 'q' to exit.[/dim]")
         try:
             key = get_key()
@@ -671,7 +688,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                     issue.slug, include_completed=(issue.status == "completed")
                 )
                 if issue_file:
-                    render_issue(console, issue, issue_file)
+                    render_issue(console, issue, issue_file, issues)
                     console.print(
                         "[dim]Press 'e' to edit, 'q' to return to list.[/dim]"
                     )
@@ -3353,7 +3370,7 @@ def cmd_triage(
                     issue.slug, include_completed=show_completed
                 )
                 if issue_file:
-                    render_issue(console, issue, issue_file)
+                    render_issue(console, issue, issue_file, issues)
                 else:
                     console.print(f"[red]Issue file not found for {issue.slug}[/red]")
                 questionary.press_any_key_to_continue().ask()
