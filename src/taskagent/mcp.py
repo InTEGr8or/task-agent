@@ -79,9 +79,7 @@ def get_strategy() -> str:
 def list_tasks() -> str:
     """List all tasks in the current project's mission queue.
 
-    Tasks may have dependencies on other tasks, shown as "(depends on: ...)".
-    Use this to understand the task hierarchy before creating new tasks
-    that need to declare dependencies.
+    Tasks may have parent relationships (sub-task of) or ordering constraints (blocked by).
     """
     manager = get_manager()
     issues = manager.sync_mission()
@@ -90,9 +88,12 @@ def list_tasks() -> str:
     else:
         lines = []
         for i in issues:
-            deps = (
-                f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
-            )
+            deps_list = []
+            if i.subtask_of:
+                deps_list.append(f"subtask of: {i.subtask_of}")
+            if i.blocked_by:
+                deps_list.append(f"blocked by: {', '.join(i.blocked_by)}")
+            deps = f" ({'; '.join(deps_list)})" if deps_list else ""
             lines.append(f"[{i.priority}] {i.status.upper()}: {i.name}{deps}")
         res = "\n".join(lines)
     return _maybe_prepend_strategy(manager, res)
@@ -109,9 +110,12 @@ def list_active_tasks() -> str:
     else:
         lines = []
         for i in active_issues:
-            deps = (
-                f" (depends on: {', '.join(i.dependencies)})" if i.dependencies else ""
-            )
+            deps_list = []
+            if i.subtask_of:
+                deps_list.append(f"subtask of: {i.subtask_of}")
+            if i.blocked_by:
+                deps_list.append(f"blocked by: {', '.join(i.blocked_by)}")
+            deps = f" ({'; '.join(deps_list)})" if deps_list else ""
             lines.append(f"[{i.priority}] ACTIVE: {i.name}{deps}")
         res = "\n".join(lines)
     return _maybe_prepend_strategy(manager, res)

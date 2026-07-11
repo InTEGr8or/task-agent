@@ -291,7 +291,7 @@ def test_api_add_dependency(manager):
 
     issue_file = manager.find_issue_file("task-b")
     content = issue_file.read_text()
-    assert "**Depends on:** task-a" in content
+    assert "**Blocked by:** task-a" in content
 
 
 def test_api_add_dependency_existing(manager):

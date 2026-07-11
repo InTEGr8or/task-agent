@@ -27,7 +27,7 @@ def test_mcp_list_tasks(mock_manager):
 
     result = mcp.list_tasks()
     assert "[1] PENDING: Task 1" in result
-    assert "[2] DRAFT: Task 2 (depends on: task-1)" in result
+    assert "[2] DRAFT: Task 2 (blocked by: task-1)" in result
 
 
 def test_mcp_create_task(mock_manager):
@@ -165,25 +165,26 @@ def test_mcp_commit_tasks_success():
 
 def test_mcp_list_active_tasks(monkeypatch):
     class DummyIssue:
-        def __init__(self, priority, status, name, dependencies=None):
+        def __init__(self, priority, status, name, blocked_by=None, subtask_of=None):
             self.priority = priority
             self.status = status
             self.name = name
-            self.dependencies = dependencies or []
+            self.blocked_by = blocked_by or []
+            self.subtask_of = subtask_of
 
     class DummyManager:
         def sync_mission(self):
             return [
                 DummyIssue(1, "active", "Task 1"),
                 DummyIssue(2, "pending", "Task 2"),
-                DummyIssue(3, "active", "Task 3", ["Task 1"]),
+                DummyIssue(3, "active", "Task 3", blocked_by=["Task 1"]),
             ]
 
     monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
     result = mcp.list_active_tasks()
     assert "[1] ACTIVE: Task 1" in result
     assert "Task 2" not in result
-    assert "[3] ACTIVE: Task 3 (depends on: Task 1)" in result
+    assert "[3] ACTIVE: Task 3 (blocked by: Task 1)" in result
 
 
 def test_mcp_update_task_dependencies(monkeypatch):

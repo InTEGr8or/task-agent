@@ -452,21 +452,28 @@ class TaskAgent:
                 parts = line.split(USV_DELIM)
                 if len(parts) >= 1:
                     try:
+                        blocked_by: List[str] = []
+                        subtask_of: Optional[str] = None
                         if len(parts) == 1:
                             # Legacy format: slug only
                             slug = parts[0]
                             name = slug  # Fallback to slug
-                            deps: List[str] = []
                         elif len(parts) == 2:
-                            # Transitional or name/slug?
-                            # Let's assume name/slug if we have it now
                             name = parts[0]
                             slug = parts[1]
-                            deps = []
+                        elif len(parts) == 3:
+                            name = parts[0]
+                            slug = parts[1]
+                            blocked_by = [
+                                d.strip() for d in parts[2].split(",") if d.strip()
+                            ]
                         else:
                             name = parts[0]
                             slug = parts[1]
-                            deps = [d.strip() for d in parts[2].split(",") if d.strip()]
+                            blocked_by = [
+                                d.strip() for d in parts[2].split(",") if d.strip()
+                            ]
+                            subtask_of = parts[3].strip() or None
 
                         # Determine status from file location
                         issue_file = self.find_issue_file(slug)
@@ -484,7 +491,8 @@ class TaskAgent:
                             Issue(
                                 name=name,
                                 slug=slug,
-                                dependencies=deps,
+                                blocked_by=blocked_by,
+                                subtask_of=subtask_of,
                                 priority=i,
                                 status=status,
                             )
@@ -516,7 +524,8 @@ class TaskAgent:
                         "fields": [
                             {"name": "name", "type": "string"},
                             {"name": "slug", "type": "string"},
-                            {"name": "dependencies", "type": "string"},
+                            {"name": "blocked_by", "type": "string"},
+                            {"name": "subtask_of", "type": "string"},
                         ]
                     },
                 }
@@ -569,17 +578,52 @@ class TaskAgent:
             return "unknown"
 
     @staticmethod
-    def extract_deps(file_path: Path) -> List[str]:
-        """Helper to extract dependencies from a markdown file."""
+    def extract_relations(file_path: Path) -> Tuple[List[str], Optional[str]]:
+        """Extract blocked_by and subtask_of from a markdown file."""
+        blocked_by = []
+        subtask_of = None
         try:
             with file_path.open("r", encoding="utf-8") as f:
                 content = f.read()
-                match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
-                if match:
-                    return [d.strip() for d in match.group(1).split(",") if d.strip()]
+
+                # Parse blocked by
+                m_blocked = re.search(
+                    r"\*\*Blocked by:\*\*\s*(.*)", content, re.IGNORECASE
+                )
+                if m_blocked:
+                    blocked_by = [
+                        d.strip() for d in m_blocked.group(1).split(",") if d.strip()
+                    ]
+
+                # Parse subtask of
+                m_subtask = re.search(
+                    r"\*\*Subtask of:\*\*\s*(.*)", content, re.IGNORECASE
+                )
+                if m_subtask:
+                    subtask_of = m_subtask.group(1).strip() or None
+
+                # Legacy depends on (alias for blocked_by)
+                m_depends = re.search(
+                    r"\*\*Depends on:\*\*\s*(.*)", content, re.IGNORECASE
+                )
+                if m_depends:
+                    legacy_deps = [
+                        d.strip() for d in m_depends.group(1).split(",") if d.strip()
+                    ]
+                    if not blocked_by:
+                        blocked_by = legacy_deps
         except Exception:
             pass
-        return []
+        return blocked_by, subtask_of
+
+    @staticmethod
+    def extract_deps(file_path: Path) -> List[str]:
+        """Legacy helper. Returns combined dependencies for compatibility."""
+        blocked_by, subtask_of = TaskAgent.extract_relations(file_path)
+        deps = list(blocked_by)
+        if subtask_of:
+            deps.append(subtask_of)
+        return deps
 
     @staticmethod
     def extract_title(file_path: Path) -> str:
@@ -605,6 +649,8 @@ class TaskAgent:
         depends_on: Optional[str] = None,
         as_dir: bool = False,
         completion_criteria: Optional[str] = None,
+        blocked_by: Optional[str] = None,
+        subtask_of: Optional[str] = None,
     ) -> Issue:
         """Create a new issue."""
         # Sanitize title for slug, but keep original for 'name'
@@ -625,17 +671,22 @@ class TaskAgent:
         if issue_file.exists():
             raise FileExistsError(f"Issue file already exists: {issue_file}")
 
-        deps = []
-        if depends_on:
-            deps = [d.strip() for d in depends_on.split(",") if d.strip()]
+        # Resolve relations
+        blocked_by_list = []
+        if blocked_by:
+            blocked_by_list = [d.strip() for d in blocked_by.split(",") if d.strip()]
+        elif depends_on:
+            blocked_by_list = [d.strip() for d in depends_on.split(",") if d.strip()]
 
         # Write the markdown file
         created_at = datetime.now().astimezone().isoformat()
         with issue_file.open("w", encoding="utf-8") as f:
             f.write(f"---\ncreated_at: {created_at}\n---\n\n")
             f.write(f"# {display_name}\n\n")
-            if deps:
-                f.write(f"**Depends on:** {', '.join(deps)}\n\n")
+            if subtask_of:
+                f.write(f"**Subtask of:** {subtask_of.strip()}\n\n")
+            if blocked_by_list:
+                f.write(f"**Blocked by:** {', '.join(blocked_by_list)}\n\n")
             f.write(f"{body}\n")
             if completion_criteria:
                 f.write(f"\n## Completion Criteria\n\n{completion_criteria}\n")
@@ -672,7 +723,8 @@ class TaskAgent:
         children = [
             i.slug
             for i in issues
-            if target.slug in i.dependencies and i.status == "draft"
+            if (i.subtask_of == target.slug or target.slug in i.blocked_by)
+            and i.status == "draft"
         ]
         for child_slug in children:
             promote_single(child_slug)
@@ -709,7 +761,8 @@ class TaskAgent:
         children = [
             i.slug
             for i in issues
-            if target.slug in i.dependencies and i.status == target.status
+            if (i.subtask_of == target.slug or target.slug in i.blocked_by)
+            and i.status == target.status
         ]
         for child_slug in children:
             demote_single(child_slug)
@@ -748,26 +801,46 @@ class TaskAgent:
         return target
 
     def add_dependency(self, slug: str, depends_on: str) -> None:
-        """Add a dependency to an issue."""
+        """Add a dependency (blocked_by) to an issue."""
         issue_file = self.find_issue_file(slug)
         if not issue_file:
             raise FileNotFoundError(f"Issue file not found for '{slug}'.")
 
         content = issue_file.read_text(encoding="utf-8")
-        deps = self.extract_deps(issue_file)
+        blocked_by, subtask_of = self.extract_relations(issue_file)
 
-        if depends_on in deps:
+        if depends_on in blocked_by:
             return
 
-        deps.append(depends_on)
+        blocked_by.append(depends_on)
 
-        pattern = r"(\*\*Depends on:\*\*\s*)(.*?)(\n|$)"
-        new_deps_line = f"**Depends on:** {', '.join(deps)}"
+        # Update Markdown
+        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
 
-        if re.search(pattern, content):
-            content = re.sub(pattern, new_deps_line + r"\3", content)
+        has_blocked = re.search(pattern_blocked, content)
+        has_depends = re.search(pattern_depends, content)
+
+        new_line = f"**Blocked by:** {', '.join(blocked_by)}"
+
+        if has_blocked:
+            content = re.sub(pattern_blocked, new_line, content)
+        elif has_depends:
+            content = re.sub(pattern_depends, new_line, content)
         else:
-            content = content.rstrip() + f"\n\n{new_deps_line}\n"
+            # Insert it right after H1
+            lines = content.splitlines()
+            inserted = False
+            for idx, line in enumerate(lines):
+                if line.strip().startswith("# "):
+                    lines.insert(idx + 1, "")
+                    lines.insert(idx + 2, new_line)
+                    inserted = True
+                    break
+            if inserted:
+                content = "\n".join(lines) + "\n"
+            else:
+                content = new_line + "\n\n" + content
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
@@ -775,30 +848,36 @@ class TaskAgent:
         issues = self.load_mission()
         for issue in issues:
             if issue.slug == slug:
-                issue.dependencies = deps
+                issue.blocked_by = blocked_by
                 break
         self.save_mission(issues)
 
     def remove_dependency(self, slug: str, depends_on: str) -> None:
-        """Remove a dependency from an issue."""
+        """Remove a dependency (blocked_by) from an issue."""
         issue_file = self.find_issue_file(slug)
         if not issue_file:
             raise FileNotFoundError(f"Issue file not found for '{slug}'.")
 
         content = issue_file.read_text(encoding="utf-8")
-        deps = self.extract_deps(issue_file)
+        blocked_by, subtask_of = self.extract_relations(issue_file)
 
-        if depends_on not in deps:
+        if depends_on not in blocked_by:
             return
 
-        deps.remove(depends_on)
+        blocked_by.remove(depends_on)
 
-        pattern = r"(\*\*Depends on:\*\*\s*)(.*?)(\n|$)"
-        if deps:
-            new_deps_line = f"**Depends on:** {', '.join(deps)}"
-            content = re.sub(pattern, new_deps_line + r"\3", content)
+        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+
+        has_blocked = re.search(pattern_blocked, content)
+
+        pattern = pattern_blocked if has_blocked else pattern_depends
+
+        if blocked_by:
+            new_line = f"**Blocked by:** {', '.join(blocked_by)}"
+            content = re.sub(pattern, new_line, content)
         else:
-            content = re.sub(r"\n?\*\*Depends on:\*\*.*?(\n|$)", "", content)
+            content = re.sub(pattern + r"\n*", "", content)
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
@@ -806,7 +885,7 @@ class TaskAgent:
         issues = self.load_mission()
         for issue in issues:
             if issue.slug == slug:
-                issue.dependencies = deps
+                issue.blocked_by = blocked_by
                 break
         self.save_mission(issues)
 
@@ -934,6 +1013,16 @@ class TaskAgent:
         target_issue = next((i for i in issues if i.slug == slug), None)
         if not target_issue:
             raise ValueError(f"Issue '{slug}' not found.")
+
+        # Check for open subtasks
+        open_subtasks = [
+            i for i in issues if i.subtask_of == slug and i.status != "completed"
+        ]
+        if open_subtasks:
+            subtask_slugs = ", ".join(i.slug for i in open_subtasks)
+            raise ValueError(
+                f"Cannot complete task '{slug}' because it has open sub-tasks: {subtask_slugs}"
+            )
 
         self.migrate_to_folder(target_issue.slug)
         issue_file = self.find_issue_file(target_issue.slug)
@@ -1116,23 +1205,41 @@ class TaskAgent:
         if not issue_file:
             raise FileNotFoundError(f"Issue '{slug}' not found.")
 
-        # Extract temporary deps from new content to validate them
-        match = re.search(r"\*\*Depends on:\*\*\s*(.*)", content)
-        new_deps = []
-        if match:
-            new_deps = [d.strip() for d in match.group(1).split(",") if d.strip()]
+        # Extract temporary relations from new content to validate them
+        blocked_by = []
+        subtask_of = None
 
-        if slug in new_deps:
+        m_blocked = re.search(r"\*\*Blocked by:\*\*\s*(.*)", content, re.IGNORECASE)
+        if m_blocked:
+            blocked_by = [d.strip() for d in m_blocked.group(1).split(",") if d.strip()]
+
+        m_subtask = re.search(r"\*\*Subtask of:\*\*\s*(.*)", content, re.IGNORECASE)
+        if m_subtask:
+            subtask_of = m_subtask.group(1).strip() or None
+
+        m_depends = re.search(r"\*\*Depends on:\*\*\s*(.*)", content, re.IGNORECASE)
+        if m_depends and not blocked_by:
+            blocked_by = [d.strip() for d in m_depends.group(1).split(",") if d.strip()]
+
+        if slug in blocked_by:
             raise ValueError("A task cannot depend on itself.")
+        if slug == subtask_of:
+            raise ValueError("A task cannot be a subtask of itself.")
 
         issues = self.load_mission()
         existing_slugs = {i.slug for i in issues}
-        for dep in new_deps:
+        for dep in blocked_by:
             if dep not in existing_slugs:
-                raise ValueError(f"Dependency task '{dep}' does not exist.")
+                raise ValueError(f"Prerequisite task '{dep}' does not exist.")
+        if subtask_of and subtask_of not in existing_slugs:
+            raise ValueError(f"Parent task '{subtask_of}' does not exist.")
 
-        if self._check_dependency_cycle(issues, slug, new_deps):
-            raise ValueError("Adding these dependencies would introduce a cycle.")
+        combined_new_deps = list(blocked_by)
+        if subtask_of:
+            combined_new_deps.append(subtask_of)
+
+        if self._check_dependency_cycle(issues, slug, combined_new_deps):
+            raise ValueError("Adding these relationships would introduce a cycle.")
 
         issue_file.write_text(content, encoding="utf-8")
 
@@ -1141,7 +1248,8 @@ class TaskAgent:
         for i in issues:
             if i.slug == slug:
                 i.name = self.extract_title(issue_file)
-                i.dependencies = self.extract_deps(issue_file)
+                i.blocked_by = blocked_by
+                i.subtask_of = subtask_of
                 updated = True
                 break
 
@@ -1162,7 +1270,7 @@ class TaskAgent:
         )
 
     def update_dependencies(self, slug: str, depends_on: str) -> Issue:
-        """Update dependencies of an issue."""
+        """Update dependencies (blocked_by) of an issue."""
         issue_file = self.find_issue_file(slug, include_completed=True)
         if not issue_file:
             raise FileNotFoundError(f"Issue '{slug}' not found.")
@@ -1177,7 +1285,7 @@ class TaskAgent:
         existing_slugs = {i.slug for i in issues}
         for dep in new_deps:
             if dep not in existing_slugs:
-                raise ValueError(f"Dependency task '{dep}' does not exist.")
+                raise ValueError(f"Prerequisite task '{dep}' does not exist.")
 
         # Check for cycles
         if self._check_dependency_cycle(issues, slug, new_deps):
@@ -1185,16 +1293,25 @@ class TaskAgent:
 
         # Update Markdown content
         content = issue_file.read_text(encoding="utf-8")
-        if re.search(r"\*\*Depends on:\*\*\s*(.*)", content):
+
+        # Replace either **Blocked by:** or **Depends on:**
+        pattern_blocked = r"\*\*Blocked by:\*\*\s*(.*)"
+        pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+
+        has_blocked = re.search(pattern_blocked, content)
+        has_depends = re.search(pattern_depends, content)
+
+        if has_blocked or has_depends:
+            pattern = pattern_blocked if has_blocked else pattern_depends
             if new_deps:
                 content = re.sub(
-                    r"\*\*Depends on:\*\*\s*(.*)",
-                    f"**Depends on:** {', '.join(new_deps)}",
+                    pattern,
+                    f"**Blocked by:** {', '.join(new_deps)}",
                     content,
                 )
             else:
                 # Remove the line and any trailing blank lines
-                content = re.sub(r"\*\*Depends on:\*\*\s*(.*)\n*", "", content)
+                content = re.sub(pattern + r"\n*", "", content)
         else:
             if new_deps:
                 # Insert it right after the H1 title
@@ -1203,13 +1320,13 @@ class TaskAgent:
                 for idx, line in enumerate(lines):
                     if line.strip().startswith("# "):
                         lines.insert(idx + 1, "")
-                        lines.insert(idx + 2, f"**Depends on:** {', '.join(new_deps)}")
+                        lines.insert(idx + 2, f"**Blocked by:** {', '.join(new_deps)}")
                         inserted = True
                         break
                 if inserted:
                     content = "\n".join(lines) + "\n"
                 else:
-                    content = f"**Depends on:** {', '.join(new_deps)}\n\n" + content
+                    content = f"**Blocked by:** {', '.join(new_deps)}\n\n" + content
 
         issue_file.write_text(content, encoding="utf-8")
 
@@ -1217,7 +1334,7 @@ class TaskAgent:
         updated = False
         for i in issues:
             if i.slug == slug:
-                i.dependencies = new_deps
+                i.blocked_by = new_deps
                 updated = True
                 break
 
@@ -1232,7 +1349,82 @@ class TaskAgent:
         return Issue(
             name=self.extract_title(issue_file),
             slug=slug,
-            dependencies=new_deps,
+            blocked_by=new_deps,
+            status="completed",
+        )
+
+    def update_subtask_of(self, slug: str, subtask_of: Optional[str]) -> Issue:
+        """Update the subtask_of parent relation of an issue."""
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+
+        if subtask_of == slug:
+            raise ValueError("A task cannot be a subtask of itself.")
+
+        issues = self.load_mission()
+        existing_slugs = {i.slug for i in issues}
+        if subtask_of and subtask_of not in existing_slugs:
+            raise ValueError(f"Parent task '{subtask_of}' does not exist.")
+
+        # Check for cycles
+        if subtask_of and self._check_dependency_cycle(issues, slug, [subtask_of]):
+            raise ValueError("Setting this parent would introduce a cycle.")
+
+        # Update Markdown content
+        content = issue_file.read_text(encoding="utf-8")
+
+        pattern_subtask = r"\*\*Subtask of:\*\*\s*(.*)"
+        has_subtask = re.search(pattern_subtask, content)
+
+        if has_subtask:
+            if subtask_of:
+                content = re.sub(
+                    pattern_subtask,
+                    f"**Subtask of:** {subtask_of}",
+                    content,
+                )
+            else:
+                # Remove the line and any trailing blank lines
+                content = re.sub(pattern_subtask + r"\n*", "", content)
+        else:
+            if subtask_of:
+                # Insert it right after the H1 title
+                lines = content.splitlines()
+                inserted = False
+                for idx, line in enumerate(lines):
+                    if line.strip().startswith("# "):
+                        lines.insert(idx + 1, "")
+                        lines.insert(idx + 2, f"**Subtask of:** {subtask_of}")
+                        inserted = True
+                        break
+                if inserted:
+                    content = "\n".join(lines) + "\n"
+                else:
+                    content = f"**Subtask of:** {subtask_of}\n\n" + content
+
+        issue_file.write_text(content, encoding="utf-8")
+
+        # Sync and reload
+        updated = False
+        for i in issues:
+            if i.slug == slug:
+                i.subtask_of = subtask_of
+                updated = True
+                break
+
+        if updated:
+            self.save_mission(issues)
+
+        # Return the updated issue object
+        for i in issues:
+            if i.slug == slug:
+                return i
+
+        return Issue(
+            name=self.extract_title(issue_file),
+            slug=slug,
+            subtask_of=subtask_of,
             status="completed",
         )
 
@@ -1282,9 +1474,15 @@ class TaskAgent:
                 name = self.extract_title(issue_file)
                 slug = self.slugify(issue_file.stem)
                 if slug not in existing_slugs:
-                    deps = self.extract_deps(issue_file)
+                    blocked_by, subtask_of = self.extract_relations(issue_file)
                     new_issues.append(
-                        Issue(name=name, slug=slug, dependencies=deps, status=status)
+                        Issue(
+                            name=name,
+                            slug=slug,
+                            blocked_by=blocked_by,
+                            subtask_of=subtask_of,
+                            status=status,
+                        )
                     )
                     existing_slugs.add(slug)
                 _ensure_created_at(issue_file)
@@ -1294,9 +1492,15 @@ class TaskAgent:
                 name = self.extract_title(readme_file)
                 slug = self.slugify(readme_file.parent.name)
                 if slug not in existing_slugs:
-                    deps = self.extract_deps(readme_file)
+                    blocked_by, subtask_of = self.extract_relations(readme_file)
                     new_issues.append(
-                        Issue(name=name, slug=slug, dependencies=deps, status=status)
+                        Issue(
+                            name=name,
+                            slug=slug,
+                            blocked_by=blocked_by,
+                            subtask_of=subtask_of,
+                            status=status,
+                        )
                     )
                     existing_slugs.add(slug)
                 _ensure_created_at(readme_file)

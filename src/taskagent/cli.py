@@ -304,8 +304,12 @@ def render_issue(console: Console, issue: Issue, issue_file: Path):
         content = f.read()
 
     deps_info = ""
-    if issue.dependencies:
-        deps_info = f"[bold blue]DEPENDS ON:[/bold blue] [yellow]{', '.join(issue.dependencies)}[/yellow]\n"
+    if issue.subtask_of:
+        deps_info += (
+            f"[bold blue]SUBTASK OF:[/bold blue] [yellow]{issue.subtask_of}[/yellow]\n"
+        )
+    if issue.blocked_by:
+        deps_info += f"[bold blue]BLOCKED BY:[/bold blue] [yellow]{', '.join(issue.blocked_by)}[/yellow]\n"
 
     panel = Panel(
         f"[bold blue]ISSUE:[/bold blue] [cyan]{issue.name}[/cyan]\n"
@@ -1722,6 +1726,8 @@ def cmd_new(
     as_dir: bool = True,
     completion_criteria: Optional[str] = None,
     interactive: bool = False,
+    blocked_by: Optional[str] = None,
+    subtask_of: Optional[str] = None,
 ):
     """Create a new issue."""
     if interactive:
@@ -1731,6 +1737,10 @@ def cmd_new(
         temp_dir.mkdir(parents=True, exist_ok=True)
         temp_file = temp_dir / "README.md"
 
+        # Resolve relations for the template
+        final_blocked_by = blocked_by if blocked_by is not None else (depends_on or "")
+        final_subtask_of = subtask_of or ""
+
         created_at = datetime.now().astimezone().isoformat()
         template = f"""---
 created_at: {created_at}
@@ -1738,7 +1748,8 @@ created_at: {created_at}
 
 # {title or "New Task"}
 
-**Depends on:** {depends_on or ""}
+**Subtask of:** {final_subtask_of}
+**Blocked by:** {final_blocked_by}
 
 ## Description
 
@@ -1771,13 +1782,22 @@ created_at: {created_at}
 
     try:
         issue = manager.create_issue(
-            title, body, draft, depends_on, as_dir, completion_criteria
+            title=title,
+            body=body,
+            draft=draft,
+            depends_on=depends_on,
+            as_dir=as_dir,
+            completion_criteria=completion_criteria,
+            blocked_by=blocked_by,
+            subtask_of=subtask_of,
         )
         console.print(f"[bold green]Created new issue: {issue.slug}[/bold green]")
         issue_file = manager.find_issue_file(issue.slug)
         console.print(f"File: {issue_file}")
-        if issue.dependencies:
-            console.print(f"Depends on: {', '.join(issue.dependencies)}")
+        if issue.subtask_of:
+            console.print(f"Subtask of: {issue.subtask_of}")
+        if issue.blocked_by:
+            console.print(f"Blocked by: {', '.join(issue.blocked_by)}")
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
@@ -1830,11 +1850,12 @@ def cmd_tree(console: Console, manager: TaskAgent):
             "draft": "◌",
             "completed": "✔",
         }.get(issue.status, "?")
-        deps = (
-            f"  [dim](depends on: {', '.join(issue.dependencies)})[/dim]"
-            if issue.dependencies
-            else ""
-        )
+        deps_list = []
+        if issue.subtask_of:
+            deps_list.append(f"subtask of: {issue.subtask_of}")
+        if issue.blocked_by:
+            deps_list.append(f"blocked by: {', '.join(issue.blocked_by)}")
+        deps = f"  [dim]({'; '.join(deps_list)})[/dim]" if deps_list else ""
         console.print(f"{indent}{connector}{status_symbol} {issue.slug}{deps}")
 
 
@@ -2051,6 +2072,8 @@ def cmd_update(
     manager: TaskAgent,
     slug_part: str,
     depends_on: Optional[str] = None,
+    blocked_by: Optional[str] = None,
+    subtask_of: Optional[str] = None,
 ):
     """Update task properties."""
     issues = manager.load_mission()
@@ -2063,19 +2086,34 @@ def cmd_update(
         )
         sys.exit(1)
 
-    if depends_on is not None:
-        try:
-            manager.update_dependencies(target.slug, depends_on)
+    updated = False
+    try:
+        # Handle blocked_by / depends_on
+        final_blocked_by = blocked_by if blocked_by is not None else depends_on
+        if final_blocked_by is not None:
+            manager.update_dependencies(target.slug, final_blocked_by)
             console.print(
-                f"[bold green]Successfully updated dependencies for task '{target.slug}'.[/bold green]"
+                f"[bold green]Successfully updated prerequisites for task '{target.slug}'.[/bold green]"
             )
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
-            sys.exit(1)
-    else:
-        console.print(
-            "[yellow]No updates specified. Use --depends-on to update dependencies.[/yellow]"
-        )
+            updated = True
+
+        # Handle subtask_of
+        if subtask_of is not None:
+            # Empty string means clear the parent
+            parent_slug = subtask_of if subtask_of != "" else None
+            manager.update_subtask_of(target.slug, parent_slug)
+            console.print(
+                f"[bold green]Successfully updated parent relationship for task '{target.slug}'.[/bold green]"
+            )
+            updated = True
+
+        if not updated:
+            console.print(
+                "[yellow]No updates specified. Use --blocked-by or --subtask-of to update relationships.[/yellow]"
+            )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 def cmd_start(
@@ -3704,13 +3742,21 @@ def main():
         "slug", nargs="?", help="Optional slug of the task to mark as active"
     )
     update_parser = subparsers.add_parser(
-        "update", help="Update task properties (e.g. dependencies)"
+        "update", help="Update task properties (e.g. relationships)"
     )
     update_parser.add_argument("slug", help="Slug of the task to update")
     update_parser.add_argument(
         "-d",
         "--depends-on",
-        help="Comma-separated list of task slugs this task depends on (use empty string to clear)",
+        help="Comma-separated list of task slugs this task depends on (use empty string to clear). Deprecated: use --blocked-by instead.",
+    )
+    update_parser.add_argument(
+        "--blocked-by",
+        help="Comma-separated list of prerequisite task slugs that block this task (use empty string to clear)",
+    )
+    update_parser.add_argument(
+        "--subtask-of",
+        help="Slug of the parent task this task is a subtask of (use empty string to clear)",
     )
     start_parser = subparsers.add_parser(
         "start",
@@ -3924,8 +3970,15 @@ Usage:
     )
     new_parser.add_argument(
         "--depends-on",
-        help="Comma-separated slugs this task depends on, e.g. 'setup-ci,build-artifacts'. "
-        "Use 'ta list' or 'ta tree' to find existing task slugs.",
+        help="Comma-separated slugs this task depends on. Deprecated: use --blocked-by instead.",
+    )
+    new_parser.add_argument(
+        "--blocked-by",
+        help="Comma-separated slugs of prerequisite tasks that block this task, e.g. 'setup-ci,build-artifacts'.",
+    )
+    new_parser.add_argument(
+        "--subtask-of",
+        help="Slug of the parent task this task is a subtask of, e.g. 'cli-consolidation'.",
     )
     version_parser = subparsers.add_parser("version")
     v_sub = version_parser.add_subparsers(dest="version_command")
@@ -4003,7 +4056,14 @@ Usage:
     elif args.command == "active":
         cmd_active(console, manager, args.slug, list_if_none=True)
     elif args.command == "update":
-        cmd_update(console, manager, args.slug, depends_on=args.depends_on)
+        cmd_update(
+            console,
+            manager,
+            args.slug,
+            depends_on=args.depends_on,
+            blocked_by=args.blocked_by,
+            subtask_of=args.subtask_of,
+        )
     elif args.command == "start":
         cmd_start(console, manager, args.slug, run=args.run, agent_name=args.agent)
     elif args.command == "run":
@@ -4066,15 +4126,17 @@ Usage:
         cmd_soft_delete(console, manager, args.slug)
     elif args.command == "new":
         cmd_new(
-            console,
-            manager,
-            args.title,
-            args.body,
-            args.draft,
-            args.depends_on,
-            not args.file,
-            args.criteria,
-            args.interactive,
+            console=console,
+            manager=manager,
+            title=args.title,
+            body=args.body,
+            draft=args.draft,
+            depends_on=args.depends_on,
+            as_dir=not args.file,
+            completion_criteria=args.criteria,
+            interactive=args.interactive,
+            blocked_by=args.blocked_by,
+            subtask_of=args.subtask_of,
         )
     elif args.command == "worktree":
         cmd_worktree(console, manager, args)
