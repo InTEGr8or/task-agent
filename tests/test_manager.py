@@ -281,6 +281,12 @@ def test_api_ingest_issues(manager, tmp_path):
     # Check dependencies extracted
     dir_issue = next(i for i in issues if i.slug == "dir-task")
     assert dir_issue.dependencies == ["other-task"]
+    assert dir_issue.blocked_by == ["other-task"]
+
+    # Verify automatic migration of the markdown file headers
+    updated_readme = (dir_task / "README.md").read_text()
+    assert "**Blocked by:** other-task" in updated_readme
+    assert "Depends on" not in updated_readme
 
 
 def test_api_add_dependency(manager):

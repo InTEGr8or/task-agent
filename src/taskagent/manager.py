@@ -1463,6 +1463,22 @@ class TaskAgent:
             except Exception:
                 pass
 
+        def _migrate_file_headers(file_path: Path):
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                pattern_depends = r"\*\*Depends on:\*\*\s*(.*)"
+                if re.search(pattern_depends, content, re.IGNORECASE):
+                    content = re.sub(
+                        pattern_depends,
+                        lambda m: f"**Blocked by:** {m.group(1)}",
+                        content,
+                        flags=re.IGNORECASE,
+                    )
+                    self._set_writable(file_path, True)
+                    file_path.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
         new_issues = []
         for status in ["pending", "draft", "active"]:
             status_dir = self.issues_root / status
@@ -1471,6 +1487,7 @@ class TaskAgent:
 
             # File-based
             for issue_file in list(status_dir.glob("*.md")):
+                _migrate_file_headers(issue_file)
                 name = self.extract_title(issue_file)
                 slug = self.slugify(issue_file.stem)
                 if slug not in existing_slugs:
@@ -1489,6 +1506,7 @@ class TaskAgent:
 
             # Directory-based
             for readme_file in list(status_dir.glob("*/README.md")):
+                _migrate_file_headers(readme_file)
                 name = self.extract_title(readme_file)
                 slug = self.slugify(readme_file.parent.name)
                 if slug not in existing_slugs:
