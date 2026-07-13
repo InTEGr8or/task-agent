@@ -575,3 +575,52 @@ def test_cmd_triage_depends_on_above(manager, monkeypatch):
     t3_updated = manager.find_issue_file("task-3")
     assert "task-1" in manager.extract_deps(t3_updated)
     assert "task-2" not in manager.extract_deps(t3_updated)
+
+
+def test_cmd_triage_subtask_of(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Task 1")
+    manager.create_issue("Task 2")
+
+    mock_console = MagicMock()
+
+    # We mock questionary.select().ask() to return "Subtask of..."
+    mock_select = MagicMock()
+    mock_select.ask.return_value = "Subtask of (Hierarchy...)"
+
+    keys = ["j", "l", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+        patch("questionary.select", return_value=mock_select),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issue_t2 = manager.load_mission()[1]
+    assert issue_t2.subtask_of == "task-1"
+    assert "task-1" not in issue_t2.blocked_by
+
+    # Test 2: Unlink subtask relation using 'h' key
+    keys = ["j", "h", "q"]
+
+    def mock_get_key_unlink():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key_unlink),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issue_t2_unlinked = manager.load_mission()[1]
+    assert issue_t2_unlinked.subtask_of is None

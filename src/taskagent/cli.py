@@ -3505,49 +3505,94 @@ def cmd_triage(
                             target_issue = indexed_issues[sibling_idx][0]
 
                     if target_issue:
+                        live.stop()
                         try:
-                            # Check transitive dependencies recursively to avoid redundancy
-                            all_issues = manager.load_mission()
+                            choice = questionary.select(
+                                f"Link '{current_issue.slug}' to '{target_issue.slug}' as:",
+                                choices=[
+                                    f"Subtask of (Hierarchy: parent '{target_issue.slug}' is blocked until child '{current_issue.slug}' is done)",
+                                    f"Blocked by (Ordering: child '{current_issue.slug}' cannot start/finish until parent '{target_issue.slug}' is done)",
+                                    "Cancel",
+                                ],
+                            ).ask()
+                        except (EOFError, Exception):
+                            choice = "Blocked by"
 
-                            def is_ancestor(ancestor_slug, desc_slug):
-                                slug_to_issue = {i.slug: i for i in all_issues}
-                                if desc_slug not in slug_to_issue:
-                                    return False
-                                todo = list(slug_to_issue[desc_slug].dependencies)
-                                visited = set(todo)
-                                while todo:
-                                    curr = todo.pop()
-                                    if curr == ancestor_slug:
-                                        return True
-                                    if curr in slug_to_issue:
-                                        for dep in slug_to_issue[curr].dependencies:
-                                            if dep not in visited:
-                                                visited.add(dep)
-                                                todo.append(dep)
-                                return False
+                        if choice and not choice.startswith("Cancel"):
+                            try:
+                                if choice.startswith("Subtask of"):
+                                    # If it was blocked_by, remove to avoid redundancy
+                                    if target_issue.slug in current_issue.blocked_by:
+                                        manager.remove_dependency(
+                                            current_issue.slug,
+                                            target_issue.slug,
+                                        )
+                                    manager.update_subtask_of(
+                                        current_issue.slug, target_issue.slug
+                                    )
+                                else:
+                                    # Blocked by
+                                    # If it was subtask_of, remove to avoid conflicts
+                                    if current_issue.subtask_of == target_issue.slug:
+                                        manager.update_subtask_of(
+                                            current_issue.slug, None
+                                        )
 
-                            # Add dependency on target_issue
-                            manager.add_dependency(
-                                current_issue.slug, target_issue.slug
-                            )
+                                    # Check transitive dependencies recursively to avoid redundancy
+                                    all_issues = manager.load_mission()
 
-                            # Remove redundant direct dependencies that are transitively covered
-                            for dep in list(current_issue.dependencies):
-                                if dep != target_issue.slug and is_ancestor(
-                                    dep, target_issue.slug
-                                ):
-                                    manager.remove_dependency(current_issue.slug, dep)
+                                    def is_ancestor(ancestor_slug, desc_slug):
+                                        slug_to_issue = {i.slug: i for i in all_issues}
+                                        if desc_slug not in slug_to_issue:
+                                            return False
+                                        todo = list(
+                                            slug_to_issue[desc_slug].dependencies
+                                        )
+                                        visited = set(todo)
+                                        while todo:
+                                            curr = todo.pop()
+                                            if curr == ancestor_slug:
+                                                return True
+                                            if curr in slug_to_issue:
+                                                for dep in slug_to_issue[
+                                                    curr
+                                                ].dependencies:
+                                                    if dep not in visited:
+                                                        visited.add(dep)
+                                                        todo.append(dep)
+                                        return False
 
-                            issues = get_display_issues(search_query, show_completed)
-                            indexed_issues = build_hierarchy(issues)
-                        except Exception as e:
-                            console.print(f"[red]Error: {e}[/red]")
+                                    manager.add_dependency(
+                                        current_issue.slug, target_issue.slug
+                                    )
+
+                                    # Remove redundant direct dependencies that are transitively covered
+                                    for dep in list(current_issue.dependencies):
+                                        if dep != target_issue.slug and is_ancestor(
+                                            dep, target_issue.slug
+                                        ):
+                                            manager.remove_dependency(
+                                                current_issue.slug, dep
+                                            )
+
+                                issues = get_display_issues(
+                                    search_query, show_completed
+                                )
+                                indexed_issues = build_hierarchy(issues)
+                            except Exception as e:
+                                console.print(f"[red]Error: {e}[/red]")
+                                questionary.press_any_key_to_continue().ask()
+                        live.start()
             elif key == "h" and not show_completed:  # remove dependency on above
                 if cursor > 0:
                     current_issue = indexed_issues[cursor][0]
                     above_issue = indexed_issues[cursor - 1][0]
                     try:
-                        if above_issue.slug in current_issue.dependencies:
+                        updated = False
+                        if current_issue.subtask_of == above_issue.slug:
+                            manager.update_subtask_of(current_issue.slug, None)
+                            updated = True
+                        elif above_issue.slug in current_issue.blocked_by:
                             parents = list(above_issue.dependencies)
                             manager.remove_dependency(
                                 current_issue.slug, above_issue.slug
@@ -3555,11 +3600,14 @@ def cmd_triage(
                             # Move up: inherit the parent's dependencies
                             for parent in parents:
                                 manager.add_dependency(current_issue.slug, parent)
+                            updated = True
 
+                        if updated:
                             issues = get_display_issues(search_query, show_completed)
                             indexed_issues = build_hierarchy(issues)
                     except Exception as e:
                         console.print(f"[red]Error: {e}[/red]")
+                        questionary.press_any_key_to_continue().ask()
 
 
 def display_overview(console: Console, manager: TaskAgent):

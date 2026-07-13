@@ -1,4 +1,5 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
+Incident: Version promotion regression to 1.0.0 instead of 2.xincident-version-promotion-regression-to-1.0.0-instead-of-2.x
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
@@ -11,6 +12,8 @@ Use the standard view for search resultuse-the-standard-view-for-search-result
 Agents are unable to close or mark done a task itemagents-are-unable-to-close-or-mark-done-a-task-item
 Allow new to create new task as active, if neeedeallow-new-to-create-new-task-as-active-if-neeede
 Create a global task-agent registry of repos and taskscreate-a-global-task-agent-registry-of-repos-and-tasks
+Ratify STATION-MAP.md declaring task-agent as a typed file-path station systemratify-station-map-declaring-task-agent-as-a-typed-file-path-station-system
+incident: create-task path errorincident-create-task-path-error
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
