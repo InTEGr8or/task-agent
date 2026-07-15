@@ -75,6 +75,35 @@ def test_cmd_new_dir(manager, temp_issues_dir):
     assert issues[0].status == "draft"
 
 
+def test_cmd_new_bulk(manager, temp_issues_dir, tmp_path):
+    console = Console()
+    import json
+
+    tasks_data = [
+        {"title": "Bulk 1", "completion_criteria": "CC 1", "body": "Body 1"},
+        {"title": "Bulk 2", "completion_criteria": "CC 2", "draft": True},
+    ]
+
+    json_file = tmp_path / "bulk_tasks.json"
+    json_file.write_text(json.dumps(tasks_data), encoding="utf-8")
+
+    cmd_new(
+        console=console,
+        manager=manager,
+        title=None,
+        body="",
+        draft=False,
+        bulk=str(json_file),
+    )
+
+    issues = manager.load_mission()
+    assert len(issues) == 2
+    assert issues[0].slug == "bulk-1"
+    assert issues[0].status == "pending"
+    assert issues[1].slug == "bulk-2"
+    assert issues[1].status == "draft"
+
+
 def test_cmd_done(manager, temp_issues_dir):
     console = Console()
     cmd_new(console, manager, "Done Task", "Body", draft=False)

@@ -1745,8 +1745,62 @@ def cmd_new(
     interactive: bool = False,
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
+    bulk: Optional[str] = None,
 ):
     """Create a new issue."""
+    if bulk:
+        try:
+            if bulk == "-":
+                raw_data = sys.stdin.read()
+            else:
+                raw_data = Path(bulk).read_text(encoding="utf-8")
+
+            tasks = json.loads(raw_data)
+            if not isinstance(tasks, list):
+                raise ValueError("Bulk JSON must be a list/array of task objects.")
+
+            for idx, t in enumerate(tasks):
+                t_title = t.get("title")
+                t_criteria = t.get("completion_criteria")
+                if not t_title:
+                    console.print(
+                        f"[red]Error at task {idx}: 'title' is required.[/red]"
+                    )
+                    continue
+                if not t_criteria:
+                    console.print(
+                        f"[red]Error at task '{t_title}' (index {idx}): 'completion_criteria' is required.[/red]"
+                    )
+                    continue
+
+                t_body = t.get("body", "")
+                t_draft = t.get("draft", draft)
+                t_blocked_by = t.get("blocked_by") or t.get("depends_on")
+                t_subtask_of = t.get("subtask_of")
+                t_as_dir = t.get("as_dir", as_dir)
+
+                issue = manager.create_issue(
+                    title=t_title,
+                    body=t_body,
+                    draft=t_draft,
+                    depends_on=t_blocked_by,
+                    as_dir=t_as_dir,
+                    completion_criteria=t_criteria,
+                    blocked_by=t_blocked_by,
+                    subtask_of=t_subtask_of,
+                )
+                console.print(
+                    f"[bold green]Created new issue: {issue.slug}[/bold green]"
+                )
+                issue_file = manager.find_issue_file(issue.slug)
+                console.print(f"File: {issue_file}")
+                if issue.subtask_of:
+                    console.print(f"Subtask of: {issue.subtask_of}")
+            return
+        except Exception as e:
+            console.print(f"[red]Error processing bulk tasks: {e}[/red]")
+            sys.exit(1)
+
     if interactive:
         editor = get_editor()
         slug = manager.slugify(title or "new-task")
@@ -4045,6 +4099,10 @@ Usage:
         "--subtask-of",
         help="Slug of the parent task this task is a subtask of, e.g. 'cli-consolidation'.",
     )
+    new_parser.add_argument(
+        "--bulk",
+        help="Path to a JSON file containing an array of task definitions, or '-' to read JSON from stdin.",
+    )
     version_parser = subparsers.add_parser("version")
     v_sub = version_parser.add_subparsers(dest="version_command")
     p_v = v_sub.add_parser("promote")
@@ -4202,6 +4260,7 @@ Usage:
             interactive=args.interactive,
             blocked_by=args.blocked_by,
             subtask_of=args.subtask_of,
+            bulk=args.bulk,
         )
     elif args.command == "worktree":
         cmd_worktree(console, manager, args)

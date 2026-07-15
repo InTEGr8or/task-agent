@@ -455,8 +455,75 @@ def commit_tasks(message: str = "", push: bool = False) -> str:
         return f"Committed: {message}"
     except subprocess.CalledProcessError as e:
         return f"Error: {e.stderr}"
-    except Exception as e:
-        return f"Error: {e}"
+
+
+@mcp.tool()
+def create_tasks(
+    tasks: list[dict],
+) -> str:
+    """Create multiple new tasks in the mission queue at once.
+
+    Args:
+        tasks: A list of task definitions. Each definition is a dictionary that
+            can contain the following keys:
+            - 'title' (str, required): The title of the task.
+            - 'completion_criteria' (str, required): Clear, measurable criteria for task completion.
+            - 'body' (str, optional): Detailed description of the task.
+            - 'draft' (bool, optional): If True, creates the task in 'draft' status. Default is False (pending).
+            - 'blocked_by' (str, optional): Comma-separated list of existing task slugs this task depends on.
+            - 'depends_on' (str, optional): Deprecated alias for blocked_by.
+            - 'subtask_of' (str, optional): Slug of the parent task this task is a subtask of.
+            - 'as_dir' (bool, optional): Create as folder directory. Default is True.
+
+    Returns:
+        A summary report of created task slugs and any errors.
+    """
+    manager = get_manager()
+    created = []
+    errors = []
+
+    for idx, t in enumerate(tasks):
+        title = t.get("title")
+        criteria = t.get("completion_criteria")
+        if not title:
+            errors.append(f"Task at index {idx} is missing required 'title'.")
+            continue
+        if not criteria:
+            errors.append(
+                f"Task '{title}' (index {idx}) is missing required 'completion_criteria'."
+            )
+            continue
+
+        body = t.get("body", "")
+        draft = t.get("draft", False)
+        blocked_by = t.get("blocked_by") or t.get("depends_on")
+        subtask_of = t.get("subtask_of")
+        as_dir = t.get("as_dir", True)
+
+        try:
+            issue = manager.create_issue(
+                title=title,
+                body=body,
+                draft=draft,
+                depends_on=blocked_by,
+                as_dir=as_dir,
+                completion_criteria=criteria,
+                blocked_by=blocked_by,
+                subtask_of=subtask_of,
+            )
+            created.append(f"{issue.slug} (Status: {issue.status})")
+        except Exception as e:
+            errors.append(f"Error creating task '{title}': {e}")
+
+    report = []
+    if created:
+        report.append(
+            "Successfully created tasks:\n" + "\n".join(f"- {c}" for c in created)
+        )
+    if errors:
+        report.append("Errors encountered:\n" + "\n".join(f"- {err}" for err in errors))
+
+    return "\n\n".join(report)
 
 
 def run_mcp_server():

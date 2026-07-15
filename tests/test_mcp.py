@@ -44,6 +44,22 @@ def test_mcp_create_task(mock_manager):
     )
 
 
+def test_mcp_create_tasks(mock_manager):
+    mock_manager.create_issue.return_value = Issue(
+        name="Task 1", slug="task-1", status="pending"
+    )
+
+    tasks = [
+        {"title": "Task 1", "completion_criteria": "Must pass tests", "body": "Desc 1"},
+        {"title": "Task 2", "completion_criteria": "Done 2", "draft": True},
+    ]
+
+    result = mcp.create_tasks(tasks)
+    assert "Successfully created tasks:" in result
+    assert "- task-1 (Status: pending)" in result
+    assert mock_manager.create_issue.call_count == 2
+
+
 def test_mcp_mark_task_active(mock_manager):
     mock_manager.slugify.return_value = "task-1"
     result = mcp.mark_task_active("Task 1")
@@ -244,6 +260,7 @@ EXPECTED_TOOLS = {
     "list_tasks",
     "list_active_tasks",
     "create_task",
+    "create_tasks",
     "promote_task",
     "demote_task",
     "mark_task_active",
