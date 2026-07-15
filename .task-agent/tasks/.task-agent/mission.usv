@@ -1,4 +1,5 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
+Allow bulk task creationallow-bulk-task-creation
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
@@ -13,6 +14,8 @@ Allow new to create new task as active, if neeedeallow-new-to-create-new-task-a
 Create a global task-agent registry of repos and taskscreate-a-global-task-agent-registry-of-repos-and-tasks
 Ratify STATION-MAP.md declaring task-agent as a typed file-path station systemratify-station-map-declaring-task-agent-as-a-typed-file-path-station-system
 incident: create-task path errorincident-create-task-path-error
+Build a station inspector CLI, borrowing Burr's telemetry-UI lessonbuild-station-inspector-cli-borrowing-burr-telemetry-uxratify-station-map-declaring-task-agent-as-a-typed-file-path-station-system
+Investigate switching type checker from mypy to Pyreinvestigate-switching-type-checker-from-mypy-to-pyre
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
