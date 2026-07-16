@@ -1179,27 +1179,120 @@ class TaskAgent:
         self.sync_mission()
         return issues[idx]
 
+    @staticmethod
+    def _parse_frontmatter(content: str) -> Tuple[Optional[str], str]:
+        """Parse YAML frontmatter from markdown content.
+
+        Returns ``(frontmatter_text, body)`` or ``(None, content)``.
+        """
+        if not content.startswith("---"):
+            return None, content
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            return parts[1], parts[2]
+        return None, content
+
+    @staticmethod
+    def _parse_frontmatter_dict(fm_text: str) -> dict[str, str]:
+        """Parse simple ``key: value`` frontmatter into a dict."""
+        fields: dict[str, str] = {}
+        for line in fm_text.splitlines():
+            stripped = line.strip()
+            if stripped and ":" in stripped:
+                key, _, value = stripped.partition(":")
+                fields[key.strip()] = value.strip()
+        return fields
+
+    @staticmethod
+    def _merge_record(existing: str, new: str) -> str:
+        """Merge *new* content with *existing*, round-tripping frontmatter
+        and edge-field prose the new content did not explicitly set.
+
+        This prevents ``update_issue`` from silently dropping fields the
+        caller did not include.
+        """
+        existing_fm, existing_body = TaskAgent._parse_frontmatter(existing)
+        new_fm, new_body = TaskAgent._parse_frontmatter(new)
+
+        # Merge frontmatter: new overrides existing, preserve existing not in new
+        merged_fields: dict[str, str] = {}
+        if existing_fm:
+            merged_fields.update(TaskAgent._parse_frontmatter_dict(existing_fm))
+        if new_fm:
+            merged_fields.update(TaskAgent._parse_frontmatter_dict(new_fm))
+
+        # Preserve edge-field prose lines from existing if absent in new
+        body = new_body
+        has_blocked = re.search(r"\*\*Blocked by:\*\*", body, re.IGNORECASE)
+        has_subtask = re.search(r"\*\*Subtask of:\*\*", body, re.IGNORECASE)
+
+        existing_blocked: Optional[str] = None
+        existing_subtask: Optional[str] = None
+        if existing_body:
+            m = re.search(
+                r"\*\*Blocked by:\*\*[ \t]*(.*)", existing_body, re.IGNORECASE
+            )
+            if m:
+                existing_blocked = m.group(1).strip()
+            m = re.search(
+                r"\*\*Subtask of:\*\*[ \t]*(.*)", existing_body, re.IGNORECASE
+            )
+            if m:
+                existing_subtask = m.group(1).strip()
+
+        if (existing_blocked or existing_subtask) and (
+            not has_blocked or not has_subtask
+        ):
+            inject_lines: list[str] = []
+            if existing_subtask and not has_subtask:
+                inject_lines.append(f"**Subtask of:** {existing_subtask}")
+            if existing_blocked and not has_blocked:
+                inject_lines.append(f"**Blocked by:** {existing_blocked}")
+
+            # Insert after the H1 title
+            lines = body.splitlines()
+            inserted = False
+            for idx, line in enumerate(lines):
+                if line.strip().startswith("# "):
+                    lines.insert(idx + 1, "")
+                    for insert_line in inject_lines:
+                        lines.insert(idx + 2, insert_line)
+                    inserted = True
+                    break
+            if inserted:
+                body = "\n".join(lines)
+                if not body.endswith("\n"):
+                    body += "\n"
+            else:
+                body = "\n".join(inject_lines) + "\n\n" + body
+
+        # Reconstruct
+        if merged_fields:
+            fm_text = "\n".join(f"{k}: {v}" for k, v in merged_fields.items()) + "\n"
+            return f"---\n{fm_text}---{body}"
+        return body.lstrip("\n")
+
     def update_issue(self, slug: str, content: str) -> Issue:
-        """Update the content of an issue."""
+        """Update the content of an issue with whole-record preservation."""
         issue_file = self.find_issue_file(slug, include_completed=True)
         if not issue_file:
             raise FileNotFoundError(f"Issue '{slug}' not found.")
 
-        # Extract temporary relations from new content to validate them
-        blocked_by = []
-        subtask_of = None
+        # Read-modify-write: merge unknown fields from existing record
+        existing_content = issue_file.read_text(encoding="utf-8")
+        merged = self._merge_record(existing_content, content)
 
-        m_blocked = re.search(r"\*\*Blocked by:\*\*[ \t]*(.*)", content, re.IGNORECASE)
+        # Extract relations from merged content for validation
+        blocked_by: list[str] = []
+        subtask_of: Optional[str] = None
+
+        m_blocked = re.search(r"\*\*Blocked by:\*\*[ \t]*(.*)", merged, re.IGNORECASE)
         if m_blocked:
             blocked_by = [d.strip() for d in m_blocked.group(1).split(",") if d.strip()]
 
-        m_subtask = re.search(r"\*\*Subtask of:\*\*[ \t]*(.*)", content, re.IGNORECASE)
+        m_subtask = re.search(r"\*\*Subtask of:\*\*[ \t]*(.*)", merged, re.IGNORECASE)
         if m_subtask:
             subtask_of = m_subtask.group(1).strip() or None
-
-        m_depends = re.search(r"\*\*Depends on:\*\*[ \t]*(.*)", content, re.IGNORECASE)
-        if m_depends and not blocked_by:
-            blocked_by = [d.strip() for d in m_depends.group(1).split(",") if d.strip()]
 
         if slug in blocked_by:
             raise ValueError("A task cannot depend on itself.")
@@ -1221,7 +1314,7 @@ class TaskAgent:
         if self._check_dependency_cycle(issues, slug, combined_new_deps):
             raise ValueError("Adding these relationships would introduce a cycle.")
 
-        issue_file.write_text(content, encoding="utf-8")
+        issue_file.write_text(merged, encoding="utf-8")
 
         # Re-extract name and deps in case they changed
         updated = False
@@ -1274,24 +1367,20 @@ class TaskAgent:
         # Update Markdown content
         content = issue_file.read_text(encoding="utf-8")
 
-        # Replace either **Blocked by:** or **Depends on:**
+        # Replace **Blocked by:** line
         pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
-        pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
-
         has_blocked = re.search(pattern_blocked, content)
-        has_depends = re.search(pattern_depends, content)
 
-        if has_blocked or has_depends:
-            pattern = pattern_blocked if has_blocked else pattern_depends
+        if has_blocked:
             if new_deps:
                 content = re.sub(
-                    pattern,
+                    pattern_blocked,
                     f"**Blocked by:** {', '.join(new_deps)}",
                     content,
                 )
             else:
                 # Remove the line and any trailing blank lines
-                content = re.sub(pattern + r"\n*", "", content)
+                content = re.sub(pattern_blocked + r"\n*", "", content)
         else:
             if new_deps:
                 # Insert it right after the H1 title

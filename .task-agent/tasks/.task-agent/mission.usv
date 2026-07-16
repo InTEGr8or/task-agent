@@ -1,5 +1,4 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
-Fix update_task to perform whole-record typed transform preserving unknown fieldsfix-update-task-to-perform-whole-record-typed-transform-preserving-unknown-fieldsstation-map-conformance-migration
 Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slugstation-map-conformance-migration
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits

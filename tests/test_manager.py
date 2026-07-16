@@ -441,6 +441,77 @@ def test_api_update_dependencies(manager):
     assert manager.extract_deps(issue_file) == []
 
 
+def test_api_update_issue_preserves_frontmatter(manager):
+    """update_issue must round-trip frontmatter fields the caller did not set."""
+    manager.create_issue("Task A")
+    issue = manager.create_issue(
+        "Original Task",
+        body="Original body",
+        blocked_by="task-a",
+    )
+    issue_file = manager.find_issue_file(issue.slug)
+    assert issue_file is not None
+    original = issue_file.read_text(encoding="utf-8")
+    assert "created_at:" in original
+    assert "**Blocked by:** task-a" in original
+
+    # Update with content that omits frontmatter and edge fields
+    new_content = "# Original Task\n\nNew body text only.\n"
+    manager.update_issue(issue.slug, new_content)
+
+    updated = issue_file.read_text(encoding="utf-8")
+    # Frontmatter should be preserved
+    assert "created_at:" in updated
+    # Edge field should be preserved
+    assert "**Blocked by:** task-a" in updated
+    # New body should be present
+    assert "New body text only." in updated
+
+
+def test_api_update_issue_preserves_edge_fields(manager):
+    """update_issue must preserve blocked_by and subtask_of the caller did not set."""
+    manager.create_issue("Parent Task")
+    manager.create_issue("Dep Task")
+    manager.create_issue("Main Task", blocked_by="dep-task", subtask_of="parent-task")
+
+    issue_file = manager.find_issue_file("main-task")
+    assert issue_file is not None
+    original = issue_file.read_text(encoding="utf-8")
+    assert "**Blocked by:** dep-task" in original
+    assert "**Subtask of:** parent-task" in original
+
+    # Update body only — no edge fields in new content
+    new_content = "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n# Main Task\n\nUpdated body.\n"
+    manager.update_issue("main-task", new_content)
+
+    updated = issue_file.read_text(encoding="utf-8")
+    assert "**Blocked by:** dep-task" in updated
+    assert "**Subtask of:** parent-task" in updated
+    assert "Updated body." in updated
+
+
+def test_api_update_issue_overrides_edge_fields_when_present(manager):
+    """update_issue should use new edge fields when explicitly provided."""
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+    manager.create_issue("My Task", blocked_by="task-a")
+
+    issue_file = manager.find_issue_file("my-task")
+    assert issue_file is not None
+    assert "**Blocked by:** task-a" in issue_file.read_text(encoding="utf-8")
+
+    # New content with different blocked_by
+    new_content = "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n# My Task\n\n**Blocked by:** task-b\n\nNew body.\n"
+    manager.update_issue("my-task", new_content)
+
+    updated = issue_file.read_text(encoding="utf-8")
+    assert "**Blocked by:** task-b" in updated
+    assert "task-a" not in updated.replace(
+        "task-a-slug", ""
+    )  # task-a not in blocked_by
+    assert "New body." in updated
+
+
 def test_get_strategy_returns_none_when_no_file(manager):
     assert manager.get_strategy() is None
 
