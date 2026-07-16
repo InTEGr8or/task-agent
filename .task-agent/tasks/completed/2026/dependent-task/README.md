@@ -4,7 +4,7 @@ created_at: 2026-03-10T12:32:25-07:00
 
 # Dependent Task
 
-**Depends on:** task-a, task-b
+**Blocked by:** task-a, task-b
 
 Depends on others
 

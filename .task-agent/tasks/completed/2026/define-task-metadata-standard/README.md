@@ -4,7 +4,7 @@ created_at: 2026-04-10T11:38:54-07:00
 
 # Define Task Metadata Standard
 
-**Depends on:** sub-agent-observability-and-transparency
+**Blocked by:** sub-agent-observability-and-transparency
 
 Define the `meta.json` structure for storing sub-agent metadata in each task folder.
 

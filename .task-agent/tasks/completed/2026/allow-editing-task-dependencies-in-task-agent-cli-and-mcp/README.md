@@ -11,7 +11,7 @@ Agents currently cannot easily update task dependencies once they are set. We ne
 1. Implement command/options in the CLI to update task dependencies (e.g., `ta update <slug> --depends-on <deps>` or similar).
 2. Ensure the MCP server's `update_task` tool supports updating dependencies.
 3. Validate that dependency target tasks exist and check for cycle detection to prevent dependency loops.
-4. Update the task markdown files (the 'Depends on:' metadata block) and mission.usv when dependencies change.
+4. Update the task markdown files (the 'Blocked by:' metadata block) and mission.usv when dependencies change.
 5. Write unit tests covering dependency updates, invalid targets, and cycle detection.
 
 ## Solution

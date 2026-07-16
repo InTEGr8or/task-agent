@@ -127,7 +127,8 @@ def create_task(
     completion_criteria: str,
     body: str = "",
     draft: bool = False,
-    depends_on: Optional[str] = None,
+    blocked_by: Optional[str] = None,
+    subtask_of: Optional[str] = None,
 ) -> str:
     """Create a new task in the mission queue.
 
@@ -140,16 +141,17 @@ def create_task(
         completion_criteria: Clear, measurable criteria for task completion.
         body: Detailed description of the task.
         draft: If True, creates the task in 'draft' status. Default is False (pending).
-        depends_on: Comma-separated list of existing task slugs this task depends on.
-            Example: "setup-infra, configure-db" means this task depends on
-            both "setup-infra" and "configure-db" being completed first.
+        blocked_by: Comma-separated list of existing task slugs that block this task.
+            Example: "setup-infra, configure-db" means this task is blocked by
+            both "setup-infra" and "configure-db" needing to be completed first.
+        subtask_of: Slug of the parent task this task is a subtask of.
 
     Examples:
-        # Create a task that depends on two others
+        # Create a task blocked by two others
         create_task(
             title="Deploy to staging",
             completion_criteria="Staging deployment passes smoke tests",
-            depends_on="setup-ci, build-artifacts"
+            blocked_by="setup-ci, build-artifacts"
         )
 
         # Create a standalone draft task
@@ -162,7 +164,12 @@ def create_task(
     manager = get_manager()
     try:
         issue = manager.create_issue(
-            title, body, draft, depends_on, completion_criteria=completion_criteria
+            title,
+            body,
+            draft,
+            blocked_by=blocked_by,
+            subtask_of=subtask_of,
+            completion_criteria=completion_criteria,
         )
         return f"Created task: {issue.slug} (Status: {issue.status})"
     except Exception as e:
@@ -319,17 +326,17 @@ def update_task(name: str, content: str) -> str:
 
 
 @mcp.tool()
-def update_task_dependencies(name: str, depends_on: str) -> str:
+def update_task_dependencies(name: str, blocked_by: str) -> str:
     """Update the dependencies of a task.
 
     Args:
         name: The title or partial name of the task to update.
-        depends_on: Comma-separated list of task slugs this task depends on (use empty string to clear).
+        blocked_by: Comma-separated list of task slugs that block this task (use empty string to clear).
     """
     manager = get_manager()
     slug = manager.slugify(name)
     try:
-        manager.update_dependencies(slug, depends_on)
+        manager.update_dependencies(slug, blocked_by)
         return f"Successfully updated dependencies for task '{slug}'."
     except Exception as e:
         return f"Error updating task dependencies: {e}"
@@ -470,8 +477,7 @@ def create_tasks(
             - 'completion_criteria' (str, required): Clear, measurable criteria for task completion.
             - 'body' (str, optional): Detailed description of the task.
             - 'draft' (bool, optional): If True, creates the task in 'draft' status. Default is False (pending).
-            - 'blocked_by' (str, optional): Comma-separated list of existing task slugs this task depends on.
-            - 'depends_on' (str, optional): Deprecated alias for blocked_by.
+            - 'blocked_by' (str, optional): Comma-separated list of existing task slugs that block this task.
             - 'subtask_of' (str, optional): Slug of the parent task this task is a subtask of.
             - 'as_dir' (bool, optional): Create as folder directory. Default is True.
 
@@ -496,7 +502,7 @@ def create_tasks(
 
         body = t.get("body", "")
         draft = t.get("draft", False)
-        blocked_by = t.get("blocked_by") or t.get("depends_on")
+        blocked_by = t.get("blocked_by")
         subtask_of = t.get("subtask_of")
         as_dir = t.get("as_dir", True)
 
@@ -505,7 +511,6 @@ def create_tasks(
                 title=title,
                 body=body,
                 draft=draft,
-                depends_on=blocked_by,
                 as_dir=as_dir,
                 completion_criteria=criteria,
                 blocked_by=blocked_by,

@@ -35,7 +35,7 @@ Task Agent supports two ways to store task content:
 
 ## 🔗 Dependencies
 
-Tasks can depend on one or more other tasks using the `**Depends on:** slug1, slug2` syntax within their Markdown descriptions. Task Agent uses this to provide a hierarchical view in `ta list`.
+Tasks can specify ordering dependencies using the `**Blocked by:** slug1, slug2` syntax within their Markdown descriptions. Task Agent uses this to provide a hierarchical view in `ta list`.
 
 ## 🔒 File Protection
 

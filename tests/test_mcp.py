@@ -40,7 +40,12 @@ def test_mcp_create_task(mock_manager):
     )
     assert "Created task: new-task (Status: pending)" in result
     mock_manager.create_issue.assert_called_once_with(
-        "New Task", "Desc", False, None, completion_criteria="Must pass tests"
+        "New Task",
+        "Desc",
+        False,
+        blocked_by=None,
+        subtask_of=None,
+        completion_criteria="Must pass tests",
     )
 
 
@@ -210,8 +215,8 @@ def test_mcp_update_task_dependencies(monkeypatch):
         def slugify(self, name):
             return name.lower().replace(" ", "-")
 
-        def update_dependencies(self, slug, depends_on):
-            called.append((slug, depends_on))
+        def update_dependencies(self, slug, blocked_by):
+            called.append((slug, blocked_by))
 
     monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
     result = mcp.update_task_dependencies("Task One", "task-two,task-three")

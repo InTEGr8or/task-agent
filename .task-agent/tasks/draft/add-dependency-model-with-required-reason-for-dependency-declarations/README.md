@@ -4,7 +4,7 @@ created_at: 2026-06-14T10:03:52-07:00
 
 # Add Dependency model with required reason for dependency declarations
 
-At the architecture level, enforce that every dependency declaration includes a human-readable reason. This prevents agents from creating false dependency chains (using `--depends-on` as a grouping mechanism rather than expressing a true prerequisite).
+At the architecture level, enforce that every dependency declaration includes a human-readable reason. This prevents agents from creating false dependency chains (using `--blocked-by` as a grouping mechanism rather than expressing a true prerequisite).
 
 The dependency is stored only in the markdown file — the USV stays as bare slugs (lightweight index, not source of truth). The model lives in the data layer so any future interface (CLI, MCP, GUI) inherits the constraint automatically.
 
@@ -22,15 +22,15 @@ Change `Issue.dependencies` from `List[str]` to `List[Dependency]`. `Issue.to_us
 
 ## Markdown storage
 
-- Current: `Depends on: slug1, slug2`
-- New: `Depends on: slug1 -- reason text, slug2 -- reason text`
+- Current: `Blocked by: slug1, slug2`
+- New: `Blocked by: slug1 -- reason text, slug2 -- reason text`
 - `extract_deps()` splits on `, `, then each entry on ` -- `
 - Backward compat: entries without ` -- ` get empty reason (old files parse cleanly)
 
 ## CLI
 
-- `ta new "Foo" --depends-on "bar" --reason "because auth needs to ship first"`
-- `--reason` is required when `--depends-on` is used
+- `ta new "Foo" --blocked-by "bar" --reason "because auth needs to ship first"`
+- `--reason` is required when `--blocked-by` is used
 - `ta add-dep <slug> <dep-slug> --reason "text"` — add more deps later
 - `ta remove-dep <slug> <dep-slug>`
 - Update existing `add_dependency` and `remove_dependency` in manager.py
@@ -45,13 +45,13 @@ Change `Issue.dependencies` from `List[str]` to `List[Dependency]`. `Issue.to_us
 
 ```
 ○ foo
-  └─ ○ bar  (depends on: foo — because auth needs to ship first)
+  └─ ○ bar  (blocked by: foo — because auth needs to ship first)
 ```
 
 ## Backward compatibility
 
 - Old USV entries with bare slug strings — unchanged by design
-- Old markdown `Depends on: slug1, slug2` — no ` -- ` separator found, reason defaults to `""`
+- Old markdown `Blocked by: slug1, slug2` — no ` -- ` separator found, reason defaults to `""`
 - Existing tests: update fixtures from `["slug1", "slug2"]` to `[Dependency(slug="slug1"), ...]`
 
 Only the markdown files need updating to include reasons. No database or index migration needed.
@@ -64,7 +64,7 @@ Only the markdown files need updating to include reasons. No database or index m
 - [ ] `load_mission()` populates Dependency objects from file
 - [ ] `save_mission()` still calls to_usv() — no USV change
 - [ ] `extract_deps()` parses `slug -- reason` format, backward compat
-- [ ] `--reason` required on `--depends-on` for `ta new`
+- [ ] `--reason` required on `--blocked-by` for `ta new`
 - [ ] `ta add-dep` / `ta remove-dep` CLI commands
 - [ ] MCP `create_task` / `add_dependency` with required `reason`
 - [ ] `ta tree` displays reason in dependency annotations

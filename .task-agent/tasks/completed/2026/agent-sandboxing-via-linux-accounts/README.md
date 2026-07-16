@@ -136,10 +136,10 @@ subprocess.run([
 **Subtasks:**
 
 - Phase 2 — Agent templates (`docs/tasks/draft/phase-2-agent-templates/`)
-  - **Depends on:** this task
+  - **Blocked by:** this task
   - Template system for `ta init-agent --template <name>`
 - Phase 3 — Per-task isolation (`docs/tasks/draft/phase-3-per-task-isolation/`)
-  - **Depends on:** this task, phase-2-agent-templates
+  - **Blocked by:** this task, phase-2-agent-templates
   - `ta start --agent <template>` creates a dedicated agent per task
 
 ---

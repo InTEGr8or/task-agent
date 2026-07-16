@@ -1739,7 +1739,6 @@ def cmd_new(
     title: Optional[str],
     body: str,
     draft: bool,
-    depends_on: Optional[str] = None,
     as_dir: bool = True,
     completion_criteria: Optional[str] = None,
     interactive: bool = False,
@@ -1775,7 +1774,7 @@ def cmd_new(
 
                 t_body = t.get("body", "")
                 t_draft = t.get("draft", draft)
-                t_blocked_by = t.get("blocked_by") or t.get("depends_on")
+                t_blocked_by = t.get("blocked_by")
                 t_subtask_of = t.get("subtask_of")
                 t_as_dir = t.get("as_dir", as_dir)
 
@@ -1783,7 +1782,6 @@ def cmd_new(
                     title=t_title,
                     body=t_body,
                     draft=t_draft,
-                    depends_on=t_blocked_by,
                     as_dir=t_as_dir,
                     completion_criteria=t_criteria,
                     blocked_by=t_blocked_by,
@@ -1809,7 +1807,7 @@ def cmd_new(
         temp_file = temp_dir / "README.md"
 
         # Resolve relations for the template
-        final_blocked_by = blocked_by if blocked_by is not None else (depends_on or "")
+        final_blocked_by = blocked_by or ""
         final_subtask_of = subtask_of or ""
 
         created_at = datetime.now().astimezone().isoformat()
@@ -1856,7 +1854,6 @@ created_at: {created_at}
             title=title,
             body=body,
             draft=draft,
-            depends_on=depends_on,
             as_dir=as_dir,
             completion_criteria=completion_criteria,
             blocked_by=blocked_by,
@@ -2142,7 +2139,6 @@ def cmd_update(
     console: Console,
     manager: TaskAgent,
     slug_part: str,
-    depends_on: Optional[str] = None,
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
 ):
@@ -2159,10 +2155,9 @@ def cmd_update(
 
     updated = False
     try:
-        # Handle blocked_by / depends_on
-        final_blocked_by = blocked_by if blocked_by is not None else depends_on
-        if final_blocked_by is not None:
-            manager.update_dependencies(target.slug, final_blocked_by)
+        # Handle blocked_by
+        if blocked_by is not None:
+            manager.update_dependencies(target.slug, blocked_by)
             console.print(
                 f"[bold green]Successfully updated prerequisites for task '{target.slug}'.[/bold green]"
             )
@@ -3865,11 +3860,6 @@ def main():
     )
     update_parser.add_argument("slug", help="Slug of the task to update")
     update_parser.add_argument(
-        "-d",
-        "--depends-on",
-        help="Comma-separated list of task slugs this task depends on (use empty string to clear). Deprecated: use --blocked-by instead.",
-    )
-    update_parser.add_argument(
         "--blocked-by",
         help="Comma-separated list of prerequisite task slugs that block this task (use empty string to clear)",
     )
@@ -4088,10 +4078,6 @@ Usage:
         "-i", "--interactive", action="store_true", help="Open editor to fill in task"
     )
     new_parser.add_argument(
-        "--depends-on",
-        help="Comma-separated slugs this task depends on. Deprecated: use --blocked-by instead.",
-    )
-    new_parser.add_argument(
         "--blocked-by",
         help="Comma-separated slugs of prerequisite tasks that block this task, e.g. 'setup-ci,build-artifacts'.",
     )
@@ -4183,7 +4169,6 @@ Usage:
             console,
             manager,
             args.slug,
-            depends_on=args.depends_on,
             blocked_by=args.blocked_by,
             subtask_of=args.subtask_of,
         )
@@ -4254,7 +4239,6 @@ Usage:
             title=args.title,
             body=args.body,
             draft=args.draft,
-            depends_on=args.depends_on,
             as_dir=not args.file,
             completion_criteria=args.criteria,
             interactive=args.interactive,

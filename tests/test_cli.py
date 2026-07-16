@@ -552,7 +552,7 @@ def test_cli_init_agent_arguments(monkeypatch):
         assert called[1] == ("my-agent", None, 45)
 
 
-def test_cmd_triage_depends_on_above(manager, monkeypatch):
+def test_cmd_triage_link_dependency_above(manager, monkeypatch):
     from taskagent.cli import cmd_triage
     from unittest.mock import MagicMock, patch
 

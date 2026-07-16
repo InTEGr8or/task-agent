@@ -21,12 +21,11 @@ One task = one directory, named by **slug**, containing `README.md`
 Serialization to the index is USV (`\x1f`-delimited).
 
 Edge fields are persisted as **body prose**, regex-extracted (`manager.py` ~582):
-`**Blocked by:**`, `**Subtask of:**`, with legacy `**Depends on:**` read as an alias
-for `blocked_by`.
+`**Blocked by:**` for ordering dependencies, `**Subtask of:**` for hierarchy.
 
 **Declared (v1):** edge fields move to structured frontmatter (`blocked_by:`,
-`subtask_of:` YAML lists); the prose-line reader remains as an alias-tolerant fallback
-during migration. Frontmatter is the schema; prose is presentation.
+`subtask_of:` YAML lists); prose-line reader extracts values at runtime.
+Frontmatter is the schema; prose is presentation.
 
 ## 2. Stations (observed)
 

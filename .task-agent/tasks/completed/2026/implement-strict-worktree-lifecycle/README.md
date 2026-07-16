@@ -4,7 +4,7 @@ created_at: 2026-04-10T11:38:54-07:00
 
 # Implement Strict Worktree Lifecycle
 
-**Depends on:** enhanced-task-lifecycle-and-git-orchestration
+**Blocked by:** enhanced-task-lifecycle-and-git-orchestration
 
 
 

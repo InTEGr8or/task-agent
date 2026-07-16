@@ -4,7 +4,7 @@ created_at: 2026-06-14T10:03:52-07:00
 
 ## Phase 2 — Agent templates
 
-**Depends on:** agent-sandboxing-via-linux-accounts
+**Blocked by:** agent-sandboxing-via-linux-accounts
 
 ---
 

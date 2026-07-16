@@ -1,4 +1,6 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
+Fix update_task to perform whole-record typed transform preserving unknown fieldsfix-update-task-to-perform-whole-record-typed-transform-preserving-unknown-fieldsstation-map-conformance-migration
+Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slugstation-map-conformance-migration
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
@@ -12,16 +14,14 @@ Agents are unable to close or mark done a task itemagents-are-unable-to-close-o
 Allow new to create new task as active, if neeedeallow-new-to-create-new-task-as-active-if-neeede
 Create a global task-agent registry of repos and taskscreate-a-global-task-agent-registry-of-repos-and-tasks
 incident: create-task path errorincident-create-task-path-error
-Build a station inspector CLI, borrowing Burr's telemetry-UI lessonbuild-station-inspector-cli-borrowing-burr-telemetry-uxratify-station-map-declaring-task-agent-as-a-typed-file-path-station-system
+Build a station inspector CLI, borrowing Burr's telemetry-UI lessonbuild-station-inspector-cli-borrowing-burr-telemetry-uxstation-map-conformance-migration
 Investigate switching type checker from mypy to Pyreinvestigate-switching-type-checker-from-mypy-to-pyre
+STATION-MAP conformance migrationstation-map-conformance-migration
+Move blocked_by and subtask_of edge fields to YAML frontmattermove-blocked-by-and-subtask-of-edge-fields-to-yaml-frontmatterstation-map-conformance-migration
+Declare and enforce durability contract for the task station storedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
+Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-indexstation-map-conformance-migration
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders
 Test Interactive Tasktest-interactive-task
-Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slug
-Move blocked_by and subtask_of edge fields to YAML frontmattermove-blocked-by-and-subtask-of-edge-fields-to-yaml-frontmatter
-Fix update_task to perform whole-record typed transform preserving unknown fieldsfix-update-task-to-perform-whole-record-typed-transform-preserving-unknown-fields
-Declare and enforce durability contract for the task station storedeclare-and-enforce-durability-contract-for-the-task-station-store
-Complete blocked_by vs subtask_of edge-type migrationcomplete-blocked-by-vs-subtask-of-edge-type-migration
-Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-index

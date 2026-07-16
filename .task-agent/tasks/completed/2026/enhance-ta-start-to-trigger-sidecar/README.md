@@ -4,7 +4,7 @@ created_at: 2026-03-22T13:51:44-07:00
 
 # Enhance ta start to trigger sidecar
 
-**Depends on:** implement-merge-request-queue
+**Blocked by:** implement-merge-request-queue
 
 Modify 'ta start' to optionally invoke 'ta run' after setting up the git worktree. This allows for immediate autonomous execution after environment setup.
 
