@@ -187,6 +187,25 @@ def test_api_sync_mission(manager):
     assert issues[1].slug == "task-a"
 
 
+def test_api_sync_mission_auto_ingest(manager):
+    # Create an issue using the manager API (which creates files and adds to mission)
+    manager.create_issue("Task A", draft=False)
+
+    # Simulate a file manually added/created on disk
+    pending_dir = manager.issues_root / "pending" / "task-b"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    readme = pending_dir / "README.md"
+    readme.write_text("# Task B\n\n## Completion Criteria\n\nCC 2", encoding="utf-8")
+
+    # Sync mission: this should auto-ingest the manually added task-b!
+    issues = manager.sync_mission()
+
+    # Verify both tasks exist and are in the synced issues list
+    slugs = [i.slug for i in issues]
+    assert "task-a" in slugs
+    assert "task-b" in slugs
+
+
 def test_api_demote_issue(manager):
     manager.create_issue("Demote Me")
     # Starts as pending

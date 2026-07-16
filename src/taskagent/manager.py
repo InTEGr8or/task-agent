@@ -485,7 +485,7 @@ class TaskAgent:
                                 status = issue_file.parent.name
                         else:
                             # Fallback during migration or if file is temporarily gone
-                            status = "pending"
+                            status = "unknown"
 
                         issues.append(
                             Issue(
@@ -538,8 +538,10 @@ class TaskAgent:
             json.dump(datapackage, f, indent=2)
         self._set_writable(dp_path, False)
 
-    def sync_mission(self) -> List[Issue]:
+    def sync_mission(self, ingest: bool = True) -> List[Issue]:
         """Load, sort by status groups, and save back."""
+        if ingest:
+            self.ingest_issues(sync=False)
         issues = self.load_mission()
         if not issues:
             return []
@@ -1428,7 +1430,7 @@ class TaskAgent:
             status="completed",
         )
 
-    def ingest_issues(self) -> Tuple[int, int]:
+    def ingest_issues(self, sync: bool = True) -> Tuple[int, int]:
         """Ingest existing markdown files. Returns (num_new, num_removed)."""
         self.ensure_issues_dir()
 
@@ -1543,7 +1545,8 @@ class TaskAgent:
 
         final_issues = present_issues + new_issues
         self.save_mission(final_issues)
-        self.sync_mission()
+        if sync:
+            self.sync_mission(ingest=False)
 
         return len(new_issues), len(existing_issues) - len(present_issues)
 
