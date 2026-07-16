@@ -110,9 +110,16 @@ def test_cmd_done(manager, temp_issues_dir):
 
     cmd_done(console, manager, "done-task", should_commit=False)
 
-    # Should be in completed/year/
-    year = str(datetime.now().year)
-    completed_file = temp_issues_dir / "completed" / year / "done-task" / "README.md"
+    # Should be in completed/year/month/
+    now = datetime.now()
+    completed_file = (
+        temp_issues_dir
+        / "completed"
+        / str(now.year)
+        / f"{now.month:02d}"
+        / "done-task"
+        / "README.md"
+    )
     assert completed_file.exists()
     assert "Completed in commit" in completed_file.read_text()
 

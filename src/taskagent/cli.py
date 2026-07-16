@@ -586,31 +586,10 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
             matches.append(i)
 
     # Always search completed tasks too
-    completed_root = manager.issues_root / "completed"
-    if completed_root.exists():
-        for year_dir in sorted(completed_root.iterdir(), reverse=True):
-            if year_dir.is_dir():
-                for f in year_dir.glob("*.md"):
-                    if fuzzy_match(f.stem, pat_norm):
-                        name = manager.extract_title(f)
-                        matches.append(
-                            Issue(
-                                name=name, slug=f.stem, status="completed", priority=0
-                            )
-                        )
-                for d in year_dir.iterdir():
-                    if d.is_dir():
-                        readme = d / "README.md"
-                        if readme.exists() and fuzzy_match(d.name, pat_norm):
-                            name = manager.extract_title(readme)
-                            matches.append(
-                                Issue(
-                                    name=name,
-                                    slug=d.name,
-                                    status="completed",
-                                    priority=0,
-                                )
-                            )
+    for f, slug in manager.walk_completed():
+        if fuzzy_match(slug, pat_norm):
+            name = manager.extract_title(f)
+            matches.append(Issue(name=name, slug=slug, status="completed", priority=0))
 
     if not matches:
         console.print(f"[yellow]No issues match pattern '{pattern}'.[/yellow]")
@@ -703,46 +682,20 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                         issues = manager.load_mission()
                         matches = [i for i in issues if fuzzy_match(i.slug, pat_norm)]
                         # Also re-search completed
-                        completed_root = manager.issues_root / "completed"
                         new_matches: List[Issue] = list(matches)
-                        if completed_root.exists():
-                            for year_dir in sorted(
-                                completed_root.iterdir(), reverse=True
+                        for f, slug in manager.walk_completed():
+                            if fuzzy_match(slug, pat_norm) and not any(
+                                m.slug == slug for m in new_matches
                             ):
-                                if year_dir.is_dir():
-                                    for f in year_dir.glob("*.md"):
-                                        if fuzzy_match(f.stem, pat_norm) and not any(
-                                            m.slug == f.stem for m in new_matches
-                                        ):
-                                            name = manager.extract_title(f)
-                                            new_matches.append(
-                                                Issue(
-                                                    name=name,
-                                                    slug=f.stem,
-                                                    status="completed",
-                                                    priority=0,
-                                                )
-                                            )
-                                    for d in year_dir.iterdir():
-                                        if d.is_dir():
-                                            readme = d / "README.md"
-                                            if (
-                                                readme.exists()
-                                                and fuzzy_match(d.name, pat_norm)
-                                                and not any(
-                                                    m.slug == d.name
-                                                    for m in new_matches
-                                                )
-                                            ):
-                                                name = manager.extract_title(readme)
-                                                new_matches.append(
-                                                    Issue(
-                                                        name=name,
-                                                        slug=d.name,
-                                                        status="completed",
-                                                        priority=0,
-                                                    )
-                                                )
+                                name = manager.extract_title(f)
+                                new_matches.append(
+                                    Issue(
+                                        name=name,
+                                        slug=slug,
+                                        status="completed",
+                                        priority=0,
+                                    )
+                                )
                         matches = new_matches
                         if cursor >= len(matches):
                             cursor = max(0, len(matches) - 1)
@@ -766,23 +719,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
 
 def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
     """Show completed tasks in reverse chronological order."""
-    completed_root = manager.issues_root / "completed"
-    if not completed_root.exists():
-        console.print("[yellow]No completed tasks found.[/yellow]")
-        return
-
-    all_completed: List[Tuple[Path, str]] = []
-
-    for year_dir in completed_root.iterdir():
-        if not year_dir.is_dir():
-            continue
-        for f in year_dir.glob("*.md"):
-            all_completed.append((f, f.stem))
-        for d in year_dir.iterdir():
-            if d.is_dir():
-                readme = d / "README.md"
-                if readme.exists():
-                    all_completed.append((readme, d.name))
+    all_completed = manager.walk_completed()
 
     if not all_completed:
         console.print("[yellow]No completed tasks found.[/yellow]")
@@ -3253,28 +3190,11 @@ def cmd_triage(
         if completed:
             # Load completed issues from disk since they aren't in mission.usv
             all_issues = []
-            completed_root = manager.issues_root / "completed"
-            if completed_root.exists():
-                for year_dir in sorted(completed_root.iterdir(), reverse=True):
-                    if year_dir.is_dir():
-                        # File-based
-                        for f in sorted(year_dir.glob("*.md")):
-                            slug = f.stem
-                            name = manager.extract_title(f)
-                            all_issues.append(
-                                Issue(
-                                    name=name, slug=slug, status="completed", priority=0
-                                )
-                            )
-                        # Directory-based
-                        for d in sorted(year_dir.glob("*/README.md")):
-                            slug = d.parent.name
-                            name = manager.extract_title(d)
-                            all_issues.append(
-                                Issue(
-                                    name=name, slug=slug, status="completed", priority=0
-                                )
-                            )
+            for f, slug in manager.walk_completed():
+                name = manager.extract_title(f)
+                all_issues.append(
+                    Issue(name=name, slug=slug, status="completed", priority=0)
+                )
             issues = all_issues
         else:
             issues = manager.sync_mission()

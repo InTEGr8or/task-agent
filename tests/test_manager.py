@@ -128,9 +128,14 @@ def test_api_complete_issue(manager):
     assert issue.slug == "complete-me"
     assert issue.status == "completed"
 
-    year = str(datetime.now().year)
+    now = datetime.now()
     assert (
-        manager.issues_root / "completed" / year / "complete-me" / "README.md"
+        manager.issues_root
+        / "completed"
+        / str(now.year)
+        / f"{now.month:02d}"
+        / "complete-me"
+        / "README.md"
     ).exists()
 
 
@@ -159,9 +164,14 @@ def test_api_restore_issue(manager):
     manager.complete_issue("restore-me", should_commit=False)
 
     # Verify it is in completed
-    year = str(datetime.now().year)
+    now = datetime.now()
     assert (
-        manager.issues_root / "completed" / year / "restore-me" / "README.md"
+        manager.issues_root
+        / "completed"
+        / str(now.year)
+        / f"{now.month:02d}"
+        / "restore-me"
+        / "README.md"
     ).exists()
 
     # Restore it
@@ -169,7 +179,12 @@ def test_api_restore_issue(manager):
 
     assert (manager.issues_root / "active" / "restore-me" / "README.md").exists()
     assert not (
-        manager.issues_root / "completed" / year / "restore-me" / "README.md"
+        manager.issues_root
+        / "completed"
+        / str(now.year)
+        / f"{now.month:02d}"
+        / "restore-me"
+        / "README.md"
     ).exists()
 
     issues = manager.load_mission()

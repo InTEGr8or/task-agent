@@ -19,7 +19,6 @@ Move blocked_by and subtask_of edge fields to YAML frontmattermove-blocked-by-a
 Declare and enforce durability contract for the task station storedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
 Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-indexstation-map-conformance-migration
 Completed items index with WAL for fast history lookupcompleted-items-index-with-wal-for-fast-history-lookupshard-completed-tasks-by-month
-shard-completed-tasks-by-monthshard-completed-tasks-by-month
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations

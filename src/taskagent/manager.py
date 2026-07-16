@@ -306,28 +306,68 @@ class TaskAgent:
                     count += 1
         return count
 
+    def walk_completed(self) -> List[Tuple[Path, str]]:
+        """Walk the completed/ tree and return (file_path, slug) pairs.
+
+        Handles both legacy completed/YYYY/ (flat) and the new
+        completed/YYYY/MM/ (month-sharded) layouts transparently.
+        """
+        completed_root = self.issues_root / "completed"
+        if not completed_root.exists():
+            return []
+
+        results: List[Tuple[Path, str]] = []
+
+        for year_dir in sorted(completed_root.iterdir()):
+            if not year_dir.is_dir():
+                continue
+
+            for entry in sorted(year_dir.iterdir()):
+                if entry.is_file() and entry.suffix == ".md":
+                    results.append((entry, entry.stem))
+                elif entry.is_dir():
+                    readme = entry / "README.md"
+                    if readme.exists():
+                        results.append((readme, entry.name))
+                    else:
+                        for month_entry in sorted(entry.iterdir()):
+                            if month_entry.is_file() and month_entry.suffix == ".md":
+                                results.append((month_entry, month_entry.stem))
+                            elif month_entry.is_dir():
+                                readme = month_entry / "README.md"
+                                if readme.exists():
+                                    results.append((readme, month_entry.name))
+
+        return results
+
     def find_issue_file(
         self, slug: str, include_completed: bool = False
     ) -> Optional[Path]:
         """Find the issue markdown file by slug.
         Checks for slug.md OR slug/README.md.
-        Resilient to underscore/hyphen differences."""
+        Resilient to underscore/hyphen differences.
+        Recurses into completed/YYYY/ and completed/YYYY/MM/ when include_completed."""
         if not self.issues_root.exists():
             return None
 
-        search_dirs = [d for d in self.issues_root.iterdir() if d.is_dir()]
-        if not include_completed:
-            search_dirs = [d for d in search_dirs if d.name != "completed"]
-        else:
-            # If including completed, we also need to search the year-based subdirectories
+        target_slug = self.slugify(slug)
+
+        # Build search dirs: pending/draft/active/mr at top level
+        search_dirs: List[Path] = [
+            d
+            for d in self.issues_root.iterdir()
+            if d.is_dir() and d.name != "completed"
+        ]
+
+        if include_completed:
             completed_root = self.issues_root / "completed"
             if completed_root.exists():
                 for year_dir in completed_root.iterdir():
                     if year_dir.is_dir():
                         search_dirs.append(year_dir)
-
-        # Normalize target slug
-        target_slug = self.slugify(slug)
+                        for month_dir in year_dir.iterdir():
+                            if month_dir.is_dir():
+                                search_dirs.append(month_dir)
 
         for directory in search_dirs:
             # 1. Exact match check (fast)
@@ -1015,8 +1055,10 @@ class TaskAgent:
         is_dir_based = issue_file.name == "README.md"
         source_to_move = issue_file.parent if is_dir_based else issue_file
 
-        year = datetime.now().year
-        completed_dir = self.issues_root / "completed" / str(year)
+        now = datetime.now()
+        completed_dir = (
+            self.issues_root / "completed" / str(now.year) / f"{now.month:02d}"
+        )
         completed_dir.mkdir(parents=True, exist_ok=True)
 
         dest_path = completed_dir / source_to_move.name
@@ -1609,6 +1651,73 @@ class TaskAgent:
                             issue.status = status
                             break
                 _ensure_created_at(readme_file)
+
+        # Walk completed/ tree: migrate legacy headers and shard flat
+        # completed/YYYY/ entries into completed/YYYY/MM/
+        completed_root = self.issues_root / "completed"
+        if completed_root.exists():
+            for year_dir in completed_root.iterdir():
+                if not year_dir.is_dir():
+                    continue
+                for entry in list(year_dir.iterdir()):
+                    flat_path: Optional[Path] = None
+                    if entry.is_file() and entry.suffix == ".md":
+                        flat_path = entry
+                    elif entry.is_dir() and (entry / "README.md").exists():
+                        already_sharded = any(
+                            m.is_dir() and m.name[:2].isdigit() for m in entry.iterdir()
+                        )
+                        if not already_sharded:
+                            flat_path = entry / "README.md"
+
+                    if flat_path is None:
+                        continue
+
+                    _migrate_file_headers(flat_path)
+                    _ensure_created_at(flat_path)
+
+                    # Determine month from created_at frontmatter
+                    month_str = ""
+                    try:
+                        fm_text, _ = TaskAgent._parse_frontmatter(
+                            flat_path.read_text(encoding="utf-8")
+                        )
+                        if fm_text:
+                            fields = TaskAgent._parse_frontmatter_dict(fm_text)
+                            created = fields.get("created_at", "")
+                            if created:
+                                dt = datetime.fromisoformat(created)
+                                month_str = f"{dt.month:02d}"
+                    except Exception:
+                        pass
+                    if not month_str:
+                        month_str = f"{datetime.now().month:02d}"
+
+                    month_dir = year_dir / month_str
+                    month_dir.mkdir(parents=True, exist_ok=True)
+                    dest = month_dir / entry.name
+                    if dest.exists():
+                        continue
+                    try:
+                        self._set_writable(flat_path, True)
+                        shutil.move(str(entry), str(dest))
+                    except Exception:
+                        pass
+
+            # Also walk month-sharded entries to migrate headers
+            for year_dir in completed_root.iterdir():
+                if not year_dir.is_dir():
+                    continue
+                for month_dir in year_dir.iterdir():
+                    if not (month_dir.is_dir() and month_dir.name[:2].isdigit()):
+                        continue
+                    for entry in month_dir.iterdir():
+                        if entry.is_file() and entry.suffix == ".md":
+                            _migrate_file_headers(entry)
+                            _ensure_created_at(entry)
+                        elif entry.is_dir() and (entry / "README.md").exists():
+                            _migrate_file_headers(entry / "README.md")
+                            _ensure_created_at(entry / "README.md")
 
         final_issues = present_issues + new_issues
         self.save_mission(final_issues)

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "task_agent": {
+      "type": "local",
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "/home/mstouffer/repos/task-agent",
+        "ta",
+        "mcp"
+      ]
+    }
+  }
+}

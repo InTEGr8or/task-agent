@@ -6,6 +6,17 @@
         "mcp"
       ],
       "trust": true
+    },
+    "task_agent": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "/home/mstouffer/repos/task-agent",
+        "ta",
+        "mcp"
+      ],
+      "trust": true
     }
   }
 }
