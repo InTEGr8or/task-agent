@@ -12,6 +12,8 @@ Welcome to the comprehensive documentation for **Task Agent**, a prioritized, fi
   - Best practices for managing tasks from draft to completion.
 - [**Development**](./development/README.md)
   - Information on project setup, testing, and release processes.
+- [**Station Map**](./STATION-MAP.md)
+  - Formal declaration of task-agent as a typed file-path station system: stations, transitions, edge roles, and conformance gaps.
 
 ## 🚀 Quick Start
 

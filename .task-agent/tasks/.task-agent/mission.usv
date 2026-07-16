@@ -1,5 +1,4 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
-Ratify STATION-MAP.md declaring task-agent as a typed file-path station systemratify-station-map-declaring-task-agent-as-a-typed-file-path-station-system
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
 Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
@@ -20,3 +19,9 @@ New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
 pyproject.toml (sketch)slug-identified-tasks-with-symlinked-state-folders
 Test Interactive Tasktest-interactive-task
+Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slug
+Move blocked_by and subtask_of edge fields to YAML frontmattermove-blocked-by-and-subtask-of-edge-fields-to-yaml-frontmatter
+Fix update_task to perform whole-record typed transform preserving unknown fieldsfix-update-task-to-perform-whole-record-typed-transform-preserving-unknown-fields
+Declare and enforce durability contract for the task station storedeclare-and-enforce-durability-contract-for-the-task-station-store
+Complete blocked_by vs subtask_of edge-type migrationcomplete-blocked-by-vs-subtask-of-edge-type-migration
+Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-index
