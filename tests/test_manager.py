@@ -584,3 +584,219 @@ def test_init_strategy_creates_files(manager):
     assert manager.strategy_file.exists()
     content = manager.strategy_file.read_text(encoding="utf-8")
     assert "# Strategy" in content
+
+
+# ── Station conformance tests ───────────────────────────────────────
+
+
+def test_walk_completed_flat_and_sharded(manager):
+    """walk_completed must handle both flat completed/YYYY/ and sharded completed/YYYY/MM/."""
+    completed = manager.issues_root / "completed"
+    # Flat: completed/2025/old-task/README.md
+    flat_dir = completed / "2025" / "old-task"
+    flat_dir.mkdir(parents=True)
+    (flat_dir / "README.md").write_text("# Old Task\n", encoding="utf-8")
+    # Sharded: completed/2026/03/new-task/README.md
+    sharded_dir = completed / "2026" / "03" / "new-task"
+    sharded_dir.mkdir(parents=True)
+    (sharded_dir / "README.md").write_text("# New Task\n", encoding="utf-8")
+
+    results = manager.walk_completed()
+    slugs = {slug for _, slug in results}
+    assert "old-task" in slugs
+    assert "new-task" in slugs
+    # Each entry should be (Path, slug)
+    paths = {p for p, _ in results}
+    assert (flat_dir / "README.md") in paths
+    assert (sharded_dir / "README.md") in paths
+
+
+def test_walk_completed_file_based(manager):
+    """walk_completed should find file-based tasks (slug.md) too."""
+    completed = manager.issues_root / "completed"
+    flat_file = completed / "2025" / "file-task.md"
+    flat_file.parent.mkdir(parents=True)
+    flat_file.write_text("# File Task\n", encoding="utf-8")
+
+    results = manager.walk_completed()
+    slugs = {slug for _, slug in results}
+    assert "file-task" in slugs
+
+
+def test_ingest_migrates_flat_completed_to_month_sharded(manager):
+    """ingest_issues should relocate flat completed/YYYY/ entries to completed/YYYY/MM/."""
+    completed = manager.issues_root / "completed"
+    # Create a flat entry with created_at in March
+    flat_dir = completed / "2025" / "flat-task"
+    flat_dir.mkdir(parents=True)
+    (flat_dir / "README.md").write_text(
+        "---\ncreated_at: 2025-03-15T10:00:00-07:00\n---\n\n# Flat Task\n",
+        encoding="utf-8",
+    )
+
+    manager.ingest_issues()
+
+    # Should now be at completed/2025/03/flat-task/README.md
+    sharded = completed / "2025" / "03" / "flat-task" / "README.md"
+    assert sharded.exists()
+    # Old flat path should be gone
+    assert not (flat_dir / "README.md").exists()
+
+
+def test_find_issue_file_recurses_month_sharded_completed(manager):
+    """find_issue_file must find tasks in completed/YYYY/MM/ subdirectories."""
+    completed = manager.issues_root / "completed"
+    sharded_dir = completed / "2026" / "03" / "deep-task"
+    sharded_dir.mkdir(parents=True)
+    (sharded_dir / "README.md").write_text("# Deep Task\n", encoding="utf-8")
+
+    found = manager.find_issue_file("deep-task", include_completed=True)
+    assert found is not None
+    assert found.exists()
+    assert "deep-task" in str(found)
+
+
+def test_extract_relations_frontmatter_preferred_over_prose(manager):
+    """extract_relations should prefer frontmatter edge fields over prose."""
+    issues_root = manager.issues_root
+    task_dir = issues_root / "pending" / "dual-task"
+    task_dir.mkdir(parents=True)
+    # Both frontmatter AND prose — frontmatter should win
+    (task_dir / "README.md").write_text(
+        "---\ncreated_at: 2025-01-01T00:00:00-07:00\n"
+        "blocked_by: front-dep\nsubtask_of: front-parent\n---\n\n"
+        "# Dual Task\n\n**Blocked by:** prose-dep\n**Subtask of:** prose-parent\n",
+        encoding="utf-8",
+    )
+
+    blocked_by, subtask_of = TaskAgent.extract_relations(task_dir / "README.md")
+    assert blocked_by == ["front-dep"]
+    assert subtask_of == "front-parent"
+
+
+def test_extract_relations_prose_fallback(manager):
+    """extract_relations should fall back to prose when frontmatter has no edge fields."""
+    issues_root = manager.issues_root
+    task_dir = issues_root / "pending" / "legacy-task"
+    task_dir.mkdir(parents=True)
+    # Only prose, no edge fields in frontmatter
+    (task_dir / "README.md").write_text(
+        "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n"
+        "# Legacy Task\n\n**Blocked by:** legacy-dep\n**Subtask of:** legacy-parent\n",
+        encoding="utf-8",
+    )
+
+    blocked_by, subtask_of = TaskAgent.extract_relations(task_dir / "README.md")
+    assert blocked_by == ["legacy-dep"]
+    assert subtask_of == "legacy-parent"
+
+
+def test_create_issue_writes_edges_to_frontmatter_not_prose(manager):
+    """create_issue must write edge fields to frontmatter, never to prose."""
+    manager.create_issue("Task A")
+    manager.create_issue("Parent Task")
+    issue = manager.create_issue(
+        "Edge Task",
+        blocked_by="task-a",
+        subtask_of="parent-task",
+    )
+
+    issue_file = manager.find_issue_file(issue.slug)
+    assert issue_file is not None
+    content = issue_file.read_text(encoding="utf-8")
+
+    # Frontmatter should have edge fields
+    assert "blocked_by: task-a" in content
+    assert "subtask_of: parent-task" in content
+    # Prose lines should NOT exist
+    assert "**Blocked by:**" not in content
+    assert "**Subtask of:**" not in content
+
+
+def test_add_dependency_no_prose_written(manager):
+    """add_dependency must write to frontmatter, leaving no prose lines."""
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+
+    manager.add_dependency("task-b", "task-a")
+
+    issue_file = manager.find_issue_file("task-b")
+    content = issue_file.read_text(encoding="utf-8")
+    assert "blocked_by: task-a" in content
+    assert "**Blocked by:**" not in content
+
+
+def test_update_dependencies_no_prose_written(manager):
+    """update_dependencies must write to frontmatter, leaving no prose lines."""
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+    manager.create_issue("Task C")
+
+    manager.update_dependencies("task-b", "task-a, task-c")
+
+    issue_file = manager.find_issue_file("task-b")
+    content = issue_file.read_text(encoding="utf-8")
+    assert "blocked_by: task-a, task-c" in content
+    assert "**Blocked by:**" not in content
+
+
+def test_update_subtask_of_no_prose_written(manager):
+    """update_subtask_of must write to frontmatter, leaving no prose lines."""
+    manager.create_issue("Parent Task")
+    manager.create_issue("Child Task")
+
+    manager.update_subtask_of("child-task", "parent-task")
+
+    issue_file = manager.find_issue_file("child-task")
+    content = issue_file.read_text(encoding="utf-8")
+    assert "subtask_of: parent-task" in content
+    assert "**Subtask of:**" not in content
+
+
+def test_ingest_migrates_prose_edges_to_frontmatter(manager):
+    """ingest_issues should migrate prose edge lines to frontmatter."""
+    issues_root = manager.issues_root
+    task_dir = issues_root / "pending" / "prose-task"
+    task_dir.mkdir(parents=True)
+    (task_dir / "README.md").write_text(
+        "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n"
+        "# Prose Task\n\n**Blocked by:** other-task\n**Subtask of:** parent-task\n",
+        encoding="utf-8",
+    )
+
+    manager.save_mission([])
+    manager.ingest_issues()
+
+    content = (task_dir / "README.md").read_text(encoding="utf-8")
+    assert "blocked_by: other-task" in content
+    assert "subtask_of: parent-task" in content
+    assert "**Blocked by:**" not in content
+    assert "**Subtask of:**" not in content
+
+
+def test_index_rebuildable_from_station_tree(manager):
+    """Wiping mission.usv and re-ingesting should rebuild the index from station dirs."""
+    manager.create_issue("Task A", draft=False)
+    manager.create_issue("Task B", draft=True)
+    manager.create_issue("Task C", blocked_by="task-a")
+
+    # Verify initial state
+    issues = manager.load_mission()
+    assert len(issues) == 3
+
+    # Wipe the index
+    manager.save_mission([])
+    assert len(manager.load_mission()) == 0
+
+    # Re-ingest from station tree
+    manager.ingest_issues()
+
+    issues = manager.load_mission()
+    slugs = {i.slug for i in issues}
+    assert "task-a" in slugs
+    assert "task-b" in slugs
+    assert "task-c" in slugs
+
+    # Edge fields should be reconstructed
+    task_c = next(i for i in issues if i.slug == "task-c")
+    assert task_c.blocked_by == ["task-a"]
