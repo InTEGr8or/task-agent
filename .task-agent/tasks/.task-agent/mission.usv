@@ -1,4 +1,5 @@
 Investigate better integration with Antigravity CLI of Claude CLIinvestigate-better-integration-with-antigravity-cli-of-claude-cli
+STATION-MAP conformance migrationstation-map-conformance-migration
 Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slugstation-map-conformance-migration
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
@@ -13,8 +14,6 @@ Allow new to create new task as active, if neeedeallow-new-to-create-new-task-a
 Create a global task-agent registry of repos and taskscreate-a-global-task-agent-registry-of-repos-and-tasks
 incident: create-task path errorincident-create-task-path-error
 Build a station inspector CLI, borrowing Burr's telemetry-UI lessonbuild-station-inspector-cli-borrowing-burr-telemetry-uxshard-completed-tasks-by-monthstation-map-conformance-migration
-Investigate switching type checker from mypy to Pyreinvestigate-switching-type-checker-from-mypy-to-pyre
-STATION-MAP conformance migrationstation-map-conformance-migration
 Declare and enforce durability contract for the task station storedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
 Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-indexstation-map-conformance-migration
 Completed items index with WAL for fast history lookupcompleted-items-index-with-wal-for-fast-history-lookupshard-completed-tasks-by-month
