@@ -18,7 +18,7 @@ Declare and enforce durability contract for the task station storedeclare-and-e
 Implement taskagent audit --conformance to rebuild and verify the USV indeximplement-taskagent-audit-conformance-to-rebuild-and-verify-the-usv-indexstation-map-conformance-migration
 Completed items index with WAL for fast history lookupcompleted-items-index-with-wal-for-fast-history-lookupshard-completed-tasks-by-month
 feature: Show task and all childrenfeature-show-task-and-all-children
-Automate task-store commits after state transitions (new, update, done, promote, demote, active)automate-task-store-commits-after-state-transitions-new-update-done-promote-demote-activedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
+Automate task-store commits after state transitionsautomate-task-store-commits-after-state-transitions-new-update-done-promote-demote-activedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
 Rebuild GitHub Issues integration with plugin registry, bidirectional sync, and MCP toolingrebuild-github-issues-integration-with-plugin-registry-bidirectional-sync-and-mcp-toolingremove-dependency-on-gh-cli-by-adding-api
 Test Issuetest-issue
 New Tasknew-tasktest-issue
