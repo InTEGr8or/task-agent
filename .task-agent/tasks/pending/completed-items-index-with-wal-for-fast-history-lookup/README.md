@@ -1,10 +1,9 @@
 ---
 created_at: 2026-07-16T15:37:58.773967-07:00
+blocked_by: shard-completed-tasks-by-month
 ---
 
 # Completed items index with WAL for fast history lookup
-
-**Blocked by:** shard-completed-tasks-by-month
 
 Split from `shard-completed-tasks-by-month-and-index-history`.
 

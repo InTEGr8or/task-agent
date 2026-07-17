@@ -1,10 +1,9 @@
 ---
 created_at: 2026-07-15T20:18:05.921967-07:00
+subtask_of: station-map-conformance-migration
 ---
 
 # Complete blocked_by vs subtask_of edge-type migration
-
-**Subtask of:** station-map-conformance-migration
 
 Conformance gap 5 from STATION-MAP.md: edge-type conflation cleanup.
 

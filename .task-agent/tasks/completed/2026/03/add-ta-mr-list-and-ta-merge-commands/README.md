@@ -1,10 +1,9 @@
 ---
 created_at: 2026-03-22T13:51:44-07:00
+blocked_by: implement-merge-request-queue
 ---
 
 # Add ta mr list and ta merge commands
-
-**Blocked by:** implement-merge-request-queue
 
 Implement 'ta mr list' to view pending completion notifications and 'ta merge <slug>' to finalize a task (performing the 'ta done' logic of archiving and auto-committing).
 

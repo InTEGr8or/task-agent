@@ -1,10 +1,9 @@
 ---
 created_at: 2026-06-14T10:03:52-07:00
+blocked_by: agent-sandboxing-via-linux-accounts
 ---
 
 ## Phase 3 — Per-task agent isolation
-
-**Blocked by:** agent-sandboxing-via-linux-accounts
 
 ---
 

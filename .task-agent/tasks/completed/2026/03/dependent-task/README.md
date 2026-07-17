@@ -1,10 +1,9 @@
 ---
 created_at: 2026-03-10T12:32:25-07:00
+blocked_by: task-a, task-b
 ---
 
 # Dependent Task
-
-**Blocked by:** task-a, task-b
 
 Depends on others
 

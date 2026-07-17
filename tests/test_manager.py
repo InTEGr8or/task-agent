@@ -339,7 +339,7 @@ def test_api_ingest_issues(manager, tmp_path):
 
     # Verify automatic migration of the markdown file headers
     updated_readme = (dir_task / "README.md").read_text()
-    assert "**Blocked by:** other-task" in updated_readme
+    assert "blocked_by: other-task" in updated_readme
     assert "Depends on" not in updated_readme
 
     # Verify updating existing issue relationships from disk
@@ -361,7 +361,7 @@ def test_api_add_dependency(manager):
 
     issue_file = manager.find_issue_file("task-b")
     content = issue_file.read_text()
-    assert "**Blocked by:** task-a" in content
+    assert "blocked_by: task-a" in content
 
 
 def test_api_add_dependency_existing(manager):
@@ -468,7 +468,7 @@ def test_api_update_issue_preserves_frontmatter(manager):
     assert issue_file is not None
     original = issue_file.read_text(encoding="utf-8")
     assert "created_at:" in original
-    assert "**Blocked by:** task-a" in original
+    assert "blocked_by: task-a" in original
 
     # Update with content that omits frontmatter and edge fields
     new_content = "# Original Task\n\nNew body text only.\n"
@@ -478,7 +478,7 @@ def test_api_update_issue_preserves_frontmatter(manager):
     # Frontmatter should be preserved
     assert "created_at:" in updated
     # Edge field should be preserved
-    assert "**Blocked by:** task-a" in updated
+    assert "blocked_by: task-a" in updated
     # New body should be present
     assert "New body text only." in updated
 
@@ -492,16 +492,16 @@ def test_api_update_issue_preserves_edge_fields(manager):
     issue_file = manager.find_issue_file("main-task")
     assert issue_file is not None
     original = issue_file.read_text(encoding="utf-8")
-    assert "**Blocked by:** dep-task" in original
-    assert "**Subtask of:** parent-task" in original
+    assert "blocked_by: dep-task" in original
+    assert "subtask_of: parent-task" in original
 
     # Update body only — no edge fields in new content
     new_content = "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n# Main Task\n\nUpdated body.\n"
     manager.update_issue("main-task", new_content)
 
     updated = issue_file.read_text(encoding="utf-8")
-    assert "**Blocked by:** dep-task" in updated
-    assert "**Subtask of:** parent-task" in updated
+    assert "blocked_by: dep-task" in updated
+    assert "subtask_of: parent-task" in updated
     assert "Updated body." in updated
 
 
@@ -513,14 +513,14 @@ def test_api_update_issue_overrides_edge_fields_when_present(manager):
 
     issue_file = manager.find_issue_file("my-task")
     assert issue_file is not None
-    assert "**Blocked by:** task-a" in issue_file.read_text(encoding="utf-8")
+    assert "blocked_by: task-a" in issue_file.read_text(encoding="utf-8")
 
-    # New content with different blocked_by
-    new_content = "---\ncreated_at: 2025-01-01T00:00:00-07:00\n---\n\n# My Task\n\n**Blocked by:** task-b\n\nNew body.\n"
+    # New content with different blocked_by (in frontmatter)
+    new_content = "---\ncreated_at: 2025-01-01T00:00:00-07:00\nblocked_by: task-b\n---\n\n# My Task\n\nNew body.\n"
     manager.update_issue("my-task", new_content)
 
     updated = issue_file.read_text(encoding="utf-8")
-    assert "**Blocked by:** task-b" in updated
+    assert "blocked_by: task-b" in updated
     assert "task-a" not in updated.replace(
         "task-a-slug", ""
     )  # task-a not in blocked_by

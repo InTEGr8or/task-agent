@@ -621,14 +621,26 @@ class TaskAgent:
 
     @staticmethod
     def extract_relations(file_path: Path) -> Tuple[List[str], Optional[str]]:
-        """Extract blocked_by and subtask_of from a markdown file."""
-        blocked_by = []
-        subtask_of = None
+        """Extract blocked_by and subtask_of from frontmatter (preferred) or prose (fallback)."""
+        blocked_by: List[str] = []
+        subtask_of: Optional[str] = None
         try:
-            with file_path.open("r", encoding="utf-8") as f:
-                content = f.read()
+            content = file_path.read_text(encoding="utf-8")
 
-                # Parse blocked by
+            # Try frontmatter first
+            fm_text, _ = TaskAgent._parse_frontmatter(content)
+            if fm_text:
+                fields = TaskAgent._parse_frontmatter_dict(fm_text)
+                if "blocked_by" in fields:
+                    bb_val = fields["blocked_by"].strip()
+                    if bb_val:
+                        blocked_by = [d.strip() for d in bb_val.split(",") if d.strip()]
+                if "subtask_of" in fields:
+                    st_val = fields["subtask_of"].strip()
+                    subtask_of = st_val or None
+
+            # Fallback to prose if frontmatter didn't have the fields
+            if not blocked_by:
                 m_blocked = re.search(
                     r"\*\*Blocked by:\*\*[ \t]*(.*)", content, re.IGNORECASE
                 )
@@ -637,13 +649,12 @@ class TaskAgent:
                         d.strip() for d in m_blocked.group(1).split(",") if d.strip()
                     ]
 
-                # Parse subtask of
+            if subtask_of is None:
                 m_subtask = re.search(
                     r"\*\*Subtask of:\*\*[ \t]*(.*)", content, re.IGNORECASE
                 )
                 if m_subtask:
                     subtask_of = m_subtask.group(1).strip() or None
-
         except Exception:
             pass
         return blocked_by, subtask_of
@@ -710,12 +721,14 @@ class TaskAgent:
         # Write the markdown file
         created_at = datetime.now().astimezone().isoformat()
         with issue_file.open("w", encoding="utf-8") as f:
-            f.write(f"---\ncreated_at: {created_at}\n---\n\n")
-            f.write(f"# {display_name}\n\n")
-            if subtask_of:
-                f.write(f"**Subtask of:** {subtask_of.strip()}\n\n")
+            fm_fields = {"created_at": created_at}
             if blocked_by_list:
-                f.write(f"**Blocked by:** {', '.join(blocked_by_list)}\n\n")
+                fm_fields["blocked_by"] = ", ".join(blocked_by_list)
+            if subtask_of:
+                fm_fields["subtask_of"] = subtask_of.strip()
+            fm_lines = "\n".join(f"{k}: {v}" for k, v in fm_fields.items())
+            f.write(f"---\n{fm_lines}\n---\n\n")
+            f.write(f"# {display_name}\n\n")
             f.write(f"{body}\n")
             if completion_criteria:
                 f.write(f"\n## Completion Criteria\n\n{completion_criteria}\n")
@@ -843,29 +856,10 @@ class TaskAgent:
 
         existing_blocked_by.append(blocked_by)
 
-        # Update Markdown
-        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
-
-        has_blocked = re.search(pattern_blocked, content)
-
-        new_line = f"**Blocked by:** {', '.join(existing_blocked_by)}"
-
-        if has_blocked:
-            content = re.sub(pattern_blocked, new_line, content)
-        else:
-            # Insert it right after H1
-            lines = content.splitlines()
-            inserted = False
-            for idx, line in enumerate(lines):
-                if line.strip().startswith("# "):
-                    lines.insert(idx + 1, "")
-                    lines.insert(idx + 2, new_line)
-                    inserted = True
-                    break
-            if inserted:
-                content = "\n".join(lines) + "\n"
-            else:
-                content = new_line + "\n\n" + content
+        # Write edge fields to frontmatter (and strip prose edge lines)
+        content = TaskAgent._write_frontmatter_edges(
+            content, blocked_by=existing_blocked_by
+        )
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
@@ -891,13 +885,10 @@ class TaskAgent:
 
         existing_blocked_by.remove(blocked_by)
 
-        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
-
-        if existing_blocked_by:
-            new_line = f"**Blocked by:** {', '.join(existing_blocked_by)}"
-            content = re.sub(pattern_blocked, new_line, content)
-        else:
-            content = re.sub(pattern_blocked + r"\n*", "", content)
+        # Write edge fields to frontmatter (and strip prose edge lines)
+        content = TaskAgent._write_frontmatter_edges(
+            content, blocked_by=existing_blocked_by
+        )
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
@@ -1246,6 +1237,53 @@ class TaskAgent:
         return fields
 
     @staticmethod
+    def _serialize_frontmatter(fields: dict[str, str]) -> str:
+        """Serialize a dict to simple key: value frontmatter text (with wrapping ---)."""
+        lines = []
+        for k, v in fields.items():
+            lines.append(f"{k}: {v}")
+        return "---\n" + "\n".join(lines) + "\n---"
+
+    @staticmethod
+    def _write_frontmatter_edges(
+        content: str,
+        blocked_by: Optional[List[str]] = None,
+        subtask_of: Optional[str] = None,
+    ) -> str:
+        """Write blocked_by and subtask_of into frontmatter, stripping any prose edge lines.
+
+        - blocked_by is serialized as a comma-separated string in frontmatter: `blocked_by: slug1, slug2`
+        - subtask_of is serialized as: `subtask_of: parent-slug`
+        - If blocked_by is None, the frontmatter key is left untouched (not removed).
+          If it's an empty list, the key is set to empty string.
+        - Same for subtask_of: None means don't touch, empty string means clear.
+        - Prose lines `**Blocked by:** ...` and `**Subtask of:** ...` are stripped from the body.
+        """
+        fm_text, body = TaskAgent._parse_frontmatter(content)
+        fields: dict[str, str] = {}
+        if fm_text:
+            fields = TaskAgent._parse_frontmatter_dict(fm_text)
+
+        if blocked_by is not None:
+            fields["blocked_by"] = ", ".join(blocked_by)
+        if subtask_of is not None:
+            fields["subtask_of"] = subtask_of
+
+        # Strip prose edge lines from body
+        body = re.sub(r"\*\*Blocked by:\*\*[ \t]*.*\n?", "", body)
+        body = re.sub(r"\*\*Subtask of:\*\*[ \t]*.*\n?", "", body)
+        # Clean up any double blank lines left behind
+        body = re.sub(r"\n{3,}", "\n\n", body)
+
+        if fields:
+            fm_block = TaskAgent._serialize_frontmatter(fields)
+            # Ensure body starts with a newline after frontmatter
+            if not body.startswith("\n"):
+                body = "\n" + body
+            return fm_block + body
+        return body.lstrip("\n")
+
+    @staticmethod
     def _merge_record(existing: str, new: str) -> str:
         """Merge *new* content with *existing*, round-tripping frontmatter
         and edge-field prose the new content did not explicitly set.
@@ -1263,50 +1301,24 @@ class TaskAgent:
         if new_fm:
             merged_fields.update(TaskAgent._parse_frontmatter_dict(new_fm))
 
-        # Preserve edge-field prose lines from existing if absent in new
-        body = new_body
-        has_blocked = re.search(r"\*\*Blocked by:\*\*", body, re.IGNORECASE)
-        has_subtask = re.search(r"\*\*Subtask of:\*\*", body, re.IGNORECASE)
+        # Merge edge fields in frontmatter: preserve existing if absent in new
+        existing_fields: dict[str, str] = {}
+        if existing_fm:
+            existing_fields = TaskAgent._parse_frontmatter_dict(existing_fm)
+        new_fields: dict[str, str] = {}
+        if new_fm:
+            new_fields = TaskAgent._parse_frontmatter_dict(new_fm)
 
-        existing_blocked: Optional[str] = None
-        existing_subtask: Optional[str] = None
-        if existing_body:
-            m = re.search(
-                r"\*\*Blocked by:\*\*[ \t]*(.*)", existing_body, re.IGNORECASE
-            )
-            if m:
-                existing_blocked = m.group(1).strip()
-            m = re.search(
-                r"\*\*Subtask of:\*\*[ \t]*(.*)", existing_body, re.IGNORECASE
-            )
-            if m:
-                existing_subtask = m.group(1).strip()
+        # Preserve edge fields from existing if not explicitly set in new
+        if "blocked_by" in existing_fields and "blocked_by" not in new_fields:
+            merged_fields["blocked_by"] = existing_fields["blocked_by"]
+        if "subtask_of" in existing_fields and "subtask_of" not in new_fields:
+            merged_fields["subtask_of"] = existing_fields["subtask_of"]
 
-        if (existing_blocked or existing_subtask) and (
-            not has_blocked or not has_subtask
-        ):
-            inject_lines: list[str] = []
-            if existing_subtask and not has_subtask:
-                inject_lines.append(f"**Subtask of:** {existing_subtask}")
-            if existing_blocked and not has_blocked:
-                inject_lines.append(f"**Blocked by:** {existing_blocked}")
-
-            # Insert after the H1 title
-            lines = body.splitlines()
-            inserted = False
-            for idx, line in enumerate(lines):
-                if line.strip().startswith("# "):
-                    lines.insert(idx + 1, "")
-                    for insert_line in inject_lines:
-                        lines.insert(idx + 2, insert_line)
-                    inserted = True
-                    break
-            if inserted:
-                body = "\n".join(lines)
-                if not body.endswith("\n"):
-                    body += "\n"
-            else:
-                body = "\n".join(inject_lines) + "\n\n" + body
+        # Strip any prose edge lines from the new body (they belong in frontmatter)
+        body = re.sub(r"\*\*Blocked by:\*\*[ \t]*.*\n?", "", new_body)
+        body = re.sub(r"\*\*Subtask of:\*\*[ \t]*.*\n?", "", body)
+        body = re.sub(r"\n{3,}", "\n\n", body)
 
         # Reconstruct
         if merged_fields:
@@ -1409,35 +1421,8 @@ class TaskAgent:
         # Update Markdown content
         content = issue_file.read_text(encoding="utf-8")
 
-        # Replace **Blocked by:** line
-        pattern_blocked = r"\*\*Blocked by:\*\*[ \t]*(.*)"
-        has_blocked = re.search(pattern_blocked, content)
-
-        if has_blocked:
-            if new_deps:
-                content = re.sub(
-                    pattern_blocked,
-                    f"**Blocked by:** {', '.join(new_deps)}",
-                    content,
-                )
-            else:
-                # Remove the line and any trailing blank lines
-                content = re.sub(pattern_blocked + r"\n*", "", content)
-        else:
-            if new_deps:
-                # Insert it right after the H1 title
-                lines = content.splitlines()
-                inserted = False
-                for idx, line in enumerate(lines):
-                    if line.strip().startswith("# "):
-                        lines.insert(idx + 1, "")
-                        lines.insert(idx + 2, f"**Blocked by:** {', '.join(new_deps)}")
-                        inserted = True
-                        break
-                if inserted:
-                    content = "\n".join(lines) + "\n"
-                else:
-                    content = f"**Blocked by:** {', '.join(new_deps)}\n\n" + content
+        # Write edge fields to frontmatter (and strip prose edge lines)
+        content = TaskAgent._write_frontmatter_edges(content, blocked_by=new_deps)
 
         issue_file.write_text(content, encoding="utf-8")
 
@@ -1485,34 +1470,10 @@ class TaskAgent:
         # Update Markdown content
         content = issue_file.read_text(encoding="utf-8")
 
-        pattern_subtask = r"\*\*Subtask of:\*\*[ \t]*(.*)"
-        has_subtask = re.search(pattern_subtask, content)
-
-        if has_subtask:
-            if subtask_of:
-                content = re.sub(
-                    pattern_subtask,
-                    f"**Subtask of:** {subtask_of}",
-                    content,
-                )
-            else:
-                # Remove the line and any trailing blank lines
-                content = re.sub(pattern_subtask + r"\n*", "", content)
-        else:
-            if subtask_of:
-                # Insert it right after the H1 title
-                lines = content.splitlines()
-                inserted = False
-                for idx, line in enumerate(lines):
-                    if line.strip().startswith("# "):
-                        lines.insert(idx + 1, "")
-                        lines.insert(idx + 2, f"**Subtask of:** {subtask_of}")
-                        inserted = True
-                        break
-                if inserted:
-                    content = "\n".join(lines) + "\n"
-                else:
-                    content = f"**Subtask of:** {subtask_of}\n\n" + content
+        # Write edge fields to frontmatter (and strip prose edge lines)
+        content = TaskAgent._write_frontmatter_edges(
+            content, subtask_of=subtask_of if subtask_of else ""
+        )
 
         issue_file.write_text(content, encoding="utf-8")
 
@@ -1577,6 +1538,9 @@ class TaskAgent:
         def _migrate_file_headers(file_path: Path):
             try:
                 content = file_path.read_text(encoding="utf-8")
+                changed = False
+
+                # Migrate legacy Depends on -> Blocked by in prose
                 pattern_depends = r"\*\*Depends on:\*\*[ \t]*(.*)"
                 if re.search(pattern_depends, content, re.IGNORECASE):
                     content = re.sub(
@@ -1585,6 +1549,47 @@ class TaskAgent:
                         content,
                         flags=re.IGNORECASE,
                     )
+                    changed = True
+
+                # Migrate prose edge fields to frontmatter
+                fm_text, body = TaskAgent._parse_frontmatter(content)
+                has_fm_blocked = False
+                has_fm_subtask = False
+                if fm_text:
+                    fields = TaskAgent._parse_frontmatter_dict(fm_text)
+                    has_fm_blocked = "blocked_by" in fields
+                    has_fm_subtask = "subtask_of" in fields
+
+                prose_blocked: Optional[List[str]] = None
+                prose_subtask: Optional[str] = None
+                m_blocked = re.search(
+                    r"\*\*Blocked by:\*\*[ \t]*(.*)", content, re.IGNORECASE
+                )
+                if m_blocked:
+                    prose_blocked = [
+                        d.strip() for d in m_blocked.group(1).split(",") if d.strip()
+                    ]
+                m_subtask = re.search(
+                    r"\*\*Subtask of:\*\*[ \t]*(.*)", content, re.IGNORECASE
+                )
+                if m_subtask:
+                    prose_subtask = m_subtask.group(1).strip() or None
+
+                if (prose_blocked and not has_fm_blocked) or (
+                    prose_subtask and not has_fm_subtask
+                ):
+                    content = TaskAgent._write_frontmatter_edges(
+                        content,
+                        blocked_by=prose_blocked
+                        if prose_blocked and not has_fm_blocked
+                        else None,
+                        subtask_of=prose_subtask
+                        if prose_subtask and not has_fm_subtask
+                        else None,
+                    )
+                    changed = True
+
+                if changed:
                     self._set_writable(file_path, True)
                     file_path.write_text(content, encoding="utf-8")
             except Exception:
