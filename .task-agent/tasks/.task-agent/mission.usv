@@ -3,7 +3,7 @@ STATION-MAP conformance migrationstation-map-conformance-migration
 Add ta rename command to safely rename a task slugadd-ta-rename-command-to-safely-rename-a-task-slugstation-map-conformance-migration
 Create policies queuecreate-policies-queue
 Auto-clean .code_signatures.json after no-verify commitsauto-clean-code-signaturesjson-after-no-verify-commits
-Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-api
+Remove dependency on GH CLI by adding APIremove-dependency-on-gh-cli-by-adding-apirebuild-github-issues-integration-with-plugin-registry-bidirectional-sync-and-mcp-tooling
 Allow create task in other repoallow-create-task-in-other-repo
 Add secondary documents to the task viewadd-secondary-documents-to-the-task-view
 Create decompose feature to decompose a taskcreate-decompose-feature-to-decompose-a-task
@@ -20,6 +20,7 @@ Completed items index with WAL for fast history lookupcompleted-items-index-wit
 feature: Show task and all childrenfeature-show-task-and-all-children
 Automate task-store commits after state transitionsautomate-task-store-commits-after-state-transitions-new-update-done-promote-demote-activedeclare-and-enforce-durability-contract-for-the-task-station-storestation-map-conformance-migration
 Rebuild GitHub Issues integration with plugin registry, bidirectional sync, and MCP toolingrebuild-github-issues-integration-with-plugin-registry-bidirectional-sync-and-mcp-toolingremove-dependency-on-gh-cli-by-adding-api
+Regression: fix dependency model — subtask_of implies blocking, remove redundant blocked_by on epics, fix tree renderingregression-fix-dependency-model-subtask-of-implies-blocking-remove-redundant-blocked-by-on-epics-fix-tree-renderingstation-map-conformance-migration
 Test Issuetest-issue
 New Tasknew-tasktest-issue
 Add Dependency model with required reason for dependency declarationsadd-dependency-model-with-required-reason-for-dependency-declarations
