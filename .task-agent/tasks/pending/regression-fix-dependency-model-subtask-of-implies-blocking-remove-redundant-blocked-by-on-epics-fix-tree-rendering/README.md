@@ -1,98 +1,176 @@
 ---
-created_at: 2026-07-17T10:34:48.929928-07:00
+created_at: 2026-07-17T00:00:00-07:00
 subtask_of: station-map-conformance-migration
 ---
 
-# Regression: fix dependency model — subtask_of implies blocking, remove redundant blocked_by on epics, fix tree rendering
+# Regression: fix dependency model — subtask_of implies blocking, remove redundant blocked_by, fix tree rendering
+
+**Subtask of:** station-map-conformance-migration
 
 ## What we got wrong
 
-During the station-map conformance migration, we built a dependency model with two edge types (`blocked_by` for ordering, `subtask_of` for hierarchy) but made three mistakes:
+### Origin: the refactor-dependencies commit (ca4546c, 2026-07-11)
 
-### Mistake 1: Redundant `blocked_by` edges on epics
+The original refactor-dependencies-relation-into-blocked-by-and-subtask-of task
+split the flat dependencies list into blocked_by (ordering) and subtask_of
+(hierarchy) "to prevent reversed/confusing semantics." But the refactor only
+split the DATA MODEL — it did not update the CONSUMERS of the old combined
+dependencies property. Three consumers were left using the conflated view:
 
-We explicitly listed all children in the epic's `blocked_by` field:
+### Mistake 1: Tree renderer never updated (the rendering bug)
 
-```
-station-map-conformance-migration  blocked_by: add-ta-rename, build-station-inspector, declare-and-enforce, ...
-```
+cmd_tree (cli.py:1811) was written BEFORE the split, when issue.dependencies
+was a single flat list. The refactor commit added subtask_of and blocked_by as
+LABELS in the output but left the NESTING LOGIC using issue.dependencies — the
+property that combines both edge types into one list.
 
-This is redundant. The `subtask_of` edges already establish that children block their parent. `complete_issue` already enforces this (raises ValueError on open subtasks). The explicit `blocked_by` entries duplicate the derived blocking relationship and must be removed from both the USV index and the frontmatter of epic task files.
+The children_map is built by iterating issue.dependencies, so a task gets
+visually nested under ANY task it points to — whether that is a subtask_of
+(hierarchy) or a blocked_by (external dependency). This makes blocked_by
+targets look like parents.
 
-**Rule:** `blocked_by` is for non-hierarchical ordering only. A task should NEVER have its own child in its `blocked_by` list. The blocking of a parent by its children is derived from `subtask_of`, not stored redundantly.
+Evidence: git show ca4546c^:src/taskagent/cli.py shows the pre-refactor
+cmd_tree using i.dependencies for children_map. The refactor commit adds labels
+but does not change children_map. The bug has been present since the split.
 
-### Mistake 2: Tree renderer conflates hierarchy with dependency
+### Mistake 2: Promote/demote cascade conflates edge types
 
-`cmd_tree` (`cli.py:1811`) and `cmd_list` (`cli.py:1906`) build `children_map` by iterating `issue.dependencies` — a property that combines `blocked_by` AND `subtask_of` into one flat list. The renderer nests tasks under anything that points to them, regardless of edge type.
+The refactor commit changed promote_issue and demote_issue to use:
+  if (i.subtask_of == target.slug or target.slug in i.blocked_by)
 
-This causes:
-- Tasks with `blocked_by` on a non-parent task get visually nested under that task, making it look like a parent-child relationship when it's actually an external dependency
-- `automate-task-store-commits` (subtask of station-map, blocked by declare-and-enforce) appears nested under `declare-and-enforce` instead of under the station-map epic
-- `build-station-inspector` (subtask of station-map, blocked by shard-completed) appears nested under `shard-completed` instead of under the epic
+This treats both hierarchy children AND external dependents as children for
+cascade purposes. A task that is merely blocked_by the target (an external
+dependency, not a subtask) gets promoted/demoted when the target is
+promoted/demoted. This is wrong — cascading should follow hierarchy only
+(subtask_of).
 
-**Fix:** The tree renderer must use `subtask_of` for visual nesting (hierarchy) and display `blocked_by` only as a label on the node, never as nesting. A task's visual parent is its `subtask_of` target, never its `blocked_by` target.
+Evidence: git show ca4546c shows the change from target.slug in
+i.dependencies to the conflated (i.subtask_of == target.slug or
+target.slug in i.blocked_by). Still present at manager.py:768 and
+manager.py:806.
 
-### Mistake 3: Completed blockers still displayed as active
+### Mistake 3: Redundant blocked_by edges on epics
 
-When a task in `blocked_by` is completed, it's still shown in the tree as a blocking dependency. `build-station-inspector` still shows `blocked by: shard-completed-tasks-by-month` even though that task is done.
+When creating the station-map epic and its children, we explicitly listed all
+children in the epic's blocked_by field. This is redundant. The subtask_of
+edges already establish that children block their parent. complete_issue
+already enforces this (raises ValueError on open subtasks). The explicit
+blocked_by entries duplicate the derived blocking relationship.
 
-**Fix:** The tree renderer and `ta list` must filter `blocked_by` to only show non-completed blockers. This is a display concern — the stored data can keep the edge (it's historical), but the rendering should not show completed tasks as active blockers.
+Rule: blocked_by is for non-hierarchical ordering only. A task should NEVER
+have its own child in its blocked_by list. The blocking of a parent by its
+children is DERIVED from subtask_of, not stored redundantly.
+
+### Mistake 4: Completed blockers still displayed as active
+
+When a task in blocked_by is completed, it is still shown in the tree as a
+blocking dependency. build-station-inspector still shows blocked by
+shard-completed-tasks-by-month even though that task is done.
+
+The stored data can keep the edge (it is historical), but the rendering should
+filter out completed blockers.
 
 ## The correct model
 
-- **`subtask_of`** = hierarchy membership. Child belongs to parent. Implies blocking (parent cannot complete until all children are done). This blocking is **derived**, not stored.
-- **`blocked_by`** = non-hierarchical ordering only. Task B cannot start until task C is done, where C is NOT a subtask of B's epic. External dependency.
-- **A parent never blocks a child.** The child proceeds independently.
-- **A child always blocks its parent.** This is automatic from `subtask_of`.
-- **An epic's `blocked_by` list** should only contain external prerequisites (tasks that are NOT its children). If the only blockers are children, the list should be empty.
+- subtask_of = hierarchy membership. Child belongs to parent. Implies blocking
+  — parent cannot complete until all children are done. This blocking is
+  DERIVED from the hierarchy, not stored as a separate blocked_by edge.
+- blocked_by = non-hierarchical ordering only. Task B cannot start until task C
+  is done, where C is NOT a subtask of B's epic. External dependency.
+- A parent never blocks a child. The child proceeds independently.
+- A child always blocks its parent. This is automatic from subtask_of.
+- An epic's blocked_by list should only contain external prerequisites (tasks
+  that are NOT its children). If the only blockers are children, the list
+  should be empty.
+- Cascading (promote/demote) follows subtask_of only, never blocked_by.
+
+## Why this happened (root cause)
+
+The refactor split the data model but treated dependencies as a
+backward-compatible property that combines both edges. Every consumer that used
+dependencies — the tree renderer, the promote/demote cascade, the cycle checker
+— silently inherited the conflation. The refactor task's completion criteria
+was "test suite fully green" but no test verified that the two edge types were
+treated differently by consumers. The tests only verified the data model split.
+
+The Jira insight: issue tracking systems like Jira distinguish between subtask
+(hierarchy — a Jira subtask belongs to a parent issue and blocks it) and linked
+issue / blocks (ordering — issue A blocks issue B, no hierarchy). task-agent's
+subtask_of maps to Jira's subtask; blocked_by maps to Jira's is-blocked-by
+link. The two are semantically different and must not be conflated in rendering
+or cascading. This was the original motivation for the split, but the split was
+incomplete.
 
 ## Data migration
 
-This is the SECOND edge-field migration in one week. The first was prose → frontmatter. This one removes redundant `blocked_by` entries.
+This is the SECOND edge-field migration in one week (first was prose to
+frontmatter). This one removes redundant blocked_by entries from epics.
 
 ### Migration approach
 
-Extend `ingest_issues()` to detect and clean redundant `blocked_by` entries:
+Extend ingest_issues to detect and clean redundant blocked_by entries:
 
 1. Load all issues from mission.usv
-2. For each issue, check if any entry in its `blocked_by` list is also a task that has `subtask_of` pointing back at this issue
-3. If so, remove that entry from `blocked_by` (it's redundant — the hierarchy already establishes the blocking)
-4. Write the cleaned `blocked_by` back to frontmatter and USV
-5. Idempotent: if `blocked_by` is already clean, no change
+2. For each issue, check if any entry in its blocked_by list is also a task
+   that has subtask_of pointing back at this issue
+3. If so, remove that entry from blocked_by (redundant — hierarchy already
+   establishes the blocking)
+4. Write the cleaned blocked_by back to frontmatter and USV
+5. Idempotent: if blocked_by is already clean, no change
 
 ### Do we need a schema version?
 
-No. The migration is a one-time cleanup that's trivially detectable (does an epic have children in its `blocked_by` list?). A schema version field would add complexity to the USV format and Issue model for marginal benefit. The detection-based approach we've used for all prior migrations (prose rename, frontmatter move, month-sharding) works fine and is already proven across 5-10 external repos.
+The refactor task mentioned schema version 2 (V2) but no schema version field
+was actually implemented — the USV format just gained a 4th column. No version
+marker exists in the data.
 
-If we later find ourselves doing frequent schema migrations, we can add a `schema_version` field to frontmatter at that time. For now, it's premature.
+A schema version is NOT needed yet. The migration is trivially detectable
+(does an epic have children in its blocked_by list?). The detection-based
+approach used for all prior migrations works fine. If we later add frequent
+schema changes, we can add a schema_version field to frontmatter at that time.
 
 ## Code changes required
 
-1. **`extract_relations`** / **`load_mission`**: no change — read what's stored
-2. **`save_mission`**: no change to USV format
-3. **`ingest_issues`**: add a pass that removes redundant `blocked_by` entries (child slugs that are also in `blocked_by`)
-4. **`cmd_tree`** (`cli.py:1811`): rebuild `children_map` using ONLY `subtask_of` edges, not `issue.dependencies`. Display `blocked_by` as a label, never as nesting.
-5. **`cmd_list`** (`cli.py:1906`): same fix as `cmd_tree`
-6. **`complete_issue`**: already correct — checks `subtask_of == slug` for open subtasks, no change needed
-7. **Tree display**: filter `blocked_by` to exclude completed tasks when rendering
+1. cmd_tree (cli.py:1811): rebuild children_map using ONLY subtask_of edges.
+   Display blocked_by as a label on the node, never as nesting. Filter
+   completed blockers from the label.
+2. cmd_list (cli.py:1906): same fix as cmd_tree — nest by subtask_of only.
+3. promote_issue (manager.py:768): change cascade to use
+   i.subtask_of == target.slug only, remove the or target.slug in
+   i.blocked_by condition.
+4. demote_issue (manager.py:806): same fix — subtask_of only.
+5. ingest_issues: add a pass that removes redundant blocked_by entries (child
+   slugs that are also subtask_of this issue).
+6. Tree/list display: filter blocked_by to exclude completed tasks when
+   rendering.
+7. complete_issue: already correct — checks subtask_of == slug for open
+   subtasks. No change needed.
+8. _check_dependency_cycle: currently uses i.dependencies (combined). Should
+   use blocked_by + subtask_of separately — but the combined check is
+   conservative (will not miss cycles). Leave as-is for now; not a correctness
+   issue.
 
 ## Tests required
 
-1. Epic with children in `blocked_by` → migration removes them, `subtask_of` edges remain
-2. Epic with external (non-child) `blocked_by` → migration preserves them
-3. Tree rendering: child appears under `subtask_of` parent, not under `blocked_by` target
+1. Epic with children in blocked_by -> migration removes them, subtask_of
+   edges remain
+2. Epic with external (non-child) blocked_by -> migration preserves them
+3. Tree rendering: child appears under subtask_of parent, not under
+   blocked_by target
 4. Tree rendering: completed blockers not shown as active
-5. `complete_issue` still blocks on open subtasks (regression test — already covered)
+5. Promote cascade: only subtask_of children are cascaded, not blocked_by
+   dependents
+6. Demote cascade: same
+7. complete_issue still blocks on open subtasks (regression test — already
+   covered)
 
 ## Completion Criteria
 
-1. No epic has its own children in its `blocked_by` list (migrated)
-2. Tree renderer nests by `subtask_of` only, displays `blocked_by` as labels
+1. No epic has its own children in its blocked_by list (migrated)
+2. Tree and list renderers nest by subtask_of only, display blocked_by as
+   labels
 3. Completed blockers not shown as active in tree or list
-4. Migration is idempotent and runs on `ta ingest`
-5. All existing tests pass
-6. New tests cover all four scenarios above
-
-## Completion Criteria
-
-No epic has its own children in its blocked_by list (migrated). Tree renderer nests by subtask_of only, displays blocked_by as labels. Completed blockers not shown as active in tree or list. Migration is idempotent and runs on ta ingest. All existing tests pass. New tests cover: redundant blocked_by removal, external blocked_by preservation, tree nesting by subtask_of, completed blocker filtering.
+4. Promote/demote cascades follow subtask_of only
+5. Migration is idempotent and runs on ta ingest
+6. All existing tests pass
+7. New tests cover all six scenarios above
