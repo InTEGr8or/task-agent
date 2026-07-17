@@ -250,7 +250,7 @@ def test_api_promote_cascades_to_children(manager):
     manager.create_issue("Parent", draft=True)
     manager.create_issue("Child", draft=True)
 
-    manager.add_dependency("child", "parent")
+    manager.update_subtask_of("child", "parent")
 
     manager.promote_issue("parent")
 
@@ -269,7 +269,7 @@ def test_api_demote_cascades_to_children(manager):
     manager.create_issue("Parent", draft=False)
     manager.create_issue("Child", draft=False)
 
-    manager.add_dependency("child", "parent")
+    manager.update_subtask_of("child", "parent")
 
     manager.demote_issue("parent")
 
@@ -800,3 +800,105 @@ def test_index_rebuildable_from_station_tree(manager):
     # Edge fields should be reconstructed
     task_c = next(i for i in issues if i.slug == "task-c")
     assert task_c.blocked_by == ["task-a"]
+
+
+# ── Dependency model regression tests ───────────────────────────────
+
+
+def test_ingest_removes_redundant_blocked_by_on_epic(manager):
+    """If a child slug is in the epic's blocked_by, ingest should remove it."""
+    # Create epic and child
+    manager.create_issue("Epic Task")
+    manager.create_issue("Child Task", subtask_of="epic-task")
+
+    # Directly manipulate the USV to create the redundant state
+    # (update_dependencies would correctly refuse this as a cycle)
+    issues = manager.load_mission()
+    epic = next(i for i in issues if i.slug == "epic-task")
+    epic.blocked_by = ["child-task"]
+    manager.save_mission(issues)
+    # Also write to frontmatter so ingest can read it
+    epic_file = manager.find_issue_file("epic-task")
+    content = epic_file.read_text(encoding="utf-8")
+    content = TaskAgent._write_frontmatter_edges(content, blocked_by=["child-task"])
+    manager._set_writable(epic_file, True)
+    epic_file.write_text(content, encoding="utf-8")
+
+    # Verify the redundant state exists
+    issues = manager.load_mission()
+    epic = next(i for i in issues if i.slug == "epic-task")
+    assert "child-task" in epic.blocked_by
+
+    # Ingest should clean it
+    manager.ingest_issues()
+
+    issues = manager.load_mission()
+    epic = next(i for i in issues if i.slug == "epic-task")
+    assert "child-task" not in epic.blocked_by
+    # subtask_of should be untouched
+    child = next(i for i in issues if i.slug == "child-task")
+    assert child.subtask_of == "epic-task"
+
+
+def test_ingest_preserves_external_blocked_by(manager):
+    """External (non-child) blocked_by entries should survive the cleanup."""
+    manager.create_issue("Task A")
+    manager.create_issue("Epic Task")
+    manager.create_issue("Child Task", subtask_of="epic-task")
+
+    # Directly manipulate USV + frontmatter to add both child AND external
+    # (update_dependencies would refuse child-task as a cycle)
+    issues = manager.load_mission()
+    epic = next(i for i in issues if i.slug == "epic-task")
+    epic.blocked_by = ["child-task", "task-a"]
+    manager.save_mission(issues)
+    epic_file = manager.find_issue_file("epic-task")
+    content = epic_file.read_text(encoding="utf-8")
+    content = TaskAgent._write_frontmatter_edges(
+        content, blocked_by=["child-task", "task-a"]
+    )
+    manager._set_writable(epic_file, True)
+    epic_file.write_text(content, encoding="utf-8")
+
+    manager.ingest_issues()
+
+    issues = manager.load_mission()
+    epic = next(i for i in issues if i.slug == "epic-task")
+    # Child should be removed (redundant)
+    assert "child-task" not in epic.blocked_by
+    # External should be preserved
+    assert "task-a" in epic.blocked_by
+
+
+def test_promote_cascades_subtask_of_only(manager):
+    """Promote should cascade to subtask_of children, not blocked_by dependents."""
+    manager.create_issue("Epic", draft=True)
+    manager.create_issue("Child", draft=True, subtask_of="epic")
+    manager.create_issue("External Dep", draft=True, blocked_by="epic")
+
+    manager.promote_issue("epic")
+
+    # Epic promoted
+    assert (manager.issues_root / "pending" / "epic" / "README.md").exists()
+    # Child cascaded (subtask_of)
+    assert (manager.issues_root / "pending" / "child" / "README.md").exists()
+    # External dep NOT cascaded (blocked_by is not hierarchy)
+    assert not (manager.issues_root / "pending" / "external-dep" / "README.md").exists()
+    assert (manager.issues_root / "draft" / "external-dep" / "README.md").exists()
+
+
+def test_demote_cascades_subtask_of_only(manager):
+    """Demote should cascade to subtask_of children, not blocked_by dependents."""
+    manager.create_issue("Epic", draft=False)
+    manager.create_issue("Child", draft=False, subtask_of="epic")
+    manager.create_issue("External Dep", draft=False, blocked_by="epic")
+
+    manager.demote_issue("epic")
+
+    # Epic demoted
+    assert (manager.issues_root / "draft" / "epic" / "README.md").exists()
+    # Child cascaded (subtask_of)
+    assert (manager.issues_root / "draft" / "child" / "README.md").exists()
+    # External dep NOT cascaded
+    assert not (manager.issues_root / "draft" / "external-dep" / "README.md").exists()
+    assert (manager.issues_root / "pending" / "external-dep" / "README.md").exists()

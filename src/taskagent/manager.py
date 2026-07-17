@@ -765,8 +765,7 @@ class TaskAgent:
         children = [
             i.slug
             for i in issues
-            if (i.subtask_of == target.slug or target.slug in i.blocked_by)
-            and i.status == "draft"
+            if i.subtask_of == target.slug and i.status == "draft"
         ]
         for child_slug in children:
             promote_single(child_slug)
@@ -803,8 +802,7 @@ class TaskAgent:
         children = [
             i.slug
             for i in issues
-            if (i.subtask_of == target.slug or target.slug in i.blocked_by)
-            and i.status == target.status
+            if i.subtask_of == target.slug and i.status == target.status
         ]
         for child_slug in children:
             demote_single(child_slug)
@@ -1724,7 +1722,37 @@ class TaskAgent:
                             _migrate_file_headers(entry / "README.md")
                             _ensure_created_at(entry / "README.md")
 
-        final_issues = present_issues + new_issues
+        # Remove redundant blocked_by entries: if a slug in blocked_by is
+        # also a child (subtask_of points back at this issue), the hierarchy
+        # already establishes blocking — the blocked_by entry is redundant.
+        all_issues = present_issues + new_issues
+        child_map: dict[str, list[str]] = {}
+        for i in all_issues:
+            if i.subtask_of:
+                if i.subtask_of not in child_map:
+                    child_map[i.subtask_of] = []
+                child_map[i.subtask_of].append(i.slug)
+
+        for i in all_issues:
+            if not i.blocked_by:
+                continue
+            my_children = set(child_map.get(i.slug, []))
+            if not my_children:
+                continue
+            new_blocked_by = [b for b in i.blocked_by if b not in my_children]
+            if len(new_blocked_by) != len(i.blocked_by):
+                i.blocked_by = new_blocked_by
+                # Write the cleaned list back to frontmatter
+                clean_file = self.find_issue_file(i.slug)
+                if clean_file:
+                    content = clean_file.read_text(encoding="utf-8")
+                    content = TaskAgent._write_frontmatter_edges(
+                        content, blocked_by=i.blocked_by
+                    )
+                    self._set_writable(clean_file, True)
+                    clean_file.write_text(content, encoding="utf-8")
+
+        final_issues = all_issues
         self.save_mission(final_issues)
         if sync:
             self.sync_mission(ingest=False)

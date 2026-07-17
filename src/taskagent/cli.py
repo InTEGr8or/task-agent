@@ -1816,13 +1816,17 @@ def cmd_tree(console: Console, manager: TaskAgent):
         return
 
     slug_to_issue = {i.slug: i for i in issues}
+    completed_slugs = {i.slug for i in issues if i.status == "completed"}
+    # Also include completed tasks not in mission.usv
+    completed_slugs.update(slug for _, slug in manager.walk_completed())
+
+    # Build children_map using ONLY subtask_of (hierarchy), not blocked_by
     children_map: Dict[str, List[str]] = {}
     for i in issues:
-        for dep in i.dependencies:
-            if dep in slug_to_issue:
-                if dep not in children_map:
-                    children_map[dep] = []
-                children_map[dep].append(i.slug)
+        if i.subtask_of and i.subtask_of in slug_to_issue:
+            if i.subtask_of not in children_map:
+                children_map[i.subtask_of] = []
+            children_map[i.subtask_of].append(i.slug)
 
     visited: Set[str] = set()
     tree_lines: List[Tuple[Issue, int]] = []
@@ -1837,11 +1841,12 @@ def cmd_tree(console: Console, manager: TaskAgent):
                 if child_slug in slug_to_issue:
                     build_rows(slug_to_issue[child_slug], depth + 1)
 
+    # Root nodes: tasks with no subtask_of parent in the issue set
     for issue in issues:
-        has_internal_dep = any(dep in slug_to_issue for dep in issue.dependencies)
-        if not has_internal_dep:
+        if not issue.subtask_of or issue.subtask_of not in slug_to_issue:
             build_rows(issue, 0)
 
+    # Catch any remaining unvisited (shouldn't happen, but defensive)
     for issue in issues:
         if issue.slug not in visited:
             build_rows(issue, 0)
@@ -1858,8 +1863,10 @@ def cmd_tree(console: Console, manager: TaskAgent):
         deps_list = []
         if issue.subtask_of:
             deps_list.append(f"subtask of: {issue.subtask_of}")
-        if issue.blocked_by:
-            deps_list.append(f"blocked by: {', '.join(issue.blocked_by)}")
+        # Only show non-completed blockers
+        active_blockers = [b for b in issue.blocked_by if b not in completed_slugs]
+        if active_blockers:
+            deps_list.append(f"blocked by: {', '.join(active_blockers)}")
         deps = f"  [dim]({'; '.join(deps_list)})[/dim]" if deps_list else ""
         console.print(f"{indent}{connector}{status_symbol} {issue.slug}{deps}")
 
@@ -1880,15 +1887,14 @@ def cmd_list(
             console.print(f"[yellow]No issues found in {manager.mission_path}[/yellow]")
         return
 
-    # Build hierarchy for display
+    # Build hierarchy for display — nest by subtask_of only, not blocked_by
     slug_to_issue = {i.slug: i for i in issues}
     children_map: Dict[str, List[str]] = {}
     for i in issues:
-        for dep in i.dependencies:
-            if dep in slug_to_issue:
-                if dep not in children_map:
-                    children_map[dep] = []
-                children_map[dep].append(i.slug)
+        if i.subtask_of and i.subtask_of in slug_to_issue:
+            if i.subtask_of not in children_map:
+                children_map[i.subtask_of] = []
+            children_map[i.subtask_of].append(i.slug)
 
     visited: Set[str] = set()
     rows_to_display: List[Tuple[Issue, int]] = []
@@ -1903,9 +1909,9 @@ def cmd_list(
             for child in child_issues:
                 build_rows(child, depth + 1)
 
+    # Root nodes: tasks with no subtask_of parent in the issue set
     for issue in issues:
-        has_internal_dep = any(dep in slug_to_issue for dep in issue.dependencies)
-        if not has_internal_dep:
+        if not issue.subtask_of or issue.subtask_of not in slug_to_issue:
             build_rows(issue, 0)
 
     for issue in issues:
