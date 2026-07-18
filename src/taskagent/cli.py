@@ -5,8 +5,9 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
-from rich import box
 import sys
+
+from taskagent.theme import DEFAULT as theme
 
 # Removed invalid NO_BORDER definition
 import argparse
@@ -334,7 +335,7 @@ def render_issue(
         f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
         f"[bold blue]FILE:[/bold blue]\n{issue_file}\n"
         f"{deps_info}",
-        box=box.MINIMAL,
+        box=theme.panel_box,
     )
 
     md = Markdown(content)
@@ -622,9 +623,10 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
         while True:
             table = Table(
                 title=f"[bold blue]Search Results: '{pattern}'[/bold blue]",
-                box=box.MINIMAL,
+                box=theme.table_box,
                 show_header=True,
-                padding=(0, 2),
+                header_style=theme.header_style,
+                padding=theme.table_padding,
             )
             table.add_column("#", justify="right", style="dim", width=4)
             table.add_column("Status", width=10)
@@ -647,7 +649,9 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
 
             help_text = "[dim]l: view | e: edit | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
+            live.update(
+                Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
+            )
 
             try:
                 key = get_key()
@@ -777,9 +781,10 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
             table = Table(
                 title="[bold blue]History[/bold blue]",
-                box=box.MINIMAL,
+                box=theme.table_box,
                 show_header=True,
-                padding=(0, 2),
+                header_style=theme.header_style,
+                padding=theme.table_padding,
             )
             table.add_column("#", justify="right", style="dim", width=4)
             table.add_column("Date", style="dim", width=16)
@@ -796,7 +801,9 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
 
             help_text = "[dim]v/l: view | c: copy slug | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
+            live.update(
+                Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
+            )
 
             try:
                 key = get_key()
@@ -1059,12 +1066,16 @@ def cmd_report(console: Console, manager: TaskAgent, slug: str):
         meta = json.load(f)
 
     console.print(f"[bold blue]Task Report: {slug}[/bold blue]")
-    console.print(Panel(json.dumps(meta, indent=2), title="Metadata", box=box.MINIMAL))
+    console.print(
+        Panel(json.dumps(meta, indent=2), title="Metadata", box=theme.panel_box)
+    )
 
     trace_path = issue_file.parent / meta.get("reasoning_trace", "logs/trace.log")
     if trace_path.exists():
         console.print(f"[bold blue]Reasoning Trace ({trace_path.name}):[/bold blue]")
-        console.print(Panel(trace_path.read_text(encoding="utf-8"), box=box.MINIMAL))
+        console.print(
+            Panel(trace_path.read_text(encoding="utf-8"), box=theme.panel_box)
+        )
     else:
         console.print("[yellow]Reasoning trace not found.[/yellow]")
 
@@ -1616,7 +1627,12 @@ def cmd_mr_list(console: Console, manager: TaskAgent):
         console.print("[blue]No pending merge requests.[/blue]")
         return
 
-    table = Table(title="Pending Merge Requests")
+    table = Table(
+        title="Pending Merge Requests",
+        box=theme.table_box,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+    )
     table.add_column("Slug", style="cyan")
     table.add_column("File", style="dim")
 
@@ -1951,7 +1967,12 @@ def cmd_list(
             )
         return
 
-    table = Table(title="Task Queue", box=None, padding=(0, 2))
+    table = Table(
+        title="Task Queue",
+        box=theme.table_box,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+    )
     table.add_column("Priority", justify="right", style="cyan")
     table.add_column("Created", style="dim", width=16)
     table.add_column("Status", width=10)
@@ -1980,6 +2001,215 @@ def cmd_list(
             display_slug,
         )
     console.print(table)
+
+
+def _parse_created_at(manager: TaskAgent, slug: str) -> Optional[datetime]:
+    """Parse created_at from frontmatter as a datetime object."""
+    try:
+        issue_file = manager.find_issue_file(slug, include_completed=True)
+        if issue_file and issue_file.exists():
+            content = issue_file.read_text(encoding="utf-8")
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    for line in parts[1].splitlines():
+                        if line.strip().startswith("created_at:"):
+                            raw_val = line.split(":", 1)[1].strip()
+                            try:
+                                return datetime.fromisoformat(raw_val)
+                            except ValueError:
+                                for fmt in (
+                                    "%Y-%m-%d %H:%M",
+                                    "%Y-%m-%d %H:%M:%S",
+                                    "%Y-%m-%d",
+                                ):
+                                    try:
+                                        return datetime.strptime(raw_val, fmt)
+                                    except ValueError:
+                                        pass
+            stat = issue_file.stat()
+            birthtime = getattr(stat, "st_birthtime", None)
+            t = birthtime if birthtime is not None else stat.st_mtime
+            return datetime.fromtimestamp(t)
+    except Exception:
+        pass
+    return None
+
+
+def _format_age(dt: Optional[datetime]) -> str:
+    """Format a timedelta as a human-readable age string."""
+    if dt is None:
+        return "?"
+    now = datetime.now(tz=dt.tzinfo) if dt.tzinfo else datetime.now()
+    delta = now - dt
+    days = delta.days
+    hours = delta.seconds // 3600
+    if days > 365:
+        y = days // 365
+        return f"{y}y"
+    if days > 30:
+        m = days // 30
+        return f"{m}mo"
+    if days > 0:
+        return f"{days}d"
+    if hours > 0:
+        return f"{hours}h"
+    mins = delta.seconds // 60
+    return f"{mins}m"
+
+
+def cmd_dashboard(console: Console, manager: TaskAgent):
+    """Show a live dashboard of all task stations."""
+    issues = manager.sync_mission()
+
+    completed_pairs = manager.walk_completed()
+    completed_slugs = {slug for _, slug in completed_pairs}
+
+    # Group by status
+    stations: Dict[str, List[Issue]] = {}
+    for issue in issues:
+        stations.setdefault(issue.status, []).append(issue)
+
+    # ── Station summary table ──
+    station_table = Table(
+        title="Stations",
+        box=theme.table_box,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+    )
+    station_table.add_column("Station", style="cyan", no_wrap=True)
+    station_table.add_column("Count", justify="right")
+    station_table.add_column("Oldest", style="dim")
+
+    station_order = ["active", "pending", "draft", "mr", "completed", "deleted"]
+    total = 0
+    for name in station_order:
+        if name == "completed":
+            count = len(completed_pairs)
+        elif name == "deleted":
+            deleted_root = manager.issues_root / "deleted"
+            if deleted_root.exists():
+                count = sum(1 for _ in deleted_root.iterdir())
+            else:
+                count = 0
+        elif name == "mr":
+            mr_root = manager.issues_root / "mr"
+            if mr_root.exists():
+                count = sum(
+                    1 for f in mr_root.iterdir() if f.is_file() and f.suffix == ".md"
+                )
+            else:
+                count = 0
+        else:
+            count = len(stations.get(name, []))
+        total += count
+
+        # Find oldest item age in this station
+        oldest_dt: Optional[datetime] = None
+        if name == "completed":
+            for fpath, slug in completed_pairs:
+                dt = _parse_created_at(manager, slug)
+                if dt and (oldest_dt is None or dt < oldest_dt):
+                    oldest_dt = dt
+        elif name == "deleted":
+            deleted_root = manager.issues_root / "deleted"
+            if deleted_root.exists():
+                for entry in deleted_root.iterdir():
+                    slug = entry.stem if entry.is_file() else entry.name
+                    dt = _parse_created_at(manager, slug)
+                    if dt and (oldest_dt is None or dt < oldest_dt):
+                        oldest_dt = dt
+        elif name == "mr":
+            mr_root = manager.issues_root / "mr"
+            if mr_root.exists():
+                for f in mr_root.iterdir():
+                    if f.is_file() and f.suffix == ".md":
+                        dt = _parse_created_at(manager, f.stem)
+                        if dt and (oldest_dt is None or dt < oldest_dt):
+                            oldest_dt = dt
+        else:
+            for issue in stations.get(name, []):
+                dt = _parse_created_at(manager, issue.slug)
+                if dt and (oldest_dt is None or dt < oldest_dt):
+                    oldest_dt = dt
+
+        style = ""
+        if name == "active":
+            style = "bold green"
+        elif name == "pending":
+            style = "bold yellow"
+        elif name == "draft":
+            style = "dim"
+
+        station_table.add_row(
+            f"[{style}]{name}[/{style}]" if style else name,
+            str(count),
+            _format_age(oldest_dt),
+        )
+
+    station_table.add_row("", "", "")
+    station_table.add_row("[bold]total[/bold]", f"[bold]{total}[/bold]", "")
+
+    console.print(
+        Panel(
+            station_table,
+            title="[bold]Dashboard[/bold]",
+            subtitle=f"[dim]{manager.issues_root}[/dim]",
+            box=theme.panel_box,
+            expand=False,
+        )
+    )
+
+    # ── Blocked-chain view ──
+    slug_to_issue = {i.slug: i for i in issues}
+    blocked = [i for i in issues if i.status in ("pending", "draft") and i.blocked_by]
+    if blocked:
+        bt = Table(
+            title="Blocked Tasks",
+            box=theme.table_box,
+            header_style=theme.header_style,
+            padding=theme.table_padding,
+        )
+        bt.add_column("Task", style="cyan")
+        bt.add_column("Blocked by")
+        bt.add_column("Age", style="dim")
+
+        for issue in blocked:
+            blockers = []
+            for b in issue.blocked_by:
+                if b in slug_to_issue:
+                    blockers.append(f"[yellow]{b}[/yellow]")
+                elif b in completed_slugs:
+                    blockers.append(f"[green]{b} (done)[/green]")
+                else:
+                    blockers.append(f"[red]{b} (missing)[/red]")
+            dt = _parse_created_at(manager, issue.slug)
+            bt.add_row(
+                issue.slug,
+                ", ".join(blockers),
+                _format_age(dt),
+            )
+        console.print(bt)
+    else:
+        console.print("[green]No blocked tasks.[/green]")
+
+    # ── Active tasks dwell time ──
+    active = stations.get("active", [])
+    if active:
+        at = Table(
+            title="Active Tasks",
+            box=theme.table_box,
+            header_style=theme.header_style,
+            padding=theme.table_padding,
+        )
+        at.add_column("Slug", style="green")
+        at.add_column("Name")
+        at.add_column("Dwell", style="yellow")
+
+        for issue in active:
+            dt = _parse_created_at(manager, issue.slug)
+            at.add_row(issue.slug, issue.name, _format_age(dt))
+        console.print(at)
 
 
 def cmd_ingest(console: Console, manager: TaskAgent):
@@ -2041,7 +2271,12 @@ def cmd_active(
             if active_issues:
                 from rich.table import Table
 
-                table = Table(title="Active Tasks")
+                table = Table(
+                    title="Active Tasks",
+                    box=theme.table_box,
+                    header_style=theme.header_style,
+                    padding=theme.table_padding,
+                )
                 table.add_column("Priority")
                 table.add_column("Slug")
                 table.add_column("Dependencies")
@@ -2343,7 +2578,12 @@ def cmd_list_templates(console: Console):
         console.print("[yellow]No templates found in .ta/agents/[/yellow]")
         return
 
-    table = Table(title="Available Templates", box=box.MINIMAL)
+    table = Table(
+        title="Available Templates",
+        box=theme.table_box,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+    )
     table.add_column("Name", style="cyan")
     table.add_column("Description")
 
@@ -3266,9 +3506,10 @@ def cmd_triage(
 
             table = Table(
                 title=title,
-                box=None,
+                box=theme.table_box,
                 show_header=True,
-                padding=(0, 2),
+                header_style=theme.header_style,
+                padding=theme.table_padding,
             )
             table.add_column("Pos", justify="right", style="dim")
             table.add_column("Created", style="dim", width=16)
@@ -3306,7 +3547,9 @@ def cmd_triage(
 
             help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | A: active | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
 
-            live.update(Panel(table, subtitle=help_text, box=box.MINIMAL), refresh=True)
+            live.update(
+                Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
+            )
 
             # Input
             key = get_key()
@@ -3598,7 +3841,7 @@ def display_overview(console: Console, manager: TaskAgent):
         Panel(
             f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
             expand=False,
-            box=box.MINIMAL,
+            box=theme.panel_box,
         )
     )
 
@@ -3611,13 +3854,16 @@ def display_overview(console: Console, manager: TaskAgent):
 
     # Task Summary
 
-    stats_table = Table.grid(padding=(0, 2))
+    stats_table = Table.grid(padding=theme.table_padding)
     console.print(stats_table)
     console.print()
 
     # Commands Table
     table = Table(
-        title="Available Commands", box=None, show_header=False, padding=(0, 2)
+        title="Available Commands",
+        box=None,
+        show_header=False,
+        padding=theme.table_padding,
     )
     table.add_column("Command", style="cyan", no_wrap=True)
     table.add_column("Description", style="white")
@@ -3703,6 +3949,9 @@ def main():
     )
     report_parser.add_argument("slug", help="Slug of the issue")
 
+    subparsers.add_parser(
+        "dashboard", help="Show a live dashboard of all task stations"
+    )
     list_parser = subparsers.add_parser("list")
     subparsers.add_parser("tree", help="Display task hierarchy as a dependency tree")
     list_parser.add_argument("--json", action="store_true")
@@ -4061,6 +4310,8 @@ Usage:
         cmd_restore(console, manager, args.slug, to_status=args.status)
     elif args.command == "report":
         cmd_report(console, manager, args.slug)
+    elif args.command == "dashboard":
+        cmd_dashboard(console, manager)
     elif args.command == "list":
         fmt = "table"
         if args.json:
