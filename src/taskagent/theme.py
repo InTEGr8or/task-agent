@@ -10,7 +10,7 @@ class Theme:
 
     table_box: Optional[rich_box.Box] = None
     panel_box: rich_box.Box = rich_box.MINIMAL
-    table_padding: tuple[int, int] = (0, 2)
+    table_padding: tuple[int, int, int, int] = (0, 2, 0, 0)
     header_style: str = "on grey23"
 
 
