@@ -3702,8 +3702,9 @@ def cmd_triage(
             elif key == "D" and not show_completed:  # done
                 live.stop()
                 issue = indexed_issues[cursor][0]
+                solution = questionary.text("Solution explanation (optional):").ask()
                 try:
-                    cmd_done(console, manager, issue.slug)
+                    cmd_done(console, manager, issue.slug, solution=solution or None)
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
                 except Exception as e:
