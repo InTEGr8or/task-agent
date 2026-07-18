@@ -1593,6 +1593,23 @@ class TaskAgent:
             except Exception:
                 pass
 
+        def _clean_redundant_blocked_by(file_path: Path):
+            """Remove blocked_by entries that are also this task's subtask_of parent."""
+            try:
+                blocked_by, subtask_of = TaskAgent.extract_relations(file_path)
+                if not blocked_by or not subtask_of:
+                    return
+                if subtask_of in blocked_by:
+                    new_blocked_by = [b for b in blocked_by if b != subtask_of]
+                    content = file_path.read_text(encoding="utf-8")
+                    content = TaskAgent._write_frontmatter_edges(
+                        content, blocked_by=new_blocked_by
+                    )
+                    self._set_writable(file_path, True)
+                    file_path.write_text(content, encoding="utf-8")
+            except Exception:
+                pass
+
         new_issues = []
         for status in ["pending", "draft", "active"]:
             status_dir = self.issues_root / status
@@ -1602,6 +1619,7 @@ class TaskAgent:
             # File-based
             for issue_file in list(status_dir.glob("*.md")):
                 _migrate_file_headers(issue_file)
+                _clean_redundant_blocked_by(issue_file)
                 name = self.extract_title(issue_file)
                 slug = self.slugify(issue_file.stem)
                 if slug not in existing_slugs:
@@ -1630,6 +1648,7 @@ class TaskAgent:
             # Directory-based
             for readme_file in list(status_dir.glob("*/README.md")):
                 _migrate_file_headers(readme_file)
+                _clean_redundant_blocked_by(readme_file)
                 name = self.extract_title(readme_file)
                 slug = self.slugify(readme_file.parent.name)
                 if slug not in existing_slugs:
@@ -1718,9 +1737,11 @@ class TaskAgent:
                         if entry.is_file() and entry.suffix == ".md":
                             _migrate_file_headers(entry)
                             _ensure_created_at(entry)
+                            _clean_redundant_blocked_by(entry)
                         elif entry.is_dir() and (entry / "README.md").exists():
                             _migrate_file_headers(entry / "README.md")
                             _ensure_created_at(entry / "README.md")
+                            _clean_redundant_blocked_by(entry / "README.md")
 
         # Remove redundant blocked_by entries: if a slug in blocked_by is
         # also a child (subtask_of points back at this issue), the hierarchy
