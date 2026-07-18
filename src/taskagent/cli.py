@@ -1901,6 +1901,8 @@ def cmd_list(
 
     # Build hierarchy for display — nest by subtask_of only, not blocked_by
     slug_to_issue = {i.slug: i for i in issues}
+    completed_slugs = {i.slug for i in issues if i.status == "completed"}
+    completed_slugs.update(slug for _, slug in manager.walk_completed())
     children_map: Dict[str, List[str]] = {}
     for i in issues:
         if i.subtask_of and i.subtask_of in slug_to_issue:
@@ -1969,9 +1971,10 @@ def cmd_list(
         header_style=theme.header_style,
         padding=theme.table_padding,
     )
-    table.add_column("Priority", justify="right", style="cyan")
-    table.add_column("Created", style="dim", width=16)
-    table.add_column("Status", width=10)
+    table.add_column("Pri", justify="right", style="cyan", width=3)
+    table.add_column("Created", style="dim", width=5)
+    table.add_column("Status", width=6)
+    table.add_column("Blocked", style="yellow", width=8)
     table.add_column("Slug")
 
     for issue, depth in rows_to_display:
@@ -1989,11 +1992,27 @@ def cmd_list(
         prefix = "└─ " if depth > 0 else ""
         display_slug = f"{indent}{prefix}{issue.slug}"
         created_date = get_created_date(manager, issue.slug)
+        # Shorten to MM-DD
+        if len(created_date) >= 10:
+            created_date = created_date[5:10]
+
+        active_blockers = [b for b in issue.blocked_by if b not in completed_slugs]
+        blocked_str = ""
+        if active_blockers:
+            # Show priority numbers of blockers
+            blocker_priorities = []
+            for b in active_blockers:
+                if b in slug_to_issue:
+                    blocker_priorities.append(str(slug_to_issue[b].priority))
+                else:
+                    blocker_priorities.append(b[:4])
+            blocked_str = ",".join(blocker_priorities)
 
         table.add_row(
             str(issue.priority),
             f"[dim]{created_date}[/dim]",
             f"[{status_style}]{issue.status.upper()}[/{status_style}]",
+            f"[yellow]{blocked_str}[/yellow]" if blocked_str else "",
             display_slug,
         )
     console.print(table)
