@@ -1972,7 +1972,7 @@ def cmd_list(
         padding=theme.table_padding,
     )
     table.add_column("Pri", justify="right", style="cyan", width=3)
-    table.add_column("Created", style="dim", width=5)
+    table.add_column("Date", style="dim", width=5)
     table.add_column("Status", width=6)
     table.add_column("Blocked", style="yellow", width=8)
     table.add_column("Slug")
@@ -2006,7 +2006,7 @@ def cmd_list(
                     blocker_priorities.append(str(slug_to_issue[b].priority))
                 else:
                     blocker_priorities.append(b[:4])
-            blocked_str = ",".join(blocker_priorities)
+            blocked_str = " ".join(blocker_priorities)
 
         table.add_row(
             str(issue.priority),
