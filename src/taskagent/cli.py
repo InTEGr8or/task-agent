@@ -1836,13 +1836,11 @@ def cmd_tree(console: Console, manager: TaskAgent):
     # Also include completed tasks not in mission.usv
     completed_slugs.update(slug for _, slug in manager.walk_completed())
 
-    # Build children_map using ONLY subtask_of (hierarchy), not blocked_by
+    # Build children_map using subtask_of (hierarchy)
     children_map: Dict[str, List[str]] = {}
     for i in issues:
         if i.subtask_of and i.subtask_of in slug_to_issue:
-            if i.subtask_of not in children_map:
-                children_map[i.subtask_of] = []
-            children_map[i.subtask_of].append(i.slug)
+            children_map.setdefault(i.subtask_of, []).append(i.slug)
 
     visited: Set[str] = set()
     tree_lines: List[Tuple[Issue, int]] = []
@@ -1876,14 +1874,12 @@ def cmd_tree(console: Console, manager: TaskAgent):
             "draft": "◌",
             "completed": "✔",
         }.get(issue.status, "?")
-        deps_list = []
-        if issue.subtask_of:
-            deps_list.append(f"subtask of: {issue.subtask_of}")
-        # Only show non-completed blockers
         active_blockers = [b for b in issue.blocked_by if b not in completed_slugs]
-        if active_blockers:
-            deps_list.append(f"blocked by: {', '.join(active_blockers)}")
-        deps = f"  [dim]({'; '.join(deps_list)})[/dim]" if deps_list else ""
+        deps = (
+            f"  [dim](blocked by: {', '.join(active_blockers)})[/dim]"
+            if active_blockers
+            else ""
+        )
         console.print(f"{indent}{connector}{status_symbol} {issue.slug}{deps}")
 
 
