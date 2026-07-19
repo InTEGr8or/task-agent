@@ -1,10 +1,8 @@
-"""Machine-level task store data root, monikers, and registry.
+"""Machine-level task store data root, monikers, registry, and migration.
 
-Phase 1 of centralizing task-agent stores outside host repos.
-
-This module is intentionally side-effect free with respect to host project
-trees: it never moves ``.task-agent/tasks`` or rewrites discovery defaults.
-Migration lives in a later phase.
+Phases:
+  1. Data root, moniker, registry (read-only inspect)
+  2. ``migrate_store`` — move legacy in-host stores into the data root
 """
 
 from __future__ import annotations
@@ -13,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -22,6 +21,16 @@ from urllib.parse import urlparse
 
 REGISTRY_VERSION = 1
 STORE_META_REL = Path(".task-agent") / "store.json"
+
+# Files/dirs that indicate a real station store (not an empty placeholder).
+_STORE_MARKERS = (
+    Path(".task-agent") / "mission.usv",
+    Path("mission.usv"),
+    Path("pending"),
+    Path("active"),
+    Path("draft"),
+    Path("completed"),
+)
 
 
 def get_data_root() -> Path:
@@ -413,6 +422,567 @@ class MachineRegistry:
         return rebuilt
 
 
+def _list_git_remotes(repo_path: Path) -> Dict[str, str]:
+    """Return ``{remote_name: url}`` for fetch URLs (empty if not a repo)."""
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo_path), "remote", "-v"],
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=(os.name == "nt"),
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return {}
+    remotes: Dict[str, str] = {}
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1] == "(fetch)":
+            remotes[parts[0]] = parts[1]
+    return remotes
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def looks_like_store(path: Path) -> bool:
+    """True if ``path`` has station/mission markers."""
+    if not path.is_dir():
+        return False
+    for rel in _STORE_MARKERS:
+        if (path / rel).exists():
+            return True
+    return False
+
+
+def verify_store(
+    store_path: Path, *, remotes_expected: Optional[Dict[str, str]] = None
+) -> List[str]:
+    """Return a list of verification errors (empty = ok)."""
+    errors: List[str] = []
+    if not store_path.is_dir():
+        return [f"Store path is not a directory: {store_path}"]
+    if not looks_like_store(store_path):
+        errors.append(
+            f"Store lacks mission/station markers under {store_path} "
+            f"(expected mission.usv or pending/active/draft/completed)"
+        )
+    if remotes_expected is not None:
+        actual = _list_git_remotes(store_path)
+        for name, url in remotes_expected.items():
+            if actual.get(name) != url:
+                errors.append(
+                    f"Remote {name!r} mismatch: expected {url!r}, got {actual.get(name)!r}"
+                )
+    return errors
+
+
+def _update_env_var(env_path: Path, key: str, value: str) -> None:
+    """Set key=value in a .env file (create or replace)."""
+    if not env_path.exists():
+        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
+        return
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(f"{key}="):
+            lines[i] = f"{key}={value}"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _replace_with_symlink(link_path: Path, target: Path) -> None:
+    """Make ``link_path`` an absolute symlink to ``target`` (replace existing)."""
+    target_abs = str(target.resolve())
+    if link_path.is_symlink() or link_path.is_file():
+        link_path.unlink()
+    elif link_path.is_dir():
+        # Only remove empty dirs; callers must have moved contents already
+        try:
+            link_path.rmdir()
+        except OSError as e:
+            raise RuntimeError(
+                f"Cannot replace non-empty directory with symlink: {link_path}"
+            ) from e
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target_abs, str(link_path))
+
+
+def _count_entries(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for _ in path.rglob("*"))
+
+
+@dataclass
+class MigrationPlan:
+    """Describes a migrate operation before/without applying it."""
+
+    host_path: str
+    moniker: str
+    source: Optional[str]
+    destination: str
+    kind: Optional[str]  # nested_git | host_tree | already_migrated | none
+    remotes_before: Dict[str, str] = field(default_factory=dict)
+    already_migrated: bool = False
+    steps: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MigrationResult:
+    plan: MigrationPlan
+    dry_run: bool
+    success: bool
+    message: str
+    applied_steps: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "plan": self.plan.to_dict(),
+            "dry_run": self.dry_run,
+            "success": self.success,
+            "message": self.message,
+            "applied_steps": self.applied_steps,
+        }
+
+
+def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> MigrationPlan:
+    """Build a migration plan for the host project (no side effects)."""
+    host = host_path.expanduser().resolve()
+    top = git_toplevel(host) or host
+    moniker, _origin = resolve_moniker_for_host(top)
+    root = data_root if data_root is not None else get_data_root()
+    dest = store_path_for_moniker(moniker, root)
+    steps: List[str] = []
+    warnings: List[str] = []
+    errors: List[str] = []
+
+    # Prefer the physical eject location as the source to move.
+    eject_path = top / ".task-agent" / "tasks"
+    source: Optional[Path] = None
+    kind: Optional[str] = None
+
+    if eject_path.is_symlink():
+        try:
+            target = eject_path.resolve()
+        except OSError:
+            target = None
+        if target is not None and target.resolve() == dest.resolve() and dest.is_dir():
+            return MigrationPlan(
+                host_path=str(top),
+                moniker=moniker,
+                source=str(eject_path),
+                destination=str(dest),
+                kind="already_migrated",
+                already_migrated=True,
+                steps=["No-op: .task-agent/tasks already symlinks to canonical store"],
+            )
+        if target is not None and target.is_dir() and looks_like_store(target):
+            # Symlink points elsewhere (old custom eject) — migrate that target
+            source = target
+    elif eject_path.is_dir() and looks_like_store(eject_path):
+        source = eject_path.resolve()
+
+    if source is None:
+        # Fall back to docs/tasks only if it is a real directory (not symlink)
+        docs = top / "docs" / "tasks"
+        if docs.is_dir() and not docs.is_symlink() and looks_like_store(docs):
+            source = docs.resolve()
+            warnings.append(
+                "Source is docs/tasks (in-tree); prefer eject layout for new projects"
+            )
+
+    if source is None:
+        # Maybe already only at canonical
+        if dest.is_dir() and looks_like_store(dest):
+            return MigrationPlan(
+                host_path=str(top),
+                moniker=moniker,
+                source=None,
+                destination=str(dest),
+                kind="already_migrated",
+                already_migrated=True,
+                steps=[
+                    "No-op: canonical store already exists; no in-host source to move"
+                ],
+                warnings=["Consider repairing host symlinks with another migrate run"],
+            )
+        return MigrationPlan(
+            host_path=str(top),
+            moniker=moniker,
+            source=None,
+            destination=str(dest),
+            kind="none",
+            errors=[
+                "No legacy task store found under host (.task-agent/tasks or docs/tasks)"
+            ],
+        )
+
+    # If source is already the destination, done
+    if source.resolve() == dest.resolve():
+        return MigrationPlan(
+            host_path=str(top),
+            moniker=moniker,
+            source=str(source),
+            destination=str(dest),
+            kind="already_migrated",
+            already_migrated=True,
+            steps=["No-op: source is already the canonical store path"],
+        )
+
+    nested = is_nested_git_repo(source)
+    kind = "nested_git" if nested else "host_tree"
+    remotes_before = _list_git_remotes(source) if nested else {}
+
+    # Destination conflicts
+    if dest.exists():
+        if dest.is_dir() and looks_like_store(dest):
+            # Same moniker store already present — only repair pointers if content matches
+            errors.append(
+                f"Destination already exists and looks like a store: {dest}. "
+                "Refusing to overwrite. Remove or rename it, or fix host pointers manually."
+            )
+        elif dest.is_dir() and any(dest.iterdir()):
+            errors.append(f"Destination exists and is non-empty: {dest}")
+        elif dest.is_file() or dest.is_symlink():
+            errors.append(
+                f"Destination path exists and is not a free directory: {dest}"
+            )
+
+    if not looks_like_store(source):
+        errors.append(f"Source does not look like a task store: {source}")
+
+    steps.append(f"Create parent directory {dest.parent}")
+    if nested:
+        steps.append(
+            f"Move nested git store {source} → {dest} (preserve .git and remotes)"
+        )
+        if remotes_before:
+            steps.append(f"Verify remotes after move: {remotes_before}")
+        else:
+            warnings.append("Nested git store has no remotes configured")
+    else:
+        steps.append(f"Move host_tree store {source} → {dest}")
+        steps.append("git init in destination (no remote invented)")
+        steps.append("Create initial commit of station tree")
+        if remotes_before:
+            warnings.append(
+                "Unexpected remotes on host_tree source; they belong to the host repo "
+                "and will not be copied as store remotes"
+            )
+        remotes_before = {}  # do not treat host remotes as store remotes
+
+    steps.append("Write .task-agent/store.json moniker metadata")
+    steps.append("Register moniker in machine registry.json")
+    steps.append(f"Point {eject_path} symlink → {dest}")
+    steps.append(f"Point docs/tasks (and docks/tasks if present) → {dest}")
+    steps.append("Update .env TA_EJECT_TASKS / TA_EJECTED_TASKS_PATH to destination")
+    steps.append("Verify store markers (and remotes if nested_git)")
+
+    if _path_is_under(dest, top):
+        warnings.append(
+            "Destination is under the host tree; prefer TA_DATA_ROOT outside the repo"
+        )
+
+    return MigrationPlan(
+        host_path=str(top),
+        moniker=moniker,
+        source=str(source),
+        destination=str(dest),
+        kind=kind,
+        remotes_before=remotes_before,
+        already_migrated=False,
+        steps=steps,
+        warnings=warnings,
+        errors=errors,
+    )
+
+
+def _git_init_and_commit(store_path: Path, message: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(store_path), "init"],
+        check=True,
+        capture_output=True,
+        shell=(os.name == "nt"),
+    )
+    subprocess.run(
+        ["git", "-C", str(store_path), "add", "-A"],
+        check=True,
+        capture_output=True,
+        shell=(os.name == "nt"),
+    )
+    # Allow empty? No — store should have files
+    env = os.environ.copy()
+    # Avoid depending on user identity in tests
+    env.setdefault("GIT_AUTHOR_NAME", "task-agent")
+    env.setdefault("GIT_AUTHOR_EMAIL", "task-agent@localhost")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    subprocess.run(
+        ["git", "-C", str(store_path), "commit", "-m", message],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+        shell=(os.name == "nt"),
+    )
+
+
+def _move_store_tree(source: Path, dest: Path) -> None:
+    """Move source directory to dest (same-filesystem rename when possible)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        raise RuntimeError(f"Destination already exists: {dest}")
+    shutil.move(str(source), str(dest))
+
+
+def _update_host_pointers(host: Path, dest: Path) -> List[str]:
+    """Leave eject/docs symlinks and .env pointing at the centralized store."""
+    applied: List[str] = []
+    dest_abs = dest.resolve()
+
+    eject = host / ".task-agent" / "tasks"
+    # After move, eject may be gone (if it was the source) or a stale symlink
+    if eject.exists() or eject.is_symlink():
+        if eject.is_symlink():
+            eject.unlink()
+        elif eject.is_dir():
+            # Should be empty after move of contents... if source was eject itself,
+            # shutil.move removed it. If residual empty dir, replace.
+            if any(eject.iterdir()):
+                raise RuntimeError(
+                    f"Legacy path still has contents after move: {eject}"
+                )
+            eject.rmdir()
+    _replace_with_symlink(eject, dest_abs)
+    applied.append(f"symlink {eject} → {dest_abs}")
+
+    for rel in (Path("docs") / "tasks", Path("docks") / "tasks"):
+        link = host / rel
+        if link.exists() or link.is_symlink():
+            if link.is_symlink():
+                link.unlink()
+            elif link.is_dir():
+                # Only re-point if empty (content should have been source already)
+                if any(link.iterdir()):
+                    # Leave alone if still has content (unexpected)
+                    applied.append(f"skipped non-empty {link}")
+                    continue
+                link.rmdir()
+            else:
+                link.unlink()
+            _replace_with_symlink(link, dest_abs)
+            applied.append(f"symlink {link} → {dest_abs}")
+        elif (host / rel.parent).is_dir():
+            # docs/ exists but tasks missing — create heal symlink
+            _replace_with_symlink(link, dest_abs)
+            applied.append(f"symlink {link} → {dest_abs}")
+
+    env_path = host / ".env"
+    _update_env_var(env_path, "TA_EJECT_TASKS", "true")
+    _update_env_var(env_path, "TA_EJECTED_TASKS_PATH", str(dest_abs))
+    _update_env_var(env_path, "TA_EJECTED_ISSUES_PATH", str(dest_abs))
+    applied.append(f"update {env_path} eject paths → {dest_abs}")
+
+    return applied
+
+
+def migrate_store(
+    host_path: Path,
+    *,
+    dry_run: bool = False,
+    data_root: Optional[Path] = None,
+) -> MigrationResult:
+    """Migrate a host project's legacy task store into the machine data root.
+
+    Safe defaults:
+    - Refuses to overwrite an existing destination store
+    - Verifies markers (and nested remotes) before considering success
+    - Does **not** invent a git remote for host_tree stores
+    - Leaves host symlinks + .env so pre-Phase-3 discovery still works
+
+    Args:
+        host_path: Project root (or any path inside it).
+        dry_run: If True, only return the plan; no filesystem changes.
+        data_root: Override machine data root (tests).
+    """
+    plan = plan_migrate(host_path, data_root=data_root)
+
+    if plan.errors:
+        return MigrationResult(
+            plan=plan,
+            dry_run=dry_run,
+            success=False,
+            message="; ".join(plan.errors),
+        )
+
+    if plan.already_migrated:
+        # Still repair pointers if needed (non-dry-run)
+        if dry_run:
+            return MigrationResult(
+                plan=plan,
+                dry_run=True,
+                success=True,
+                message="Already migrated (dry-run)",
+            )
+        host = Path(plan.host_path)
+        dest = Path(plan.destination)
+        applied: List[str] = []
+        if dest.is_dir() and looks_like_store(dest):
+            applied.extend(_update_host_pointers(host, dest))
+            reg = MachineRegistry(data_root)
+            reg.upsert(
+                StoreEntry(
+                    moniker=plan.moniker,
+                    store_path=str(dest.resolve()),
+                    host_paths=[str(host.resolve())],
+                    remote=git_remote_url(dest),
+                )
+            )
+            applied.append("registry upsert")
+        return MigrationResult(
+            plan=plan,
+            dry_run=False,
+            success=True,
+            message="Already migrated; host pointers refreshed",
+            applied_steps=applied,
+        )
+
+    if plan.kind == "none" or not plan.source:
+        return MigrationResult(
+            plan=plan,
+            dry_run=dry_run,
+            success=False,
+            message=plan.errors[0] if plan.errors else "Nothing to migrate",
+        )
+
+    if dry_run:
+        return MigrationResult(
+            plan=plan,
+            dry_run=True,
+            success=True,
+            message="Dry-run OK — no changes applied",
+            applied_steps=list(plan.steps),
+        )
+
+    source = Path(plan.source)
+    dest = Path(plan.destination)
+    host = Path(plan.host_path)
+    applied = []
+
+    # Snapshot for rollback
+    source_count = _count_entries(source)
+    remotes_expected = dict(plan.remotes_before) if plan.kind == "nested_git" else None
+
+    try:
+        # If source is behind a symlink at eject path pointing outside,
+        # we move the real directory; eject path becomes a dangling link then.
+        eject = host / ".task-agent" / "tasks"
+        source_was_eject_dir = (
+            eject.exists()
+            and not eject.is_symlink()
+            and eject.resolve() == source.resolve()
+        )
+
+        _move_store_tree(source, dest)
+        applied.append(f"moved {source} → {dest}")
+
+        if plan.kind == "host_tree":
+            _git_init_and_commit(
+                dest,
+                "chore: initial task store commit after centralization migrate",
+            )
+            applied.append("git init + initial commit (no remote)")
+
+        write_store_meta(
+            dest,
+            moniker=plan.moniker,
+            remote=(plan.remotes_before.get("origin") if plan.remotes_before else None),
+            extra={
+                "migrated_from": str(source),
+                "migrated_at": datetime.now(timezone.utc).isoformat(),
+                "kind": plan.kind,
+            },
+        )
+        applied.append("wrote store.json")
+
+        verify_errors = verify_store(dest, remotes_expected=remotes_expected)
+        if source_count and _count_entries(dest) < max(1, source_count // 2):
+            # Heuristic: catastrophic loss
+            verify_errors.append(
+                f"Entry count drop suspicious: source had ~{source_count}, "
+                f"dest has {_count_entries(dest)}"
+            )
+        if verify_errors:
+            raise RuntimeError("Verification failed: " + "; ".join(verify_errors))
+        applied.append("verified store")
+
+        # Host pointers (eject may be gone if it was the moved directory)
+        if source_was_eject_dir and not eject.exists():
+            pass  # recreate in _update_host_pointers
+        applied.extend(_update_host_pointers(host, dest))
+
+        reg = MachineRegistry(data_root)
+        reg.ensure_layout()
+        reg.upsert(
+            StoreEntry(
+                moniker=plan.moniker,
+                store_path=str(dest.resolve()),
+                host_paths=[str(host.resolve())],
+                remote=git_remote_url(dest) if plan.kind == "nested_git" else None,
+            )
+        )
+        applied.append(f"registry upsert {plan.moniker}")
+
+    except Exception as e:
+        # Best-effort rollback if dest exists and source is gone
+        if dest.exists() and not source.exists():
+            try:
+                # Move back only if source parent still exists
+                if source.parent.is_dir():
+                    shutil.move(str(dest), str(source))
+                    applied.append(f"rollback: moved {dest} → {source}")
+            except Exception as rb:
+                return MigrationResult(
+                    plan=plan,
+                    dry_run=False,
+                    success=False,
+                    message=(
+                        f"Migration failed: {e}. Rollback also failed: {rb}. "
+                        f"Manual recovery may be needed. Applied: {applied}"
+                    ),
+                    applied_steps=applied,
+                )
+        return MigrationResult(
+            plan=plan,
+            dry_run=False,
+            success=False,
+            message=f"Migration failed: {e}",
+            applied_steps=applied,
+        )
+
+    return MigrationResult(
+        plan=plan,
+        dry_run=False,
+        success=True,
+        message=f"Migrated {plan.moniker} → {dest}",
+        applied_steps=applied,
+    )
+
+
 def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str, Any]:
     """Read-only inspection of how a host path maps to moniker / store / legacy.
 
@@ -430,12 +1000,35 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
     legacy_kind: Optional[str] = None
     legacy_remote: Optional[str] = None
     if legacy is not None:
-        if is_nested_git_repo(legacy):
+        if legacy.resolve() == canonical.resolve():
+            # Post-migrate: host path resolves into the data-root store
+            legacy_kind = "centralized"
+            legacy_remote = (
+                git_remote_url(legacy) if is_nested_git_repo(legacy) else None
+            )
+        elif is_nested_git_repo(legacy):
             legacy_kind = "nested_git"
             legacy_remote = git_remote_url(legacy)
         else:
             legacy_kind = "host_tree"
-            legacy_remote = git_remote_url(legacy)
+            legacy_remote = None
+
+    pointers_ok = False
+    eject = top / ".task-agent" / "tasks"
+    if eject.is_symlink():
+        try:
+            pointers_ok = eject.resolve() == canonical.resolve()
+        except OSError:
+            pointers_ok = False
+
+    migrated = bool(
+        canonical.is_dir()
+        and looks_like_store(canonical)
+        and (
+            (entry and Path(entry.store_path).resolve() == canonical.resolve())
+            or pointers_ok
+        )
+    )
 
     return {
         "host_path": str(top),
@@ -448,9 +1041,6 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
         "legacy_store_path": str(legacy) if legacy else None,
         "legacy_kind": legacy_kind,
         "legacy_remote": legacy_remote,
-        "migrated": bool(
-            entry
-            and Path(entry.store_path).resolve() == canonical.resolve()
-            and canonical.is_dir()
-        ),
+        "migrated": migrated,
+        "pointers_ok": pointers_ok,
     }

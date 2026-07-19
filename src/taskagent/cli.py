@@ -1488,24 +1488,20 @@ def cmd_commit_tasks(
 
 
 def cmd_store(console: Console, args) -> None:
-    """Read-only / low-risk store data-root and registry commands (Phase 1).
-
-    Does not migrate historical data. Migration is Phase 2 (``ta store migrate``).
-    """
+    """Machine data-root / moniker / registry / migrate commands."""
     from taskagent.store_registry import (
         MachineRegistry,
         get_data_root,
         inspect_host,
+        migrate_store,
         resolve_moniker_for_host,
     )
 
     sub = getattr(args, "store_command", None)
     if not sub:
         console.print(
-            "[yellow]Usage: ta store {data-root|moniker|list|inspect|rebuild-index}[/yellow]"
-        )
-        console.print(
-            "[dim]Phase 1 is read-only foundation. Migration is not enabled yet.[/dim]"
+            "[yellow]Usage: ta store "
+            "{data-root|moniker|list|inspect|rebuild-index|migrate}[/yellow]"
         )
         return
 
@@ -1578,9 +1574,9 @@ def cmd_store(console: Console, args) -> None:
             console.print(f"[bold]Registry[/bold]:      {report['registry_entry']}")
         else:
             console.print("[bold]Registry[/bold]:      (not registered)")
-        console.print(
-            "\n[dim]No files were modified. Phase 2 will add: ta store migrate[/dim]"
-        )
+        if report.get("pointers_ok"):
+            console.print("[bold]Pointers[/bold]:      ok (.task-agent/tasks → store)")
+        console.print("\n[dim]Read-only inspect; no files were modified.[/dim]")
         return
 
     if sub == "rebuild-index":
@@ -1591,6 +1587,47 @@ def cmd_store(console: Console, args) -> None:
             f"({len(rebuilt)} store(s)).[/green]"
         )
         console.print(f"[dim]Wrote {reg.registry_path}[/dim]")
+        return
+
+    if sub == "migrate":
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        dry_run = bool(getattr(args, "dry_run", False))
+        result = migrate_store(host, dry_run=dry_run)
+        plan = result.plan
+        if getattr(args, "json", False):
+            console.print_json(data=result.to_dict())
+            if not result.success:
+                raise SystemExit(1)
+            return
+
+        console.print(f"[bold]Host[/bold]:     {plan.host_path}")
+        console.print(f"[bold]Moniker[/bold]:  {plan.moniker}")
+        console.print(f"[bold]Kind[/bold]:     {plan.kind or '—'}")
+        console.print(f"[bold]Source[/bold]:   {plan.source or '—'}")
+        console.print(f"[bold]Dest[/bold]:     {plan.destination}")
+        if plan.remotes_before:
+            console.print(f"[bold]Remotes[/bold]:  {plan.remotes_before}")
+        if plan.warnings:
+            for w in plan.warnings:
+                console.print(f"[yellow]Warning:[/yellow] {w}")
+        if plan.errors:
+            for err in plan.errors:
+                console.print(f"[red]Error:[/red] {err}")
+        console.print("\n[bold]Steps:[/bold]")
+        for s in plan.steps:
+            console.print(f"  • {s}")
+        if result.applied_steps and not dry_run:
+            console.print("\n[bold]Applied:[/bold]")
+            for s in result.applied_steps:
+                console.print(f"  ✓ {s}")
+
+        if result.success:
+            style = "green" if not dry_run else "cyan"
+            label = "Dry-run OK" if dry_run else "Success"
+            console.print(f"\n[{style}]{label}:[/{style}] {result.message}")
+        else:
+            console.print(f"\n[red]Failed:[/red] {result.message}")
+            raise SystemExit(1)
         return
 
     console.print(f"[red]Unknown store command: {sub}[/red]")
@@ -4480,6 +4517,24 @@ Usage:
     store_sub.add_parser(
         "rebuild-index",
         help="Rebuild registry.json by scanning stores/ under the data root",
+    )
+    migrate_p = store_sub.add_parser(
+        "migrate",
+        help="Move legacy .task-agent/tasks into the machine data root store",
+    )
+    migrate_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: current directory)",
+    )
+    migrate_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only; do not move data or rewrite pointers",
+    )
+    migrate_p.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
     )
 
     delete_parser = subparsers.add_parser(

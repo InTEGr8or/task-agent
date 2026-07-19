@@ -265,6 +265,9 @@ def test_inspect_host_no_side_effects(tmp_path, monkeypatch):
     host.mkdir()
     legacy = host / ".task-agent" / "tasks"
     legacy.mkdir(parents=True)
+    (legacy / "pending").mkdir()
+    (legacy / ".task-agent").mkdir()
+    (legacy / ".task-agent" / "mission.usv").write_text("Name\x1fSlug\x1f\n")
 
     monkeypatch.setenv("TA_DATA_ROOT", str(data))
     report = inspect_host(host, data_root=data)
@@ -276,3 +279,189 @@ def test_inspect_host_no_side_effects(tmp_path, monkeypatch):
     assert report["registry_entry"] is None
     # Must not create data root or registry as side effect of inspect
     assert not data.exists() or not (data / "registry.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Migration (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def _make_host_tree_store(host: Path) -> Path:
+    store = host / ".task-agent" / "tasks"
+    store.mkdir(parents=True)
+    (store / "pending").mkdir()
+    (store / "active").mkdir()
+    (store / "draft").mkdir()
+    (store / "completed").mkdir()
+    mission_dir = store / ".task-agent"
+    mission_dir.mkdir()
+    (mission_dir / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nHello\x1fhello\x1f\n", encoding="utf-8"
+    )
+    task = store / "pending" / "hello"
+    task.mkdir()
+    (task / "README.md").write_text("# Hello\n", encoding="utf-8")
+    docs = host / "docs"
+    docs.mkdir(exist_ok=True)
+    (docs / "tasks").symlink_to(store.resolve())
+    return store
+
+
+def _make_nested_git_store(host: Path, remote_url: str) -> Path:
+    import os
+
+    store = _make_host_tree_store(host)
+    subprocess.run(["git", "init"], cwd=store, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(store), "remote", "add", "origin", remote_url],
+        check=True,
+        capture_output=True,
+    )
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+    }
+    subprocess.run(
+        ["git", "-C", str(store), "add", "-A"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(store), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    return store
+
+
+def test_migrate_host_tree_dry_run_no_changes(tmp_path):
+    from taskagent.store_registry import migrate_store, plan_migrate
+
+    data = tmp_path / "data"
+    host = tmp_path / "proj"
+    host.mkdir()
+    store = _make_host_tree_store(host)
+
+    plan = plan_migrate(host, data_root=data)
+    assert plan.kind == "host_tree"
+    assert plan.errors == []
+    assert plan.source == str(store.resolve())
+
+    result = migrate_store(host, dry_run=True, data_root=data)
+    assert result.success
+    assert result.dry_run
+    assert store.is_dir()
+    assert not (data / "stores").exists() or not any((data / "stores").iterdir())
+
+
+def test_migrate_host_tree_apply(tmp_path):
+    from taskagent.store_registry import (
+        MachineRegistry,
+        inspect_host,
+        migrate_store,
+    )
+
+    data = tmp_path / "data"
+    host = tmp_path / "proj"
+    host.mkdir()
+    # No git remote → path moniker
+    store = _make_host_tree_store(host)
+    mission_before = (store / ".task-agent" / "mission.usv").read_text(encoding="utf-8")
+
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert result.success, result.message
+
+    dest = Path(result.plan.destination)
+    assert dest.is_dir()
+    assert (dest / ".task-agent" / "mission.usv").read_text(
+        encoding="utf-8"
+    ) == mission_before
+    assert (dest / "pending" / "hello" / "README.md").is_file()
+    assert (dest / ".git").exists()  # host_tree gets its own repo
+    # No origin invented
+    rem = subprocess.run(
+        ["git", "-C", str(dest), "remote"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert rem.stdout.strip() == ""
+
+    eject = host / ".task-agent" / "tasks"
+    assert eject.is_symlink()
+    assert eject.resolve() == dest.resolve()
+    docs = host / "docs" / "tasks"
+    assert docs.is_symlink()
+    assert docs.resolve() == dest.resolve()
+
+    env_text = (host / ".env").read_text(encoding="utf-8")
+    assert f"TA_EJECTED_TASKS_PATH={dest.resolve()}" in env_text
+
+    reg = MachineRegistry(data)
+    entry = reg.get(result.plan.moniker)
+    assert entry is not None
+    assert Path(entry.store_path).resolve() == dest.resolve()
+
+    report = inspect_host(host, data_root=data)
+    assert report["migrated"] is True
+    assert report["pointers_ok"] is True
+
+    # Idempotent second run
+    result2 = migrate_store(host, dry_run=False, data_root=data)
+    assert result2.success
+    assert result2.plan.already_migrated
+
+
+def test_migrate_nested_git_preserves_remote(tmp_path):
+    from taskagent.store_registry import migrate_store
+
+    data = tmp_path / "data"
+    host = tmp_path / "proj"
+    host.mkdir()
+    remote = "git@github.com:acme/proj-tasks.git"
+    _make_nested_git_store(host, remote)
+
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert result.success, result.message
+    assert result.plan.kind == "nested_git"
+    dest = Path(result.plan.destination)
+    assert (dest / ".git").exists()
+    url = subprocess.run(
+        ["git", "-C", str(dest), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert url == remote
+
+
+def test_migrate_refuses_overwrite_existing_dest(tmp_path):
+    from taskagent.store_registry import migrate_store
+
+    data = tmp_path / "data"
+    host = tmp_path / "proj"
+    host.mkdir()
+    _make_host_tree_store(host)
+
+    # Pre-create conflicting destination with different content
+    # moniker from path is local/...
+    plan_dest_parent = data / "stores"
+    plan_dest_parent.mkdir(parents=True)
+    # Run plan first to learn moniker
+    from taskagent.store_registry import plan_migrate
+
+    plan = plan_migrate(host, data_root=data)
+    dest = Path(plan.destination)
+    dest.mkdir(parents=True)
+    (dest / "pending").mkdir()
+    (dest / "README_CONFLICT").write_text("nope")
+
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert not result.success
+    assert "already exists" in result.message.lower()
+    # Source untouched
+    assert (host / ".task-agent" / "tasks" / ".task-agent" / "mission.usv").is_file()
