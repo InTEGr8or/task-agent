@@ -1088,6 +1088,162 @@ def suggest_store_remotes(
     return suggestions
 
 
+class RepoNotFoundError(LookupError):
+    """No registered store matched the query fragment."""
+
+
+class AmbiguousRepoMatchError(LookupError):
+    """Multiple stores matched the query equally well."""
+
+    def __init__(self, query: str, candidates: List["ResolvedStore"]):
+        self.query = query
+        self.candidates = candidates
+        monikers = ", ".join(c.moniker for c in candidates)
+        super().__init__(f"Ambiguous repo query {query!r}: {monikers}")
+
+
+@dataclass
+class ResolvedStore:
+    """A registry/store hit from fuzzy moniker or host-path matching."""
+
+    moniker: str
+    store_path: Path
+    host_paths: List[str] = field(default_factory=list)
+    remote: Optional[str] = None
+    score: int = 0
+    reason: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "moniker": self.moniker,
+            "store_path": str(self.store_path),
+            "host_paths": list(self.host_paths),
+            "remote": self.remote,
+            "score": self.score,
+            "reason": self.reason,
+        }
+
+
+def _score_repo_query(
+    query: str, moniker: str, host_paths: List[str]
+) -> tuple[int, str]:
+    """Return (score, reason) for how well ``query`` matches this store.
+
+    Higher is better. Zero means no match.
+    """
+    q = query.strip().lower()
+    if not q:
+        return 0, ""
+
+    m = moniker.lower()
+    basename = m.rsplit("/", 1)[-1]
+
+    if m == q:
+        return 100, "exact moniker"
+    if basename == q:
+        return 95, "exact moniker basename"
+    if m.startswith(q) or basename.startswith(q):
+        return 85, "moniker prefix"
+    if q in m:
+        return 75, "moniker substring"
+
+    for hp in host_paths:
+        try:
+            p = Path(hp)
+            name = p.name.lower()
+            full = str(p).lower()
+        except Exception:
+            continue
+        if name == q:
+            return 65, f"host basename {p.name}"
+        if q in name or q in full:
+            return 55, f"host path {hp}"
+
+    return 0, ""
+
+
+def _effective_store_path(entry: StoreEntry) -> Optional[Path]:
+    """Resolve a usable store directory for a registry entry (data-root or legacy)."""
+    path = Path(entry.store_path).expanduser()
+    try:
+        if path.is_dir() and looks_like_store(path):
+            return path.resolve()
+    except OSError:
+        pass
+
+    for hp in entry.host_paths:
+        try:
+            host = Path(hp).expanduser()
+            legacy = detect_legacy_store(host)
+            if legacy is not None and looks_like_store(legacy):
+                return legacy.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def fuzzy_match_repos(
+    query: str, data_root: Optional[Path] = None
+) -> List[ResolvedStore]:
+    """Rank registered stores by moniker/host-path fuzzy match (zoxide-style).
+
+    Returns matches sorted by score descending (score > 0 only).
+    """
+    reg = MachineRegistry(data_root)
+    hits: List[ResolvedStore] = []
+    for entry in reg.list_entries():
+        score, reason = _score_repo_query(query, entry.moniker, entry.host_paths)
+        if score <= 0:
+            continue
+        store_path = _effective_store_path(entry)
+        if store_path is None:
+            continue
+        hits.append(
+            ResolvedStore(
+                moniker=entry.moniker,
+                store_path=store_path,
+                host_paths=list(entry.host_paths),
+                remote=entry.remote,
+                score=score,
+                reason=reason,
+            )
+        )
+    hits.sort(key=lambda h: (-h.score, h.moniker))
+    return hits
+
+
+def resolve_repo_query(query: str, data_root: Optional[Path] = None) -> ResolvedStore:
+    """Resolve a zoxide-like fragment to exactly one registered store.
+
+    Raises:
+        RepoNotFoundError: no matches
+        AmbiguousRepoMatchError: multiple top-scoring matches
+    """
+    q = (query or "").strip()
+    if not q:
+        raise RepoNotFoundError("Empty repo query")
+
+    hits = fuzzy_match_repos(q, data_root=data_root)
+    if not hits:
+        raise RepoNotFoundError(f"No registered store matches {q!r}")
+
+    best = hits[0].score
+    top = [h for h in hits if h.score == best]
+    if len(top) > 1:
+        raise AmbiguousRepoMatchError(q, top)
+    return top[0]
+
+
+def manager_for_repo_query(
+    query: str, data_root: Optional[Path] = None
+) -> tuple[Any, ResolvedStore]:
+    """Return ``(TaskAgent, ResolvedStore)`` for a moniker/host fragment."""
+    from taskagent.manager import TaskAgent
+
+    resolved = resolve_repo_query(query, data_root=data_root)
+    return TaskAgent(config_dir=str(resolved.store_path)), resolved
+
+
 def set_store_remote(
     store_path: Path,
     url: str,

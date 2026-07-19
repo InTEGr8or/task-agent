@@ -1,7 +1,6 @@
 import os
 import subprocess
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
@@ -15,6 +14,26 @@ mcp = FastMCP("TaskAgent")
 def get_manager() -> TaskAgent:
     """Helper to initialize the manager based on current environment."""
     return discover()
+
+
+def get_manager_for_repo(repo: Optional[str] = None) -> TaskAgent:
+    """Return the current manager, or a fuzzy-matched registered store when ``repo`` is set."""
+    if not repo:
+        return get_manager()
+    from taskagent.store_registry import (
+        AmbiguousRepoMatchError,
+        RepoNotFoundError,
+        manager_for_repo_query,
+    )
+
+    try:
+        manager, _resolved = manager_for_repo_query(repo)
+        return manager
+    except AmbiguousRepoMatchError as e:
+        monikers = ", ".join(c.moniker for c in e.candidates)
+        raise ValueError(f"Ambiguous repo {repo!r}: {monikers}") from e
+    except RepoNotFoundError as e:
+        raise ValueError(str(e)) from e
 
 
 def _parse_name_list(names: str) -> list[str]:
@@ -110,12 +129,18 @@ def get_strategy() -> str:
 
 
 @mcp.tool()
-def list_tasks() -> str:
+def list_tasks(repo: Optional[str] = None) -> str:
     """List all tasks in the current project's mission queue.
 
     Tasks may have parent relationships (sub-task of) or ordering constraints (blocked by).
+
+    Args:
+        repo: Optional moniker/host fragment for another registered store.
     """
-    manager = get_manager()
+    try:
+        manager = get_manager_for_repo(repo)
+    except ValueError as e:
+        return f"Error resolving repo: {e}"
     issues = manager.sync_mission()
     if not issues:
         res = "No tasks found in the queue."
@@ -163,6 +188,7 @@ def create_task(
     draft: bool = False,
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
+    repo: Optional[str] = None,
 ) -> str:
     """Create a new task in the mission queue.
 
@@ -179,6 +205,8 @@ def create_task(
             Example: "setup-infra, configure-db" means this task is blocked by
             both "setup-infra" and "configure-db" needing to be completed first.
         subtask_of: Slug of the parent task this task is a subtask of.
+        repo: Optional moniker/host fragment for another registered store
+            (zoxide-style fuzzy match). Omit to use the current project.
 
     Examples:
         # Create a task blocked by two others
@@ -194,8 +222,18 @@ def create_task(
             completion_criteria="Document comparing at least 3 approaches",
             draft=True
         )
+
+        # Create in another registered project's store
+        create_task(
+            title="Add stations inspector",
+            completion_criteria="CLI ships with tests",
+            repo="stations",
+        )
     """
-    manager = get_manager()
+    try:
+        manager = get_manager_for_repo(repo)
+    except ValueError as e:
+        return f"Error resolving repo: {e}"
     try:
         issue = manager.create_issue(
             title,
@@ -205,7 +243,8 @@ def create_task(
             subtask_of=subtask_of,
             completion_criteria=completion_criteria,
         )
-        return f"Created task: {issue.slug} (Status: {issue.status})"
+        where = f" in {manager.issues_root}" if repo else ""
+        return f"Created task: {issue.slug} (Status: {issue.status}){where}"
     except Exception as e:
         return f"Error creating task: {e}"
 
@@ -558,6 +597,17 @@ def commit_repo(message: str = "", push: bool = False) -> str:
             shell=(os.name == "nt"),
         )
         if push:
+            remotes = subprocess.run(
+                ["git", "-C", str(git_root), "remote"],
+                capture_output=True,
+                text=True,
+                shell=(os.name == "nt"),
+            )
+            if not (remotes.stdout or "").strip():
+                return (
+                    f"Committed: {message} "
+                    "(no remote on store; skipped push — ta store remote set <url>)"
+                )
             manager.push_mission_repo()
         return f"Committed: {message}"
     except subprocess.CalledProcessError as e:
@@ -568,30 +618,27 @@ def commit_repo(message: str = "", push: bool = False) -> str:
 
 @mcp.tool()
 def commit_tasks(message: str = "", push: bool = False) -> str:
-    """Commit changes to the task-agent's own tasks directory.
+    """Commit changes to the task-agent project's task store.
 
-    Always targets the task-agent project's ``docs/tasks/`` regardless of
-    the current working directory.
+    Always targets the task-agent project via discovery (centralized data-root
+    store when migrated), regardless of the current working directory.
 
     Args:
         message: Optional commit message. Auto-generated if omitted.
         push: Whether to push after committing.
     """
     project_root = get_task_agent_project_root()
-    tasks_dir = project_root / "docs" / "tasks"
+    try:
+        manager = discover(project_root)
+    except Exception as e:
+        return f"Could not discover task-agent store: {e}"
 
-    if not tasks_dir.exists():
+    tasks_dir = manager.issues_root
+    git_root = manager.mission_root
+    if not tasks_dir or not tasks_dir.exists():
         return "Task-agent tasks directory not found."
-
-    git_result = subprocess.run(
-        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        shell=(os.name == "nt"),
-    )
-    if git_result.returncode != 0:
-        return "No git repository found for task-agent project."
-    git_root = Path(git_result.stdout.strip())
+    if not git_root:
+        return "No git repository found for task-agent task store."
 
     if not message:
         message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
@@ -622,13 +669,18 @@ def commit_tasks(message: str = "", push: bool = False) -> str:
             shell=(os.name == "nt"),
         )
         if push:
-            subprocess.run(
-                ["git", "-C", str(git_root), "push"],
-                check=True,
+            remotes = subprocess.run(
+                ["git", "-C", str(git_root), "remote"],
                 capture_output=True,
                 text=True,
                 shell=(os.name == "nt"),
             )
+            if not (remotes.stdout or "").strip():
+                return (
+                    f"Committed: {message} "
+                    "(no remote on store; skipped push — ta store remote set <url>)"
+                )
+            manager.push_mission_repo()
         return f"Committed: {message}"
     except subprocess.CalledProcessError as e:
         return f"Error: {e.stderr}"
@@ -637,6 +689,7 @@ def commit_tasks(message: str = "", push: bool = False) -> str:
 @mcp.tool()
 def create_tasks(
     tasks: list[dict],
+    repo: Optional[str] = None,
 ) -> str:
     """Create multiple new tasks in the mission queue at once.
 
@@ -650,11 +703,12 @@ def create_tasks(
             - 'blocked_by' (str, optional): Comma-separated list of existing task slugs that block this task.
             - 'subtask_of' (str, optional): Slug of the parent task this task is a subtask of.
             - 'as_dir' (bool, optional): Create as folder directory. Default is True.
+            - 'repo' (str, optional): Per-task store moniker fragment; overrides the top-level ``repo``.
+        repo: Optional default moniker/host fragment for all tasks (zoxide-style).
 
     Returns:
         A summary report of created task slugs and any errors.
     """
-    manager = get_manager()
     created = []
     errors = []
 
@@ -675,6 +729,13 @@ def create_tasks(
         blocked_by = t.get("blocked_by")
         subtask_of = t.get("subtask_of")
         as_dir = t.get("as_dir", True)
+        task_repo = t.get("repo", repo)
+
+        try:
+            manager = get_manager_for_repo(task_repo)
+        except ValueError as e:
+            errors.append(f"Error resolving repo for '{title}': {e}")
+            continue
 
         try:
             issue = manager.create_issue(
@@ -686,7 +747,8 @@ def create_tasks(
                 blocked_by=blocked_by,
                 subtask_of=subtask_of,
             )
-            created.append(f"{issue.slug} (Status: {issue.status})")
+            suffix = f" @ {manager.issues_root}" if task_repo else ""
+            created.append(f"{issue.slug} (Status: {issue.status}){suffix}")
         except Exception as e:
             errors.append(f"Error creating task '{title}': {e}")
 

@@ -1386,14 +1386,26 @@ def cmd_commit(
 
         # Push if requested
         if should_push:
-            if manager.mission_root:
-                console.print("[blue]Pushing to remote...[/blue]")
-                manager.push_mission_repo()
-                console.print("[bold green]Successfully pushed.[/bold green]")
-            else:
+            if not manager.mission_root:
                 console.print(
                     "[yellow]No mission repository configured, skipping push.[/yellow]"
                 )
+            else:
+                remotes = subprocess.run(
+                    ["git", "-C", str(manager.mission_root), "remote"],
+                    capture_output=True,
+                    text=True,
+                    shell=(os.name == "nt"),
+                )
+                if not (remotes.stdout or "").strip():
+                    console.print(
+                        "[yellow]No git remote on mission store; commit kept local. "
+                        "Set one with [bold]ta store remote set <url>[/bold].[/yellow]"
+                    )
+                else:
+                    console.print("[blue]Pushing to remote...[/blue]")
+                    manager.push_mission_repo()
+                    console.print("[bold green]Successfully pushed.[/bold green]")
 
     except subprocess.CalledProcessError as e:
         console.print(f"[red]Error: {e.stderr}[/red]")
@@ -1406,85 +1418,81 @@ def cmd_commit_tasks(
     message: Optional[str] = None,
     should_push: bool = True,
 ):
-    """Commit and optionally push changes in the task-agent's own tasks/ directory.
+    """Commit and optionally push changes in the task-agent project's task store.
 
-    Always targets the task-agent project's ``docs/tasks/`` regardless of the
-    current working directory.
+    Always targets the task-agent project (via ``discover`` on its root), so
+    centralized data-root stores are committed in the store's own git repo —
+    not the host tree that may only hold a symlink.
     """
-    import subprocess
-    from datetime import datetime
-
     project_root = get_task_agent_project_root()
-    tasks_dir = project_root / "docs" / "tasks"
-
-    if not tasks_dir.exists():
-        console.print("[red]Task-agent tasks directory not found.[/red]")
+    try:
+        manager = discover(project_root)
+    except Exception as e:
+        console.print(f"[red]Could not discover task-agent store: {e}[/red]")
         return
-
-    git_result = subprocess.run(
-        ["git", "-C", str(project_root), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        shell=(os.name == "nt"),
-    )
-    if git_result.returncode != 0:
-        console.print("[red]No git repository found for task-agent project.[/red]")
-        return
-
-    git_root = Path(git_result.stdout.strip())
-
-    if not message:
-        message = f"Update tasks - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
     console.print(
-        f"[blue]Committing changes in {tasks_dir} (task-agent own tasks)...[/blue]"
+        f"[dim]task-agent store: {manager.issues_root} "
+        f"(mission git: {manager.mission_root or '—'})[/dim]"
     )
+    cmd_commit(console, manager, message=message, should_push=should_push)
 
-    try:
-        resolved_tasks_dir = tasks_dir.resolve()
-        subprocess.run(
-            ["git", "-C", str(git_root), "add", str(resolved_tasks_dir / ".")],
-            check=True,
-            capture_output=True,
-            text=True,
-            shell=(os.name == "nt"),
+
+def cmd_store_help(console: Console) -> None:
+    """Show themed help for the full ``ta store`` command group."""
+    console.print(
+        Panel(
+            "[bold]ta store[/bold] — machine-level task store layout, registry, "
+            "migration, and remotes",
+            box=theme.panel_box,
         )
+    )
+    table = Table(
+        box=theme.table_box,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+        show_header=True,
+    )
+    table.add_column("Command", style="cyan", no_wrap=True)
+    table.add_column("Description", style="white")
 
-        result = subprocess.run(
-            ["git", "-C", str(git_root), "diff", "--cached", "--quiet"],
-            capture_output=True,
-            text=True,
-            shell=(os.name == "nt"),
-        )
+    commands = [
+        ("data-root", "Print the machine task-agent data root path"),
+        ("moniker [path]", "Print the moniker for a host path (default: cwd)"),
+        ("list", "List registered machine task stores"),
+        (
+            "inspect [path]",
+            "Read-only inspect: moniker, legacy store, migration status",
+        ),
+        ("inspect --json", "Same as inspect, machine-readable JSON"),
+        (
+            "rebuild-index",
+            "Rebuild registry.json by scanning stores/ under the data root",
+        ),
+        ("migrate [path]", "Move legacy .task-agent/tasks into the machine data root"),
+        ("migrate --dry-run", "Plan a migrate without moving data"),
+        ("remote show", "List git remotes on the current project's task store"),
+        (
+            "remote suggest",
+            "Suggest remotes via provider plugins (GitHub sibling/wiki)",
+        ),
+        (
+            "remote set <url>",
+            "Set the store's git remote URL (local only; no host create)",
+        ),
+    ]
+    for cmd, desc in commands:
+        table.add_row(cmd, desc)
 
-        if result.returncode == 0:
-            console.print("[yellow]No changes to commit in tasks/ directory.[/yellow]")
-            return
-
-        subprocess.run(
-            ["git", "-C", str(git_root), "commit", "--no-verify", "-m", message],
-            check=True,
-            capture_output=True,
-            text=True,
-            shell=(os.name == "nt"),
-        )
-        console.print(f"[bold green]Committed: {message}[/bold green]")
-
-        if should_push:
-            console.print("[blue]Pushing to remote...[/blue]")
-            subprocess.run(
-                ["git", "-C", str(git_root), "push"],
-                check=True,
-                capture_output=True,
-                text=True,
-                shell=(os.name == "nt"),
-            )
-            console.print("[bold green]Successfully pushed.[/bold green]")
-
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Error: {e.stderr}[/red]")
-    except Exception as e:
-        console.print(f"[red]Unexpected error: {e}[/red]")
+    console.print(table)
+    console.print(
+        "\n[dim]Run [bold]ta store <command> --help[/bold] for detailed options.[/dim]"
+    )
+    console.print(
+        "[dim]Data root default: "
+        "[bold]~/.local/share/task-agent[/bold] "
+        "(override with [bold]TA_DATA_ROOT[/bold]).[/dim]"
+    )
 
 
 def cmd_store(console: Console, args) -> None:
@@ -1499,10 +1507,7 @@ def cmd_store(console: Console, args) -> None:
 
     sub = getattr(args, "store_command", None)
     if not sub:
-        console.print(
-            "[yellow]Usage: ta store "
-            "{data-root|moniker|list|inspect|rebuild-index|migrate|remote}[/yellow]"
-        )
+        cmd_store_help(console)
         return
 
     if sub == "data-root":
@@ -1958,8 +1963,41 @@ def cmd_new(
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
     bulk: Optional[str] = None,
+    repo: Optional[str] = None,
 ):
-    """Create a new issue."""
+    """Create a new issue.
+
+    When ``repo`` is set, resolve a registered store by moniker/host fuzzy match
+    and create the task there without touching the current project's mission.
+    """
+    if repo:
+        from taskagent.store_registry import (
+            AmbiguousRepoMatchError,
+            RepoNotFoundError,
+            manager_for_repo_query,
+        )
+
+        try:
+            manager, resolved = manager_for_repo_query(repo)
+        except AmbiguousRepoMatchError as e:
+            console.print(f"[red]Ambiguous --repo {repo!r}:[/red]")
+            for c in e.candidates:
+                console.print(
+                    f"  [cyan]{c.moniker}[/cyan]  {c.store_path}  [dim]({c.reason})[/dim]"
+                )
+            sys.exit(1)
+        except RepoNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            console.print(
+                "[dim]Register/migrate a project first: "
+                "[bold]ta store migrate[/bold] / [bold]ta store list[/bold].[/dim]"
+            )
+            sys.exit(1)
+        console.print(
+            f"[blue]Target store:[/blue] [cyan]{resolved.moniker}[/cyan] "
+            f"[dim]{resolved.store_path}[/dim] ({resolved.reason})"
+        )
+
     if bulk:
         try:
             if bulk == "-":
@@ -2147,8 +2185,37 @@ def cmd_list(
     console: Console,
     manager: TaskAgent,
     output_format: str = "table",
+    repo: Optional[str] = None,
 ):
-    """List all issues in mission.usv."""
+    """List all issues in mission.usv.
+
+    When ``repo`` is set, list the fuzzy-matched registered store instead.
+    """
+    if repo:
+        from taskagent.store_registry import (
+            AmbiguousRepoMatchError,
+            RepoNotFoundError,
+            manager_for_repo_query,
+        )
+
+        try:
+            manager, resolved = manager_for_repo_query(repo)
+        except AmbiguousRepoMatchError as e:
+            console.print(f"[red]Ambiguous --repo {repo!r}:[/red]")
+            for c in e.candidates:
+                console.print(
+                    f"  [cyan]{c.moniker}[/cyan]  {c.store_path}  [dim]({c.reason})[/dim]"
+                )
+            sys.exit(1)
+        except RepoNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+        if output_format != "json":
+            console.print(
+                f"[blue]Listing store:[/blue] [cyan]{resolved.moniker}[/cyan] "
+                f"[dim]{resolved.store_path}[/dim]"
+            )
+
     if output_format == "table":
         maybe_show_strategy(console, manager)
     issues = manager.sync_mission()
@@ -4312,6 +4379,10 @@ def main():
     subparsers.add_parser("tree", help="Display task hierarchy as a dependency tree")
     list_parser.add_argument("--json", action="store_true")
     list_parser.add_argument("--text", action="store_true")
+    list_parser.add_argument(
+        "--repo",
+        help="Fuzzy moniker/host match for another registered store (zoxide-style)",
+    )
     history_parser = subparsers.add_parser("history")
     history_parser.add_argument(
         "-n", "--limit", type=int, default=20, help="Number of items to show"
@@ -4731,6 +4802,13 @@ Usage:
         "--bulk",
         help="Path to a JSON file containing an array of task definitions, or '-' to read JSON from stdin.",
     )
+    new_parser.add_argument(
+        "--repo",
+        help=(
+            "Create in another registered store: fuzzy moniker or host path "
+            "(e.g. 'stations', 'InTEGr8or/task-agent'). Does not touch the current mission."
+        ),
+    )
     version_parser = subparsers.add_parser("version")
     v_sub = version_parser.add_subparsers(dest="version_command")
     p_v = v_sub.add_parser("promote")
@@ -4785,7 +4863,12 @@ Usage:
             fmt = "json"
         elif args.text:
             fmt = "text"
-        cmd_list(console, manager, fmt)
+        cmd_list(
+            console,
+            manager,
+            fmt,
+            repo=getattr(args, "repo", None),
+        )
     elif args.command == "tree":
         cmd_tree(console, manager)
     elif args.command == "history":
@@ -4893,6 +4976,7 @@ Usage:
             blocked_by=args.blocked_by,
             subtask_of=args.subtask_of,
             bulk=args.bulk,
+            repo=getattr(args, "repo", None),
         )
     elif args.command == "worktree":
         cmd_worktree(console, manager, args)

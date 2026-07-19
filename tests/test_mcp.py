@@ -167,17 +167,27 @@ def test_mcp_commit_repo_success(mock_manager, tmp_path):
         assert "Committed: test commit" in result
 
 
-def test_mcp_commit_tasks_no_git_root():
-    with patch("taskagent.mcp.subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=1)
+def test_mcp_commit_tasks_no_git_root(tmp_path):
+    mock_mgr = MagicMock()
+    mock_mgr.issues_root = tmp_path / "tasks"
+    mock_mgr.issues_root.mkdir()
+    mock_mgr.mission_root = None
+    with patch("taskagent.mcp.discover", return_value=mock_mgr):
         result = mcp.commit_tasks("msg")
-        assert result == "No git repository found for task-agent project."
+        assert result == "No git repository found for task-agent task store."
 
 
-def test_mcp_commit_tasks_success():
-    with patch("taskagent.mcp.subprocess.run") as mock_run:
+def test_mcp_commit_tasks_success(tmp_path):
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    mock_mgr = MagicMock()
+    mock_mgr.issues_root = tasks_dir
+    mock_mgr.mission_root = tmp_path
+    with (
+        patch("taskagent.mcp.discover", return_value=mock_mgr),
+        patch("taskagent.mcp.subprocess.run") as mock_run,
+    ):
         mock_run.side_effect = [
-            MagicMock(returncode=0, stdout="/fake/root\n"),  # rev-parse
             MagicMock(),  # git add
             MagicMock(returncode=1),  # diff shows changes
             MagicMock(),  # git commit
