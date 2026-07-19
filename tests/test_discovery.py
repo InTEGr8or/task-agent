@@ -178,6 +178,10 @@ def test_discover_relative_ejected_path_resolved_relative_to_repo_root(
     monkeypatch.delenv("TA_EJECT_TASKS", raising=False)
     monkeypatch.delenv("TA_EJECTED_TASKS_PATH", raising=False)
     monkeypatch.delenv("TA_EJECTED_ISSUES_PATH", raising=False)
+    monkeypatch.delenv("TA_STORE_MONIKER", raising=False)
+    # Isolate from the machine data root so Phase 3 centralization does not win
+    data = tmp_path / "ta-data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
 
     root = tmp_path / "project"
     root.mkdir()
@@ -216,3 +220,156 @@ def test_discover_relative_ejected_path_resolved_relative_to_repo_root(
     tasks_link = root / "docs" / "tasks"
     assert tasks_link.is_symlink()
     assert tasks_link.resolve() == expected_eject_path.resolve()
+
+
+def _seed_central_store(store: Path, moniker: str) -> None:
+    """Create a minimal station store under the data root."""
+    store.mkdir(parents=True)
+    (store / "pending").mkdir()
+    (store / "active").mkdir()
+    mission = store / ".task-agent"
+    mission.mkdir()
+    (mission / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nHi\x1fhi\x1f\n", encoding="utf-8"
+    )
+    from taskagent.store_registry import write_store_meta
+
+    write_store_meta(store, moniker=moniker)
+    # registry filled by caller with correct data_root
+
+
+def test_discover_prefers_centralized_store_over_legacy_docs(tmp_path, monkeypatch):
+    """Phase 3: existing data-root store wins over in-tree docs/tasks."""
+    data = tmp_path / "ta-data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
+    monkeypatch.delenv("TA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("TA_STORE_MONIKER", raising=False)
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+    # Fake origin so moniker is stable
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:acme/app.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Legacy in-tree store (should be ignored when centralized exists)
+    legacy = root / "docs" / "tasks"
+    legacy.mkdir(parents=True)
+    (legacy / "pending").mkdir()
+    (legacy / "LEGACY_ONLY").write_text("legacy")
+
+    moniker = "acme/app"
+    from taskagent.store_registry import (
+        MachineRegistry,
+        StoreEntry,
+        store_path_for_moniker,
+        write_store_meta,
+    )
+
+    central = store_path_for_moniker(moniker, data)
+    central.mkdir(parents=True)
+    (central / "pending").mkdir()
+    (central / "active").mkdir()
+    (central / ".task-agent").mkdir()
+    (central / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nCentral\x1fcentral\x1f\n", encoding="utf-8"
+    )
+    (central / "CENTRAL_ONLY").write_text("central")
+    write_store_meta(central, moniker=moniker)
+    MachineRegistry(data).upsert(
+        StoreEntry(
+            moniker=moniker,
+            store_path=str(central),
+            host_paths=[str(root)],
+        )
+    )
+
+    manager = discover(start_path=root)
+    assert manager.issues_root.resolve() == central.resolve()
+    assert (manager.issues_root / "CENTRAL_ONLY").is_file()
+    assert not (manager.issues_root / "LEGACY_ONLY").exists()
+
+
+def test_discover_legacy_eject_when_not_migrated(tmp_path, monkeypatch):
+    """Unmigrated projects still use legacy eject / docs/tasks."""
+    data = tmp_path / "ta-data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
+    monkeypatch.delenv("TA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("TA_STORE_MONIKER", raising=False)
+    monkeypatch.delenv("TA_EJECT_TASKS", raising=False)
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:acme/other.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    tasks = root / "docs" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / "pending").mkdir()
+    (tasks / ".task-agent").mkdir()
+    (tasks / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nL\x1fl\x1f\n", encoding="utf-8"
+    )
+
+    manager = discover(start_path=root)
+    # Should not invent a centralized path; stay with host store (possibly via eject)
+    assert "LEGACY" not in str(manager.issues_root)
+    assert (
+        manager.issues_root.resolve().is_relative_to(root.resolve())
+        or (root / "docs" / "tasks").resolve() == manager.issues_root.resolve()
+    )
+    # No store registered under acme/other
+    from taskagent.store_registry import store_path_for_moniker
+
+    central = store_path_for_moniker("acme/other", data)
+    assert not central.exists() or not any(central.iterdir())
+
+
+def test_discover_ta_store_moniker_env(tmp_path, monkeypatch):
+    data = tmp_path / "ta-data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
+    moniker = "explicit/from-env"
+    from taskagent.store_registry import (
+        MachineRegistry,
+        StoreEntry,
+        store_path_for_moniker,
+        write_store_meta,
+    )
+
+    central = store_path_for_moniker(moniker, data)
+    central.mkdir(parents=True)
+    (central / "pending").mkdir()
+    (central / ".task-agent").mkdir()
+    (central / ".task-agent" / "mission.usv").write_text("x\x1fx\x1f\n")
+    write_store_meta(central, moniker=moniker)
+    MachineRegistry(data).upsert(
+        StoreEntry(moniker=moniker, store_path=str(central), host_paths=[])
+    )
+    monkeypatch.setenv("TA_STORE_MONIKER", moniker)
+
+    # Even without being inside a project, moniker env should resolve
+    manager = discover(start_path=tmp_path / "nowhere")
+    assert manager.issues_root.resolve() == central.resolve()

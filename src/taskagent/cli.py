@@ -1634,11 +1634,22 @@ def cmd_store(console: Console, args) -> None:
 
 
 def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
-    """Automate the move of docs/tasks to a separate repository."""
+    """Deprecated: move docs/tasks to a separate in-repo eject location.
+
+    Prefer ``ta store migrate`` to centralize under the machine data root.
+    This command remains for compatibility and still ejects into
+    ``.task-agent/tasks`` (then you can migrate).
+    """
+    console.print(
+        "[yellow]Deprecated:[/yellow] [bold]ta eject-mission[/bold] is superseded by "
+        "[bold]ta store migrate[/bold] (machine data root).\n"
+        "[dim]Continuing with legacy in-repo eject for compatibility…[/dim]\n"
+    )
     source_dir = manager.issues_root
     if source_dir.is_symlink():
         console.print(
-            "[yellow]docs/tasks is already a symlink. Ejection skipped.[/yellow]"
+            "[yellow]docs/tasks is already a symlink. "
+            "If it points at a legacy path, run [bold]ta store migrate[/bold].[/yellow]"
         )
         return
 
@@ -4134,10 +4145,13 @@ def display_overview(console: Console, manager: TaskAgent):
         ("plan", "View or edit the project plan"),
         ("push", "Push the mission repository to origin"),
         ("commit", "Commit pending changes in the active task directory"),
-        ("eject-mission", "Move mission queue to a separate repository"),
+        (
+            "eject-mission",
+            "Deprecated: legacy in-repo eject (prefer ta store migrate)",
+        ),
         (
             "store",
-            "Machine data root / moniker / registry (Phase 1: read-only)",
+            "Machine data root / moniker / registry / migrate",
         ),
         ("", ""),  # Spacer
         ("active", "Mark a task as active without starting a worktree"),
@@ -4474,9 +4488,10 @@ Usage:
         "--push", action="store_true", help="Push mission repo after merge"
     )
 
-    # eject-mission
+    # eject-mission (deprecated — prefer ta store migrate)
     eject_parser = subparsers.add_parser(
-        "eject-mission", help="Move mission queue to a separate repository"
+        "eject-mission",
+        help="Deprecated: legacy eject into .task-agent/tasks (prefer ta store migrate)",
     )
     eject_parser.add_argument(
         "--public", action="store_true", help="Make the new mission repo public"

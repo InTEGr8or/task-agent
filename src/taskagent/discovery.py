@@ -24,11 +24,106 @@ def _update_env_var(env_path: Path, key: str, value: str):
     env_path.write_text("\n".join(lines) + "\n")
 
 
+def _repo_root_for(path: Path) -> Path:
+    """Map a path to its main repo root (unwrap task-agent .gwt worktrees)."""
+    if path.parent.name == ".gwt":
+        return path.parent.parent
+    return path
+
+
+def _heal_docs_tasks_symlink(root: Path, target: Path) -> None:
+    """Ensure docs/tasks (and docks/tasks if present) point at target.
+
+    Non-destructive: only creates/replaces missing, empty, or symlink links.
+    Does not merge a populated real directory.
+    """
+    target_abs = target.resolve()
+    for rel in (Path("docs") / "tasks", Path("docks") / "tasks"):
+        link = root / rel
+        parent = link.parent
+        if not parent.is_dir():
+            if parent.exists() or parent.is_symlink():
+                continue
+            # Only auto-create docs/ when healing (not docks)
+            if rel.parts[0] == "docs":
+                try:
+                    parent.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    continue
+            else:
+                continue
+
+        try:
+            if link.is_symlink() and link.resolve() == target_abs:
+                continue
+            if link.is_symlink():
+                link.unlink()
+            elif link.is_dir():
+                if any(link.iterdir()):
+                    continue  # leave populated trees alone
+                link.rmdir()
+            elif link.exists():
+                continue
+            os.symlink(str(target_abs), str(link))
+        except OSError:
+            pass
+
+
+def _resolve_centralized_store(
+    host_path: Path, moniker_override: Optional[str] = None
+) -> Optional[Path]:
+    """Return an existing machine data-root store for this host, if any.
+
+    Resolution:
+    1. Explicit moniker override (env / config)
+    2. Registry entry by moniker or host path
+    3. Canonical path under data root for derived moniker
+    """
+    from taskagent.store_registry import (
+        MachineRegistry,
+        looks_like_store,
+        resolve_moniker_for_host,
+        store_path_for_moniker,
+    )
+
+    host = _repo_root_for(host_path.expanduser().resolve())
+    moniker = moniker_override
+    if not moniker:
+        moniker, _ = resolve_moniker_for_host(host)
+
+    reg = MachineRegistry()
+    entry = reg.get(moniker) if moniker else None
+    if entry is None:
+        entry = reg.find_by_host_path(host)
+
+    candidates = []
+    if entry:
+        candidates.append(Path(entry.store_path))
+    if moniker:
+        candidates.append(store_path_for_moniker(moniker))
+
+    seen = set()
+    for cand in candidates:
+        try:
+            resolved = cand.expanduser().resolve()
+        except OSError:
+            continue
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.is_dir() and looks_like_store(resolved):
+            return resolved
+    return None
+
+
 def _handle_ejected_symlink(current_root: Path):
     """
     Checks for TA_EJECT_ISSUES and TA_EJECT_TASKS and ensures docs symlink is correct.
     This 'auto-heals' links in new worktrees or clones.
     Also migrates old sibling-directory ejections to .task-agent/tasks/.
+
+    Prefer centralized data-root store when one already exists for this host
+    (Phase 3); otherwise keep legacy eject defaults for unmigrated projects.
     """
     # 1. Try to find the primary .env
     # If we are in a worktree (.gwt/something), look in the parent project root
@@ -52,11 +147,40 @@ def _handle_ejected_symlink(current_root: Path):
     tasks_link = current_root / "docs" / "tasks"
 
     # Resolve to main repo root (handle .gwt worktrees)
-    if current_root.parent.name == ".gwt":
-        repo_root = current_root.parent.parent
-    else:
-        repo_root = current_root
+    repo_root = _repo_root_for(current_root)
     new_target = repo_root / ".task-agent" / "tasks"
+
+    # Phase 3: if a centralized store already exists, heal toward it instead of
+    # creating a fresh in-repo .task-agent/tasks.
+    moniker_override = os.environ.get("TA_STORE_MONIKER") or None
+    centralized = _resolve_centralized_store(repo_root, moniker_override)
+    if centralized is not None:
+        # Keep env / docs pointing at the data-root store without moving data.
+        if env_path.exists() or eject_enabled or target_path_str:
+            env_file = env_path if env_path.exists() else (repo_root / ".env")
+            _update_env_var(env_file, "TA_EJECT_TASKS", "true")
+            _update_env_var(
+                env_file, "TA_EJECTED_TASKS_PATH", str(centralized.resolve())
+            )
+            _update_env_var(
+                env_file, "TA_EJECTED_ISSUES_PATH", str(centralized.resolve())
+            )
+        _heal_docs_tasks_symlink(current_root, centralized)
+        # Also keep .task-agent/tasks pointer for tools that look there
+        eject_link = repo_root / ".task-agent" / "tasks"
+        try:
+            if not eject_link.exists() and not eject_link.is_symlink():
+                eject_link.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(str(centralized.resolve()), str(eject_link))
+            elif (
+                eject_link.is_symlink()
+                and eject_link.resolve() != centralized.resolve()
+            ):
+                eject_link.unlink()
+                os.symlink(str(centralized.resolve()), str(eject_link))
+        except OSError:
+            pass
+        return
 
     # --- Auto-migrate old sibling ejection to .task-agent/tasks/ ---
     if tasks_link.is_symlink():
@@ -187,18 +311,28 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
     Standard discovery mechanism for task-agent.
 
     Checks in order:
-    1. TA_CONFIG_DIR environment variable.
-    2. .ta-config.json in start_path or any parent.
-    3. pyproject.toml [tool.taskagent] in start_path or any parent.
-    4. docs/tasks/ directory in start_path or any parent.
-    5. docs/issues/ directory in start_path or any parent (legacy, for migration).
-    6. ~/.config/task-agent/settings.json (Global fallback)
+    1. ``TA_CONFIG_DIR`` environment variable.
+    2. ``TA_STORE_MONIKER`` → existing machine data-root store.
+    3. Repo-bound centralized store (registry / canonical moniker path).
+    4. ``.ta-config.json`` (``store_moniker``, ``tasks_dir``, ``issues_dir``).
+    5. ``pyproject.toml`` ``[tool.taskagent]``.
+    6. Legacy eject heal + ``docs/tasks`` / ``docks/tasks``.
+    7. ``docs/issues/`` (legacy).
+    8. ``~/.config/task-agent/settings.json``.
+    9. Fallback: create ``docs/tasks`` under start path (non-repo) or eject path.
 
     Returns:
         TaskAgent: Initialized manager for the discovered instance.
     """
     if os.environ.get("TA_CONFIG_DIR"):
         return TaskAgent()
+
+    # Explicit moniker override (may resolve before walking)
+    moniker_env = os.environ.get("TA_STORE_MONIKER")
+    if moniker_env:
+        central = _resolve_centralized_store(Path.cwd(), moniker_env)
+        if central is not None:
+            return TaskAgent(config_dir=str(central))
 
     current = Path(start_path or Path.cwd()).absolute()
     search_root = current
@@ -207,12 +341,35 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
     while True:
         if (current / ".git").exists() or (current / "pyproject.toml").exists():
             repo_boundary = current
-            _handle_ejected_symlink(current)
             break
         parent = current.parent
         if parent == current:
             break
         current = parent
+
+    # Phase 3: prefer existing data-root store for this host before legacy eject.
+    if repo_boundary is not None:
+        central = _resolve_centralized_store(repo_boundary, moniker_env)
+        if central is not None:
+            _heal_docs_tasks_symlink(repo_boundary, central)
+            # Light pointer heal for main eject path without creating empty stores
+            main_root = _repo_root_for(repo_boundary)
+            eject_link = main_root / ".task-agent" / "tasks"
+            try:
+                if eject_link.is_symlink() or not eject_link.exists():
+                    eject_link.parent.mkdir(parents=True, exist_ok=True)
+                    if eject_link.is_symlink():
+                        if eject_link.resolve() != central.resolve():
+                            eject_link.unlink()
+                            os.symlink(str(central.resolve()), str(eject_link))
+                    else:
+                        os.symlink(str(central.resolve()), str(eject_link))
+            except OSError:
+                pass
+            return TaskAgent(config_dir=str(central))
+
+        # Unmigrated: keep legacy eject auto-heal
+        _handle_ejected_symlink(repo_boundary)
 
     current = search_root
     while True:
@@ -224,10 +381,21 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
         if config_file.exists():
             try:
                 config = json.loads(config_file.read_text())
+                moniker = config.get("store_moniker") or config.get("moniker")
+                if moniker:
+                    central = _resolve_centralized_store(current, str(moniker))
+                    if central is not None:
+                        return TaskAgent(config_dir=str(central))
                 if "tasks_dir" in config:
-                    return TaskAgent(config_dir=str(current / config["tasks_dir"]))
+                    tasks_cfg = Path(config["tasks_dir"])
+                    path = tasks_cfg if tasks_cfg.is_absolute() else current / tasks_cfg
+                    return TaskAgent(config_dir=str(path))
                 if "issues_dir" in config:
-                    return TaskAgent(config_dir=str(current / config["issues_dir"]))
+                    issues_cfg = Path(config["issues_dir"])
+                    path = (
+                        issues_cfg if issues_cfg.is_absolute() else current / issues_cfg
+                    )
+                    return TaskAgent(config_dir=str(path))
             except Exception:
                 pass
 
@@ -241,6 +409,11 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
                     data = tomllib.load(f)
                     ta_cfg = data.get("tool", {}).get("taskagent")
                     if ta_cfg:
+                        moniker = ta_cfg.get("store_moniker") or ta_cfg.get("moniker")
+                        if moniker:
+                            central = _resolve_centralized_store(current, str(moniker))
+                            if central is not None:
+                                return TaskAgent(config_dir=str(central))
                         if "tasks_dir" in ta_cfg:
                             return TaskAgent(
                                 config_dir=str(current / ta_cfg["tasks_dir"])
@@ -263,7 +436,11 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
             if tasks_dir == docks_tasks:
                 # Migrate any .task-agent/tasks content into docks/tasks
                 old_task_root = current / ".task-agent" / "tasks"
-                if old_task_root.exists() and old_task_root.is_dir():
+                if (
+                    old_task_root.exists()
+                    and old_task_root.is_dir()
+                    and not old_task_root.is_symlink()
+                ):
                     for item in old_task_root.iterdir():
                         target_path = tasks_dir / item.name
                         if target_path.exists():
@@ -292,16 +469,21 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
                         shutil.rmtree(str(old_task_root))
                     except Exception:
                         pass
+            # If docs/tasks is a symlink into a store, use resolved path
+            try:
+                resolved_tasks = tasks_dir.resolve()
+            except OSError:
+                resolved_tasks = tasks_dir
             # Check if mission files are in .task-agent/ subdirectory
-            if (tasks_dir / ".task-agent").exists():
-                return TaskAgent(config_dir=str(tasks_dir))
+            if (resolved_tasks / ".task-agent").exists():
+                return TaskAgent(config_dir=str(resolved_tasks))
             # Check if old structure (mission files in tasks root) - will auto-migrate
-            elif (tasks_dir / "mission.usv").exists() or (
-                tasks_dir / "datapackage.json"
+            elif (resolved_tasks / "mission.usv").exists() or (
+                resolved_tasks / "datapackage.json"
             ).exists():
-                return TaskAgent(config_dir=str(tasks_dir))
+                return TaskAgent(config_dir=str(resolved_tasks))
             # Empty tasks dir - still return it
-            return TaskAgent(config_dir=str(tasks_dir))
+            return TaskAgent(config_dir=str(resolved_tasks))
 
         # 4. Check for docs/issues/ (legacy fallback for migration)
         issues_dir = current / "docs" / "issues"
