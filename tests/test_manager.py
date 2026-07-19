@@ -378,13 +378,16 @@ def test_api_add_dependency_existing(manager):
 
 def test_api_remove_dependency(manager):
     manager.create_issue("Task A")
-    manager.create_issue("Task B", body="**Depends on:** task-a")
+    manager.create_issue("Task B", blocked_by="task-a")
 
     manager.remove_dependency("task-b", "task-a")
 
     issue_file = manager.find_issue_file("task-b")
     deps = manager.extract_deps(issue_file)
     assert deps == []
+    content = issue_file.read_text(encoding="utf-8")
+    # Property removed entirely when last blocker is cleared
+    assert "blocked_by:" not in content
 
 
 def test_api_add_multiple_dependencies(manager):
@@ -796,6 +799,61 @@ def test_bulk_update_subtask_of(manager):
     issues = {i.slug: i for i in manager.load_mission()}
     assert issues["child-a"].subtask_of is None
     assert issues["child-b"].subtask_of is None
+    # Empty parent clears the frontmatter key
+    content = manager.find_issue_file("child-a").read_text(encoding="utf-8")
+    assert "subtask_of:" not in content
+
+
+def test_clear_blocked_by_removes_frontmatter_key(manager):
+    manager.create_issue("Dep")
+    manager.create_issue("Main", blocked_by="dep")
+    path = manager.find_issue_file("main")
+    assert "blocked_by: dep" in path.read_text(encoding="utf-8")
+
+    manager.update_dependencies("main", "")
+    content = path.read_text(encoding="utf-8")
+    assert "blocked_by:" not in content
+
+
+def test_add_then_remove_last_blocked_by_removes_property(manager):
+    manager.create_issue("A")
+    manager.create_issue("B")
+    manager.create_issue("C")
+    manager.add_dependency("c", "a")
+    manager.add_dependency("c", "b")
+    content = manager.find_issue_file("c").read_text(encoding="utf-8")
+    assert "blocked_by: a, b" in content or "blocked_by: a" in content
+
+    manager.remove_dependency("c", "a, b")
+    content = manager.find_issue_file("c").read_text(encoding="utf-8")
+    assert "blocked_by:" not in content
+    assert manager.extract_relations(manager.find_issue_file("c"))[0] == []
+
+
+def test_resolve_and_find_by_renamed_title(manager):
+    """Lookups by current display title work when slug still matches creation title."""
+    issue = manager.create_issue("Original Title")
+    assert issue.slug == "original-title"
+
+    path = manager.find_issue_file("original-title")
+    assert path is not None
+    # Retitle H1 without renaming directory/slug
+    text = path.read_text(encoding="utf-8")
+    text = text.replace("# Original Title", "# Completely New Name")
+    path.write_text(text, encoding="utf-8")
+
+    # Sync mission name from file (ingest-style update of in-memory name)
+    issues = manager.load_mission()
+    for i in issues:
+        if i.slug == "original-title":
+            i.name = "Completely New Name"
+    manager.save_mission(issues)
+
+    assert manager.resolve_issue_slug("Completely New Name") == "original-title"
+    assert manager.resolve_issue_slug("completely-new-name") == "original-title"
+    found = manager.find_issue_file("Completely New Name")
+    assert found is not None
+    assert found.parent.name == "original-title"
 
 
 def test_ingest_migrates_prose_edges_to_frontmatter(manager):

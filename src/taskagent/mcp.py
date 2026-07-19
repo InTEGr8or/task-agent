@@ -17,6 +17,40 @@ def get_manager() -> TaskAgent:
     return discover()
 
 
+def _parse_name_list(names: str) -> list[str]:
+    """Split a comma-separated name list, dropping empties."""
+    return [n.strip() for n in names.split(",") if n.strip()]
+
+
+def _resolve_slug(manager: TaskAgent, name: str) -> str:
+    """Resolve title/slug query to a concrete task slug (supports retitled tasks)."""
+    resolved = manager.resolve_issue_slug(name)
+    if resolved:
+        return resolved
+    # Fall back to slugify so error messages stay familiar for missing tasks
+    return manager.slugify(name)
+
+
+def _normalize_relation_slugs(manager: TaskAgent, value: str) -> str:
+    """Resolve each comma-separated token to a task slug (empty stays clear)."""
+    parts = _parse_name_list(value)
+    if not parts:
+        return ""
+    return ", ".join(_resolve_slug(manager, p) for p in parts)
+
+
+def _format_bulk_results(results: list[dict], field: str, value: str) -> str:
+    """Render bulk update results as a short agent-readable report."""
+    ok = [r for r in results if r.get("ok")]
+    failed = [r for r in results if not r.get("ok")]
+    lines = [f"Bulk set {field}={value!r}: {len(ok)} succeeded, {len(failed)} failed."]
+    for r in ok:
+        lines.append(f"  OK: {r['slug']}")
+    for r in failed:
+        lines.append(f"  FAIL: {r['slug']} — {r.get('error')}")
+    return "\n".join(lines)
+
+
 def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
     """If the strategy cooldown has elapsed, prepend the strategy to the response."""
     if hasattr(manager, "should_show_strategy") and manager.should_show_strategy():
@@ -184,7 +218,7 @@ def promote_task(name: str) -> str:
         name: The title or partial name of the task.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         manager.promote_issue(slug)
         return f"Task '{slug}' promoted to pending."
@@ -200,7 +234,7 @@ def demote_task(name: str) -> str:
         name: The title or partial name of the task.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         manager.demote_issue(slug)
         return f"Task '{slug}' demoted to draft."
@@ -216,7 +250,7 @@ def mark_task_active(name: str) -> str:
         name: The title or partial name of the task.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         manager.move_to_active(slug)
         return f"Task '{slug}' is now active."
@@ -234,7 +268,7 @@ def complete_task(name: str, solution: str, message: Optional[str] = None) -> st
         message: Optional git commit message.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         issue, commit_hash = manager.complete_issue(
             slug, commit_message=message, solution_explanation=solution
@@ -256,11 +290,13 @@ def complete_task(name: str, solution: str, message: Optional[str] = None) -> st
 def search_task(name: str) -> str:
     """Search for a task by title or partial name, including in completed tasks.
 
+    Matches current display title even when it differs from the slug (retitled tasks).
+
     Args:
         name: The title or partial name of the task to search for.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     issue_file = manager.find_issue_file(slug, include_completed=True)
     if not issue_file:
         return f"Task matching '{name}' ({slug}) not found anywhere."
@@ -284,7 +320,7 @@ def restore_task(name: str, status: str = "pending") -> str:
         status: The target status ('pending', 'draft', or 'active'). Defaults to 'pending'.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         manager.restore_issue(slug, to_status=status)
         return f"Task '{slug}' restored to '{status}'."
@@ -300,7 +336,7 @@ def get_task_details(name: str) -> str:
         name: The title or partial name of the task.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     issue_file = manager.find_issue_file(slug)
     if not issue_file:
         return f"Task matching '{name}' ({slug}) not found."
@@ -317,37 +353,12 @@ def update_task(name: str, content: str) -> str:
         content: The new complete Markdown content for the task.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     try:
         manager.update_issue(slug, content)
         return f"Successfully updated task '{slug}'."
     except Exception as e:
         return f"Error updating task: {e}"
-
-
-def _parse_name_list(names: str) -> list[str]:
-    """Split a comma-separated name list, dropping empties."""
-    return [n.strip() for n in names.split(",") if n.strip()]
-
-
-def _format_bulk_results(results: list[dict], field: str, value: str) -> str:
-    """Render bulk update results as a short agent-readable report."""
-    ok = [r for r in results if r.get("ok")]
-    failed = [r for r in results if not r.get("ok")]
-    lines = [f"Bulk set {field}={value!r}: {len(ok)} succeeded, {len(failed)} failed."]
-    for r in ok:
-        lines.append(f"  OK: {r['slug']}")
-    for r in failed:
-        lines.append(f"  FAIL: {r['slug']} — {r.get('error')}")
-    return "\n".join(lines)
-
-
-def _normalize_relation_slugs(manager: TaskAgent, value: str) -> str:
-    """Slugify each comma-separated token (empty string stays empty / clear)."""
-    parts = _parse_name_list(value)
-    if not parts:
-        return ""
-    return ", ".join(manager.slugify(p) for p in parts)
 
 
 @mcp.tool()
@@ -367,15 +378,16 @@ def update_task_dependencies(name: str, blocked_by: str) -> str:
 def set_task_blocked_by(name: str, blocked_by: str = "") -> str:
     """Set or clear blocked_by on a single task without rewriting the body.
 
-    Replaces the entire blocked_by list (not append). Use empty string to clear.
+    Replaces the entire blocked_by list (not append). Use empty string / omit to clear.
+    Clearing removes the blocked_by frontmatter property entirely.
 
     Args:
         name: Title or partial name of the task to update.
         blocked_by: Comma-separated task slugs/names that block this task.
-            Empty string clears all blockers.
+            Empty string clears all blockers and removes the property.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
+    slug = _resolve_slug(manager, name)
     normalized = _normalize_relation_slugs(manager, blocked_by)
     try:
         manager.update_dependencies(slug, normalized)
@@ -387,16 +399,71 @@ def set_task_blocked_by(name: str, blocked_by: str = "") -> str:
 
 
 @mcp.tool()
+def add_task_blocked_by(name: str, blocked_by: str) -> str:
+    """Add one or more blockers to a task without replacing existing blocked_by entries.
+
+    Args:
+        name: Title or partial name of the task to update.
+        blocked_by: Comma-separated task slugs/names to add as blockers.
+    """
+    manager = get_manager()
+    slug = _resolve_slug(manager, name)
+    normalized = _normalize_relation_slugs(manager, blocked_by)
+    if not normalized:
+        return "Error: no blocker slugs provided to add."
+    try:
+        issue = manager.add_dependency(slug, normalized)
+        return (
+            f"Successfully added blocked_by on task '{slug}'. "
+            f"Now: {', '.join(issue.blocked_by) if issue.blocked_by else '(none)'}."
+        )
+    except Exception as e:
+        return f"Error adding blocked_by: {e}"
+
+
+@mcp.tool()
+def remove_task_blocked_by(name: str, blocked_by: str) -> str:
+    """Remove one or more blockers from a task.
+
+    If the last blocker is removed, the blocked_by property is deleted entirely.
+
+    Args:
+        name: Title or partial name of the task to update.
+        blocked_by: Comma-separated task slugs/names to remove from blockers.
+    """
+    manager = get_manager()
+    slug = _resolve_slug(manager, name)
+    normalized = _normalize_relation_slugs(manager, blocked_by)
+    if not normalized:
+        return "Error: no blocker slugs provided to remove."
+    try:
+        issue = manager.remove_dependency(slug, normalized)
+        if issue.blocked_by:
+            return (
+                f"Successfully removed blocked_by from task '{slug}'. "
+                f"Now: {', '.join(issue.blocked_by)}."
+            )
+        return (
+            f"Successfully removed blocked_by from task '{slug}'. "
+            "No blockers remain (property cleared)."
+        )
+    except Exception as e:
+        return f"Error removing blocked_by: {e}"
+
+
+@mcp.tool()
 def set_task_parent(name: str, parent: str = "") -> str:
     """Set or clear the parent (subtask_of) of a single task without rewriting the body.
+
+    Clearing removes the subtask_of frontmatter property entirely.
 
     Args:
         name: Title or partial name of the task to update.
         parent: Parent task slug or name. Empty string clears the parent.
     """
     manager = get_manager()
-    slug = manager.slugify(name)
-    parent_slug = manager.slugify(parent) if parent.strip() else None
+    slug = _resolve_slug(manager, name)
+    parent_slug = _resolve_slug(manager, parent) if parent.strip() else None
     try:
         manager.update_subtask_of(slug, parent_slug)
         if parent_slug:
@@ -410,7 +477,8 @@ def set_task_parent(name: str, parent: str = "") -> str:
 def bulk_set_task_blocked_by(names: str, blocked_by: str = "") -> str:
     """Set the same blocked_by list on many tasks without rewriting bodies.
 
-    Replaces each task's blocked_by list (not append). Empty blocked_by clears.
+    Replaces each task's blocked_by list (not append). Empty blocked_by clears
+    and removes the property.
 
     Args:
         names: Comma-separated task titles or slugs to update.
@@ -418,7 +486,7 @@ def bulk_set_task_blocked_by(names: str, blocked_by: str = "") -> str:
             Empty string clears blockers on every named task.
     """
     manager = get_manager()
-    slugs = [manager.slugify(n) for n in _parse_name_list(names)]
+    slugs = [_resolve_slug(manager, n) for n in _parse_name_list(names)]
     if not slugs:
         return "Error: no task names provided."
     normalized = _normalize_relation_slugs(manager, blocked_by)
@@ -436,10 +504,10 @@ def bulk_set_task_parent(names: str, parent: str = "") -> str:
             Empty string clears the parent on every named task.
     """
     manager = get_manager()
-    slugs = [manager.slugify(n) for n in _parse_name_list(names)]
+    slugs = [_resolve_slug(manager, n) for n in _parse_name_list(names)]
     if not slugs:
         return "Error: no task names provided."
-    parent_slug = manager.slugify(parent) if parent.strip() else None
+    parent_slug = _resolve_slug(manager, parent) if parent.strip() else None
     results = manager.bulk_update_subtask_of(slugs, parent_slug)
     return _format_bulk_results(results, "parent", parent_slug or "")
 

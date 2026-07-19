@@ -261,7 +261,7 @@ def select_issue(
     slug_part: Optional[str],
     status_filter: Optional[List[str]] = None,
 ) -> Optional[Issue]:
-    """Helper to select an issue based on partial slug and status filter."""
+    """Helper to select an issue based on partial slug/title and status filter."""
     if not issues:
         return None
 
@@ -277,8 +277,27 @@ def select_issue(
     if slug_part is None:
         return filtered[0]
 
-    # Find matches
-    matches = [i for i in filtered if i.slug.startswith(slug_part)]
+    # Find matches by slug prefix, exact title, or title substring (retitled tasks)
+    q = slug_part.lower()
+    q_slug = TaskAgent.slugify(slug_part)
+    matches = [
+        i
+        for i in filtered
+        if i.slug.startswith(slug_part)
+        or i.slug.startswith(q_slug)
+        or i.name.lower() == q
+        or q in i.name.lower()
+        or TaskAgent.slugify(i.name) == q_slug
+        or TaskAgent.slugify(i.name).startswith(q_slug)
+    ]
+    # De-dupe while preserving order
+    seen = set()
+    unique_matches = []
+    for i in matches:
+        if i.slug not in seen:
+            seen.add(i.slug)
+            unique_matches.append(i)
+    matches = unique_matches
 
     if not matches:
         return None
@@ -2334,20 +2353,35 @@ def cmd_update(
     slug_part: str,
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
+    add_blocked_by: Optional[str] = None,
+    remove_blocked_by: Optional[str] = None,
 ):
     """Update task properties (single slug or comma-separated bulk)."""
-    if blocked_by is None and subtask_of is None:
+    if (
+        blocked_by is None
+        and subtask_of is None
+        and add_blocked_by is None
+        and remove_blocked_by is None
+    ):
         console.print(
-            "[yellow]No updates specified. Use --blocked-by or --subtask-of to update relationships.[/yellow]"
+            "[yellow]No updates specified. Use --blocked-by, --add-blocked-by, "
+            "--remove-blocked-by, or --subtask-of.[/yellow]"
         )
         return
 
     raw_parts = [p.strip() for p in slug_part.split(",") if p.strip()]
     is_bulk = len(raw_parts) > 1
 
+    def _resolve_many(parts: list[str]) -> list[str]:
+        slugs: list[str] = []
+        for p in parts:
+            resolved = manager.resolve_issue_slug(p) or manager.slugify(p)
+            slugs.append(resolved)
+        return slugs
+
     try:
         if is_bulk:
-            slugs = [manager.slugify(p) for p in raw_parts]
+            slugs = _resolve_many(raw_parts)
             if blocked_by is not None:
                 results = manager.bulk_update_dependencies(slugs, blocked_by)
                 ok = sum(1 for r in results if r["ok"])
@@ -2361,6 +2395,20 @@ def cmd_update(
                         console.print(f"  [green]OK[/green] {r['slug']}")
                     else:
                         console.print(f"  [red]FAIL[/red] {r['slug']}: {r['error']}")
+            if add_blocked_by is not None:
+                for s in slugs:
+                    try:
+                        manager.add_dependency(s, add_blocked_by)
+                        console.print(f"  [green]OK[/green] add-blocked-by {s}")
+                    except Exception as e:
+                        console.print(f"  [red]FAIL[/red] add-blocked-by {s}: {e}")
+            if remove_blocked_by is not None:
+                for s in slugs:
+                    try:
+                        manager.remove_dependency(s, remove_blocked_by)
+                        console.print(f"  [green]OK[/green] remove-blocked-by {s}")
+                    except Exception as e:
+                        console.print(f"  [red]FAIL[/red] remove-blocked-by {s}: {e}")
             if subtask_of is not None:
                 parent_slug = subtask_of if subtask_of != "" else None
                 results = manager.bulk_update_subtask_of(slugs, parent_slug)
@@ -2391,6 +2439,20 @@ def cmd_update(
             manager.update_dependencies(target.slug, blocked_by)
             console.print(
                 f"[bold green]Successfully updated prerequisites for task '{target.slug}'.[/bold green]"
+            )
+
+        if add_blocked_by is not None:
+            issue = manager.add_dependency(target.slug, add_blocked_by)
+            console.print(
+                f"[bold green]Added blockers on '{target.slug}'. "
+                f"Now: {', '.join(issue.blocked_by) if issue.blocked_by else '(none)'}[/bold green]"
+            )
+
+        if remove_blocked_by is not None:
+            issue = manager.remove_dependency(target.slug, remove_blocked_by)
+            console.print(
+                f"[bold green]Removed blockers from '{target.slug}'. "
+                f"Now: {', '.join(issue.blocked_by) if issue.blocked_by else '(none)'}[/bold green]"
             )
 
         if subtask_of is not None:
@@ -4089,7 +4151,15 @@ def main():
     )
     update_parser.add_argument(
         "--blocked-by",
-        help="Comma-separated list of prerequisite task slugs that block this task (use empty string to clear)",
+        help="Replace blocked_by with this comma-separated list (empty string clears / removes property)",
+    )
+    update_parser.add_argument(
+        "--add-blocked-by",
+        help="Append these comma-separated blocker slugs without replacing existing ones",
+    )
+    update_parser.add_argument(
+        "--remove-blocked-by",
+        help="Remove these comma-separated blocker slugs (removes property if last)",
     )
     update_parser.add_argument(
         "--subtask-of",
@@ -4401,6 +4471,8 @@ Usage:
             args.slug,
             blocked_by=args.blocked_by,
             subtask_of=args.subtask_of,
+            add_blocked_by=args.add_blocked_by,
+            remove_blocked_by=args.remove_blocked_by,
         )
     elif args.command == "start":
         cmd_start(console, manager, args.slug, run=args.run, agent_name=args.agent)

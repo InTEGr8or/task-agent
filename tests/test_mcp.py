@@ -9,6 +9,8 @@ def mock_manager():
     with patch("taskagent.mcp.get_manager") as mock:
         manager = MagicMock()
         manager.should_show_strategy.return_value = False
+        # Prefer slugify path in tests unless explicitly configured
+        manager.resolve_issue_slug.return_value = None
         mock.return_value = manager
         yield manager
 
@@ -208,13 +210,20 @@ def test_mcp_list_active_tasks(monkeypatch):
     assert "[3] ACTIVE: Task 3 (blocked by: Task 1)" in result
 
 
+class _SlugManager:
+    """Minimal manager stub: slugify + identity resolve_issue_slug."""
+
+    def slugify(self, name):
+        return name.lower().replace(" ", "-")
+
+    def resolve_issue_slug(self, name, include_completed=True, allow_title_match=True):
+        return self.slugify(name)
+
+
 def test_mcp_update_task_dependencies(monkeypatch):
     called = []
 
-    class DummyManager:
-        def slugify(self, name):
-            return name.lower().replace(" ", "-")
-
+    class DummyManager(_SlugManager):
         def update_dependencies(self, slug, blocked_by):
             called.append((slug, blocked_by))
 
@@ -227,10 +236,7 @@ def test_mcp_update_task_dependencies(monkeypatch):
 def test_mcp_set_task_blocked_by(monkeypatch):
     called = []
 
-    class DummyManager:
-        def slugify(self, name):
-            return name.lower().replace(" ", "-")
-
+    class DummyManager(_SlugManager):
         def update_dependencies(self, slug, blocked_by):
             called.append((slug, blocked_by))
 
@@ -245,13 +251,53 @@ def test_mcp_set_task_blocked_by(monkeypatch):
     assert called[-1] == ("task-one", "")
 
 
+def test_mcp_add_and_remove_task_blocked_by(monkeypatch):
+    class DummyManager(_SlugManager):
+        def __init__(self):
+            self.blocked = []
+
+        def add_dependency(self, slug, blocked_by):
+            for b in [x.strip() for x in blocked_by.split(",") if x.strip()]:
+                if b not in self.blocked:
+                    self.blocked.append(b)
+            return Issue(
+                name="Task One",
+                slug=slug,
+                blocked_by=list(self.blocked),
+                status="pending",
+            )
+
+        def remove_dependency(self, slug, blocked_by):
+            remove = {x.strip() for x in blocked_by.split(",") if x.strip()}
+            self.blocked = [b for b in self.blocked if b not in remove]
+            return Issue(
+                name="Task One",
+                slug=slug,
+                blocked_by=list(self.blocked),
+                status="pending",
+            )
+
+    mgr = DummyManager()
+    monkeypatch.setattr(mcp, "get_manager", lambda: mgr)
+
+    r1 = mcp.add_task_blocked_by("Task One", "dep-a")
+    assert "Successfully added blocked_by" in r1
+    assert "dep-a" in r1
+
+    r2 = mcp.add_task_blocked_by("Task One", "dep-b")
+    assert "dep-a" in r2 and "dep-b" in r2
+
+    r3 = mcp.remove_task_blocked_by("Task One", "dep-a")
+    assert "dep-b" in r3
+
+    r4 = mcp.remove_task_blocked_by("Task One", "dep-b")
+    assert "No blockers remain" in r4
+
+
 def test_mcp_set_task_parent(monkeypatch):
     called = []
 
-    class DummyManager:
-        def slugify(self, name):
-            return name.lower().replace(" ", "-")
-
+    class DummyManager(_SlugManager):
         def update_subtask_of(self, slug, parent):
             called.append((slug, parent))
 
@@ -266,10 +312,7 @@ def test_mcp_set_task_parent(monkeypatch):
 
 
 def test_mcp_bulk_set_task_blocked_by(monkeypatch):
-    class DummyManager:
-        def slugify(self, name):
-            return name.lower().replace(" ", "-")
-
+    class DummyManager(_SlugManager):
         def bulk_update_dependencies(self, slugs, blocked_by):
             return [
                 {"slug": slugs[0], "ok": True, "error": None},
@@ -284,10 +327,7 @@ def test_mcp_bulk_set_task_blocked_by(monkeypatch):
 
 
 def test_mcp_bulk_set_task_parent(monkeypatch):
-    class DummyManager:
-        def slugify(self, name):
-            return name.lower().replace(" ", "-")
-
+    class DummyManager(_SlugManager):
         def bulk_update_subtask_of(self, slugs, parent):
             assert parent == "epic"
             return [{"slug": s, "ok": True, "error": None} for s in slugs]
@@ -350,6 +390,8 @@ EXPECTED_TOOLS = {
     "update_task",
     "update_task_dependencies",
     "set_task_blocked_by",
+    "add_task_blocked_by",
+    "remove_task_blocked_by",
     "set_task_parent",
     "bulk_set_task_blocked_by",
     "bulk_set_task_parent",

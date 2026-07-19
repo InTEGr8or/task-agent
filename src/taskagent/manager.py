@@ -346,7 +346,30 @@ class TaskAgent:
         """Find the issue markdown file by slug.
         Checks for slug.md OR slug/README.md.
         Resilient to underscore/hyphen differences.
-        Recurses into completed/YYYY/ and completed/YYYY/MM/ when include_completed."""
+        Recurses into completed/YYYY/ and completed/YYYY/MM/ when include_completed.
+
+        Also falls back to matching the current display title (H1 / mission name)
+        so lookups still work after a retitle that did not rename the slug.
+        """
+        if not self.issues_root.exists():
+            return None
+
+        by_slug = self._find_issue_file_by_slug(slug, include_completed)
+        if by_slug is not None:
+            return by_slug
+
+        # Title / renamed-title fallback: resolve query → slug, then find by slug
+        resolved = self.resolve_issue_slug(
+            slug, include_completed=include_completed, allow_title_match=True
+        )
+        if resolved and resolved != self.slugify(slug):
+            return self._find_issue_file_by_slug(resolved, include_completed)
+        return None
+
+    def _find_issue_file_by_slug(
+        self, slug: str, include_completed: bool = False
+    ) -> Optional[Path]:
+        """Locate a task file by directory/file slug only (no title matching)."""
         if not self.issues_root.exists():
             return None
 
@@ -389,6 +412,83 @@ class TaskAgent:
                     readme = d / "README.md"
                     if readme.exists() and self.slugify(d.name) == target_slug:
                         return readme
+
+        return None
+
+    def resolve_issue_slug(
+        self,
+        query: str,
+        include_completed: bool = True,
+        allow_title_match: bool = True,
+    ) -> Optional[str]:
+        """Resolve a user query (slug, title, or partial title) to a task slug.
+
+        Order:
+        1. Exact slug / file match
+        2. Exact display-title match (mission name, then H1) — covers retitles
+        3. Unique partial match on slug or title
+        """
+        query = (query or "").strip()
+        if not query:
+            return None
+
+        target = self.slugify(query)
+        if self._find_issue_file_by_slug(target, include_completed) is not None:
+            return target
+        # Also try raw query as path segment (already-slug input)
+        if target != query and self._find_issue_file_by_slug(query, include_completed):
+            return self.slugify(query)
+
+        if not allow_title_match:
+            return None
+
+        issues = self.load_mission()
+        if not include_completed:
+            issues = [i for i in issues if i.status != "completed"]
+
+        q_lower = query.lower()
+
+        # Exact name match (case-insensitive)
+        exact = [i for i in issues if i.name.lower() == q_lower]
+        if len(exact) == 1:
+            return exact[0].slug
+        if len(exact) > 1:
+            # Prefer non-completed
+            active = [i for i in exact if i.status != "completed"]
+            if len(active) == 1:
+                return active[0].slug
+            return exact[0].slug
+
+        # slugify(current title) matches query slug (retitle → new slug form)
+        by_title_slug = [i for i in issues if self.slugify(i.name) == target]
+        if len(by_title_slug) == 1:
+            return by_title_slug[0].slug
+        if len(by_title_slug) > 1:
+            return by_title_slug[0].slug
+
+        # Unique partial: query in name or slug
+        partial = [
+            i
+            for i in issues
+            if target in i.slug
+            or target in self.slugify(i.name)
+            or q_lower in i.name.lower()
+        ]
+        if len(partial) == 1:
+            return partial[0].slug
+
+        # Scan H1 when mission name is stale relative to file
+        if self.issues_root.exists():
+            h1_hits: List[str] = []
+            for i in issues:
+                path = self._find_issue_file_by_slug(i.slug, include_completed)
+                if not path:
+                    continue
+                title = self.extract_title(path)
+                if title.lower() == q_lower or self.slugify(title) == target:
+                    h1_hits.append(i.slug)
+            if len(h1_hits) == 1:
+                return h1_hits[0]
 
         return None
 
@@ -515,8 +615,9 @@ class TaskAgent:
                             ]
                             subtask_of = parts[3].strip() or None
 
-                        # Determine status from file location
-                        issue_file = self.find_issue_file(slug)
+                        # Determine status from file location (slug-only; avoid
+                        # title-resolve → load_mission recursion)
+                        issue_file = self._find_issue_file_by_slug(slug)
                         if issue_file:
                             # If it's slug/README.md, status is parent of parent
                             if issue_file.name == "README.md":
@@ -840,63 +941,100 @@ class TaskAgent:
         target.status = "active"
         return target
 
-    def add_dependency(self, slug: str, blocked_by: str) -> None:
-        """Add a dependency (blocked_by) to an issue."""
-        issue_file = self.find_issue_file(slug)
+    def add_dependency(self, slug: str, blocked_by: str) -> Issue:
+        """Add one or more blocked_by entries (comma-separated) without replacing others.
+
+        Returns the updated issue. Idempotent for already-present blockers.
+        """
+        issue_file = self.find_issue_file(slug, include_completed=True)
         if not issue_file:
             raise FileNotFoundError(f"Issue file not found for '{slug}'.")
 
+        to_add = [d.strip() for d in blocked_by.split(",") if d.strip()]
+        if not to_add:
+            raise ValueError("No blocker slugs provided to add.")
+
+        if slug in to_add:
+            raise ValueError("A task cannot depend on itself.")
+
+        issues = self.load_mission()
+        existing_slugs = {i.slug for i in issues}
+        for dep in to_add:
+            if dep not in existing_slugs:
+                raise ValueError(f"Prerequisite task '{dep}' does not exist.")
+
+        existing_blocked_by, _ = self.extract_relations(issue_file)
+        new_blocked_by = list(existing_blocked_by)
+        for dep in to_add:
+            if dep not in new_blocked_by:
+                new_blocked_by.append(dep)
+
+        if self._check_dependency_cycle(issues, slug, new_blocked_by):
+            raise ValueError("Adding these dependencies would introduce a cycle.")
+
         content = issue_file.read_text(encoding="utf-8")
-        existing_blocked_by, subtask_of = self.extract_relations(issue_file)
+        content = TaskAgent._write_frontmatter_edges(content, blocked_by=new_blocked_by)
 
-        if blocked_by in existing_blocked_by:
-            return
+        self._set_writable(issue_file, True)
+        issue_file.write_text(content, encoding="utf-8")
 
-        existing_blocked_by.append(blocked_by)
+        updated_issue: Optional[Issue] = None
+        for issue in issues:
+            if issue.slug == slug:
+                issue.blocked_by = new_blocked_by
+                updated_issue = issue
+                break
+        self.save_mission(issues)
 
-        # Write edge fields to frontmatter (and strip prose edge lines)
-        content = TaskAgent._write_frontmatter_edges(
-            content, blocked_by=existing_blocked_by
+        if updated_issue:
+            return updated_issue
+        return Issue(
+            name=self.extract_title(issue_file),
+            slug=slug,
+            blocked_by=new_blocked_by,
+            status="completed",
         )
+
+    def remove_dependency(self, slug: str, blocked_by: str) -> Issue:
+        """Remove one or more blocked_by entries (comma-separated).
+
+        If the last blocker is removed, the ``blocked_by`` frontmatter key is
+        deleted entirely. Returns the updated issue.
+        """
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue file not found for '{slug}'.")
+
+        to_remove = [d.strip() for d in blocked_by.split(",") if d.strip()]
+        if not to_remove:
+            raise ValueError("No blocker slugs provided to remove.")
+
+        existing_blocked_by, _ = self.extract_relations(issue_file)
+        new_blocked_by = [b for b in existing_blocked_by if b not in to_remove]
+
+        content = issue_file.read_text(encoding="utf-8")
+        content = TaskAgent._write_frontmatter_edges(content, blocked_by=new_blocked_by)
 
         self._set_writable(issue_file, True)
         issue_file.write_text(content, encoding="utf-8")
 
         issues = self.load_mission()
+        updated_issue: Optional[Issue] = None
         for issue in issues:
             if issue.slug == slug:
-                issue.blocked_by = existing_blocked_by
+                issue.blocked_by = new_blocked_by
+                updated_issue = issue
                 break
         self.save_mission(issues)
 
-    def remove_dependency(self, slug: str, blocked_by: str) -> None:
-        """Remove a dependency (blocked_by) from an issue."""
-        issue_file = self.find_issue_file(slug)
-        if not issue_file:
-            raise FileNotFoundError(f"Issue file not found for '{slug}'.")
-
-        content = issue_file.read_text(encoding="utf-8")
-        existing_blocked_by, subtask_of = self.extract_relations(issue_file)
-
-        if blocked_by not in existing_blocked_by:
-            return
-
-        existing_blocked_by.remove(blocked_by)
-
-        # Write edge fields to frontmatter (and strip prose edge lines)
-        content = TaskAgent._write_frontmatter_edges(
-            content, blocked_by=existing_blocked_by
+        if updated_issue:
+            return updated_issue
+        return Issue(
+            name=self.extract_title(issue_file),
+            slug=slug,
+            blocked_by=new_blocked_by,
+            status="completed",
         )
-
-        self._set_writable(issue_file, True)
-        issue_file.write_text(content, encoding="utf-8")
-
-        issues = self.load_mission()
-        for issue in issues:
-            if issue.slug == slug:
-                issue.blocked_by = existing_blocked_by
-                break
-        self.save_mission(issues)
 
     def _git_commit(
         self,
@@ -1252,9 +1390,9 @@ class TaskAgent:
 
         - blocked_by is serialized as a comma-separated string in frontmatter: `blocked_by: slug1, slug2`
         - subtask_of is serialized as: `subtask_of: parent-slug`
-        - If blocked_by is None, the frontmatter key is left untouched (not removed).
-          If it's an empty list, the key is set to empty string.
-        - Same for subtask_of: None means don't touch, empty string means clear.
+        - If blocked_by is None, the frontmatter key is left untouched.
+          If it's an empty list, the key is **removed** entirely.
+        - Same for subtask_of: None means don't touch, empty string removes the key.
         - Prose lines `**Blocked by:** ...` and `**Subtask of:** ...` are stripped from the body.
         """
         fm_text, body = TaskAgent._parse_frontmatter(content)
@@ -1263,9 +1401,17 @@ class TaskAgent:
             fields = TaskAgent._parse_frontmatter_dict(fm_text)
 
         if blocked_by is not None:
-            fields["blocked_by"] = ", ".join(blocked_by)
+            if blocked_by:
+                fields["blocked_by"] = ", ".join(blocked_by)
+            else:
+                # Clear: remove the property entirely (do not leave empty key)
+                fields.pop("blocked_by", None)
         if subtask_of is not None:
-            fields["subtask_of"] = subtask_of
+            if subtask_of:
+                fields["subtask_of"] = subtask_of
+            else:
+                # Clear: remove the property entirely
+                fields.pop("subtask_of", None)
 
         # Strip prose edge lines from body
         body = re.sub(r"\*\*Blocked by:\*\*[ \t]*.*\n?", "", body)
