@@ -1498,6 +1498,40 @@ class TaskAgent:
             status="completed",
         )
 
+    def bulk_update_dependencies(self, slugs: List[str], blocked_by: str) -> List[dict]:
+        """Set blocked_by on many tasks. Returns per-slug result dicts.
+
+        Each result is ``{"slug": str, "ok": bool, "error": Optional[str]}``.
+        Partial success is allowed: one failure does not abort the rest.
+        """
+        results: List[dict] = []
+        for slug in slugs:
+            try:
+                self.update_dependencies(slug, blocked_by)
+                results.append({"slug": slug, "ok": True, "error": None})
+            except Exception as e:
+                results.append({"slug": slug, "ok": False, "error": str(e)})
+        return results
+
+    def bulk_update_subtask_of(
+        self, slugs: List[str], subtask_of: Optional[str]
+    ) -> List[dict]:
+        """Set subtask_of parent on many tasks. Returns per-slug result dicts.
+
+        Each result is ``{"slug": str, "ok": bool, "error": Optional[str]}``.
+        Partial success is allowed: one failure does not abort the rest.
+        Pass ``subtask_of=None`` (or empty string via callers) to clear parents.
+        """
+        results: List[dict] = []
+        parent = subtask_of if subtask_of else None
+        for slug in slugs:
+            try:
+                self.update_subtask_of(slug, parent)
+                results.append({"slug": slug, "ok": True, "error": None})
+            except Exception as e:
+                results.append({"slug": slug, "ok": False, "error": str(e)})
+        return results
+
     def ingest_issues(self, sync: bool = True) -> Tuple[int, int]:
         """Ingest existing markdown files. Returns (num_new, num_removed)."""
         self.ensure_issues_dir()

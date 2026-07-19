@@ -220,8 +220,82 @@ def test_mcp_update_task_dependencies(monkeypatch):
 
     monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
     result = mcp.update_task_dependencies("Task One", "task-two,task-three")
-    assert result == "Successfully updated dependencies for task 'task-one'."
-    assert called == [("task-one", "task-two,task-three")]
+    assert "Successfully set blocked_by for task 'task-one'" in result
+    assert called == [("task-one", "task-two, task-three")]
+
+
+def test_mcp_set_task_blocked_by(monkeypatch):
+    called = []
+
+    class DummyManager:
+        def slugify(self, name):
+            return name.lower().replace(" ", "-")
+
+        def update_dependencies(self, slug, blocked_by):
+            called.append((slug, blocked_by))
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.set_task_blocked_by("Task One", "Task Two, Task Three")
+    assert "Successfully set blocked_by for task 'task-one'" in result
+    assert "task-two, task-three" in result
+    assert called == [("task-one", "task-two, task-three")]
+
+    result_clear = mcp.set_task_blocked_by("Task One", "")
+    assert "Successfully cleared blocked_by for task 'task-one'" in result_clear
+    assert called[-1] == ("task-one", "")
+
+
+def test_mcp_set_task_parent(monkeypatch):
+    called = []
+
+    class DummyManager:
+        def slugify(self, name):
+            return name.lower().replace(" ", "-")
+
+        def update_subtask_of(self, slug, parent):
+            called.append((slug, parent))
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.set_task_parent("Child Task", "Parent Epic")
+    assert result == "Successfully set parent of task 'child-task' to 'parent-epic'."
+    assert called == [("child-task", "parent-epic")]
+
+    result_clear = mcp.set_task_parent("Child Task", "")
+    assert result_clear == "Successfully cleared parent of task 'child-task'."
+    assert called[-1] == ("child-task", None)
+
+
+def test_mcp_bulk_set_task_blocked_by(monkeypatch):
+    class DummyManager:
+        def slugify(self, name):
+            return name.lower().replace(" ", "-")
+
+        def bulk_update_dependencies(self, slugs, blocked_by):
+            return [
+                {"slug": slugs[0], "ok": True, "error": None},
+                {"slug": slugs[1], "ok": False, "error": "not found"},
+            ]
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.bulk_set_task_blocked_by("Task A, Task B", "blocker")
+    assert "1 succeeded, 1 failed" in result
+    assert "OK: task-a" in result
+    assert "FAIL: task-b" in result
+
+
+def test_mcp_bulk_set_task_parent(monkeypatch):
+    class DummyManager:
+        def slugify(self, name):
+            return name.lower().replace(" ", "-")
+
+        def bulk_update_subtask_of(self, slugs, parent):
+            assert parent == "epic"
+            return [{"slug": s, "ok": True, "error": None} for s in slugs]
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.bulk_set_task_parent("a, b, c", "Epic")
+    assert "3 succeeded, 0 failed" in result
+    assert "OK: a" in result
 
 
 def test_mcp_get_strategy(mock_manager):
@@ -275,6 +349,10 @@ EXPECTED_TOOLS = {
     "get_task_details",
     "update_task",
     "update_task_dependencies",
+    "set_task_blocked_by",
+    "set_task_parent",
+    "bulk_set_task_blocked_by",
+    "bulk_set_task_parent",
     "commit_repo",
     "commit_tasks",
     "get_strategy",

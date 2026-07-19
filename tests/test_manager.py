@@ -753,6 +753,51 @@ def test_update_subtask_of_no_prose_written(manager):
     assert "**Subtask of:**" not in content
 
 
+def test_bulk_update_dependencies(manager):
+    manager.create_issue("Blocker")
+    manager.create_issue("Task A")
+    manager.create_issue("Task B")
+    manager.create_issue("Task C")
+
+    results = manager.bulk_update_dependencies(
+        ["task-a", "task-b", "missing-task"], "blocker"
+    )
+    by_slug = {r["slug"]: r for r in results}
+    assert by_slug["task-a"]["ok"] is True
+    assert by_slug["task-b"]["ok"] is True
+    assert by_slug["missing-task"]["ok"] is False
+
+    assert manager.extract_deps(manager.find_issue_file("task-a")) == ["blocker"]
+    assert manager.extract_deps(manager.find_issue_file("task-b")) == ["blocker"]
+    # Unrelated task untouched
+    assert manager.extract_deps(manager.find_issue_file("task-c")) == []
+
+    # Clear blockers on both
+    clear_results = manager.bulk_update_dependencies(["task-a", "task-b"], "")
+    assert all(r["ok"] for r in clear_results)
+    assert manager.extract_deps(manager.find_issue_file("task-a")) == []
+    assert manager.extract_deps(manager.find_issue_file("task-b")) == []
+
+
+def test_bulk_update_subtask_of(manager):
+    manager.create_issue("Epic")
+    manager.create_issue("Child A")
+    manager.create_issue("Child B")
+
+    results = manager.bulk_update_subtask_of(["child-a", "child-b"], "epic")
+    assert all(r["ok"] for r in results)
+
+    issues = {i.slug: i for i in manager.load_mission()}
+    assert issues["child-a"].subtask_of == "epic"
+    assert issues["child-b"].subtask_of == "epic"
+
+    clear = manager.bulk_update_subtask_of(["child-a", "child-b"], None)
+    assert all(r["ok"] for r in clear)
+    issues = {i.slug: i for i in manager.load_mission()}
+    assert issues["child-a"].subtask_of is None
+    assert issues["child-b"].subtask_of is None
+
+
 def test_ingest_migrates_prose_edges_to_frontmatter(manager):
     """ingest_issues should migrate prose edge lines to frontmatter."""
     issues_root = manager.issues_root

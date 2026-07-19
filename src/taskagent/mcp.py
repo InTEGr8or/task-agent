@@ -325,21 +325,123 @@ def update_task(name: str, content: str) -> str:
         return f"Error updating task: {e}"
 
 
+def _parse_name_list(names: str) -> list[str]:
+    """Split a comma-separated name list, dropping empties."""
+    return [n.strip() for n in names.split(",") if n.strip()]
+
+
+def _format_bulk_results(results: list[dict], field: str, value: str) -> str:
+    """Render bulk update results as a short agent-readable report."""
+    ok = [r for r in results if r.get("ok")]
+    failed = [r for r in results if not r.get("ok")]
+    lines = [f"Bulk set {field}={value!r}: {len(ok)} succeeded, {len(failed)} failed."]
+    for r in ok:
+        lines.append(f"  OK: {r['slug']}")
+    for r in failed:
+        lines.append(f"  FAIL: {r['slug']} — {r.get('error')}")
+    return "\n".join(lines)
+
+
+def _normalize_relation_slugs(manager: TaskAgent, value: str) -> str:
+    """Slugify each comma-separated token (empty string stays empty / clear)."""
+    parts = _parse_name_list(value)
+    if not parts:
+        return ""
+    return ", ".join(manager.slugify(p) for p in parts)
+
+
 @mcp.tool()
 def update_task_dependencies(name: str, blocked_by: str) -> str:
-    """Update the dependencies of a task.
+    """Update the blocked_by dependencies of a task (alias of set_task_blocked_by).
+
+    Prefer set_task_blocked_by for new callers.
 
     Args:
         name: The title or partial name of the task to update.
         blocked_by: Comma-separated list of task slugs that block this task (use empty string to clear).
     """
+    return set_task_blocked_by(name, blocked_by)
+
+
+@mcp.tool()
+def set_task_blocked_by(name: str, blocked_by: str = "") -> str:
+    """Set or clear blocked_by on a single task without rewriting the body.
+
+    Replaces the entire blocked_by list (not append). Use empty string to clear.
+
+    Args:
+        name: Title or partial name of the task to update.
+        blocked_by: Comma-separated task slugs/names that block this task.
+            Empty string clears all blockers.
+    """
     manager = get_manager()
     slug = manager.slugify(name)
+    normalized = _normalize_relation_slugs(manager, blocked_by)
     try:
-        manager.update_dependencies(slug, blocked_by)
-        return f"Successfully updated dependencies for task '{slug}'."
+        manager.update_dependencies(slug, normalized)
+        if normalized:
+            return f"Successfully set blocked_by for task '{slug}' to: {normalized}."
+        return f"Successfully cleared blocked_by for task '{slug}'."
     except Exception as e:
-        return f"Error updating task dependencies: {e}"
+        return f"Error setting blocked_by: {e}"
+
+
+@mcp.tool()
+def set_task_parent(name: str, parent: str = "") -> str:
+    """Set or clear the parent (subtask_of) of a single task without rewriting the body.
+
+    Args:
+        name: Title or partial name of the task to update.
+        parent: Parent task slug or name. Empty string clears the parent.
+    """
+    manager = get_manager()
+    slug = manager.slugify(name)
+    parent_slug = manager.slugify(parent) if parent.strip() else None
+    try:
+        manager.update_subtask_of(slug, parent_slug)
+        if parent_slug:
+            return f"Successfully set parent of task '{slug}' to '{parent_slug}'."
+        return f"Successfully cleared parent of task '{slug}'."
+    except Exception as e:
+        return f"Error setting parent: {e}"
+
+
+@mcp.tool()
+def bulk_set_task_blocked_by(names: str, blocked_by: str = "") -> str:
+    """Set the same blocked_by list on many tasks without rewriting bodies.
+
+    Replaces each task's blocked_by list (not append). Empty blocked_by clears.
+
+    Args:
+        names: Comma-separated task titles or slugs to update.
+        blocked_by: Comma-separated blocker slugs/names applied to every task.
+            Empty string clears blockers on every named task.
+    """
+    manager = get_manager()
+    slugs = [manager.slugify(n) for n in _parse_name_list(names)]
+    if not slugs:
+        return "Error: no task names provided."
+    normalized = _normalize_relation_slugs(manager, blocked_by)
+    results = manager.bulk_update_dependencies(slugs, normalized)
+    return _format_bulk_results(results, "blocked_by", normalized)
+
+
+@mcp.tool()
+def bulk_set_task_parent(names: str, parent: str = "") -> str:
+    """Set the same parent (subtask_of) on many tasks without rewriting bodies.
+
+    Args:
+        names: Comma-separated task titles or slugs to update.
+        parent: Parent task slug or name applied to every task.
+            Empty string clears the parent on every named task.
+    """
+    manager = get_manager()
+    slugs = [manager.slugify(n) for n in _parse_name_list(names)]
+    if not slugs:
+        return "Error: no task names provided."
+    parent_slug = manager.slugify(parent) if parent.strip() else None
+    results = manager.bulk_update_subtask_of(slugs, parent_slug)
+    return _format_bulk_results(results, "parent", parent_slug or "")
 
 
 @mcp.tool()

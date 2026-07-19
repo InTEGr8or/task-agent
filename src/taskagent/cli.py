@@ -2335,40 +2335,70 @@ def cmd_update(
     blocked_by: Optional[str] = None,
     subtask_of: Optional[str] = None,
 ):
-    """Update task properties."""
-    issues = manager.load_mission()
-    target = select_issue(
-        console, issues, slug_part, status_filter=["pending", "draft", "active"]
-    )
-    if not target:
+    """Update task properties (single slug or comma-separated bulk)."""
+    if blocked_by is None and subtask_of is None:
         console.print(
-            f"[red]No active/pending/draft task found matching '{slug_part}'.[/red]"
+            "[yellow]No updates specified. Use --blocked-by or --subtask-of to update relationships.[/yellow]"
         )
-        sys.exit(1)
+        return
 
-    updated = False
+    raw_parts = [p.strip() for p in slug_part.split(",") if p.strip()]
+    is_bulk = len(raw_parts) > 1
+
     try:
-        # Handle blocked_by
+        if is_bulk:
+            slugs = [manager.slugify(p) for p in raw_parts]
+            if blocked_by is not None:
+                results = manager.bulk_update_dependencies(slugs, blocked_by)
+                ok = sum(1 for r in results if r["ok"])
+                fail = len(results) - ok
+                console.print(
+                    f"[bold]blocked_by[/bold] bulk update: "
+                    f"[green]{ok} ok[/green], [red]{fail} failed[/red]"
+                )
+                for r in results:
+                    if r["ok"]:
+                        console.print(f"  [green]OK[/green] {r['slug']}")
+                    else:
+                        console.print(f"  [red]FAIL[/red] {r['slug']}: {r['error']}")
+            if subtask_of is not None:
+                parent_slug = subtask_of if subtask_of != "" else None
+                results = manager.bulk_update_subtask_of(slugs, parent_slug)
+                ok = sum(1 for r in results if r["ok"])
+                fail = len(results) - ok
+                console.print(
+                    f"[bold]subtask_of[/bold] bulk update: "
+                    f"[green]{ok} ok[/green], [red]{fail} failed[/red]"
+                )
+                for r in results:
+                    if r["ok"]:
+                        console.print(f"  [green]OK[/green] {r['slug']}")
+                    else:
+                        console.print(f"  [red]FAIL[/red] {r['slug']}: {r['error']}")
+            return
+
+        issues = manager.load_mission()
+        target = select_issue(
+            console, issues, slug_part, status_filter=["pending", "draft", "active"]
+        )
+        if not target:
+            console.print(
+                f"[red]No active/pending/draft task found matching '{slug_part}'.[/red]"
+            )
+            sys.exit(1)
+
         if blocked_by is not None:
             manager.update_dependencies(target.slug, blocked_by)
             console.print(
                 f"[bold green]Successfully updated prerequisites for task '{target.slug}'.[/bold green]"
             )
-            updated = True
 
-        # Handle subtask_of
         if subtask_of is not None:
             # Empty string means clear the parent
             parent_slug = subtask_of if subtask_of != "" else None
             manager.update_subtask_of(target.slug, parent_slug)
             console.print(
                 f"[bold green]Successfully updated parent relationship for task '{target.slug}'.[/bold green]"
-            )
-            updated = True
-
-        if not updated:
-            console.print(
-                "[yellow]No updates specified. Use --blocked-by or --subtask-of to update relationships.[/yellow]"
             )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -4047,9 +4077,16 @@ def main():
         "slug", nargs="?", help="Optional slug of the task to mark as active"
     )
     update_parser = subparsers.add_parser(
-        "update", help="Update task properties (e.g. relationships)"
+        "update",
+        help="Update task relationships (blocked_by / parent) for one or many tasks",
     )
-    update_parser.add_argument("slug", help="Slug of the task to update")
+    update_parser.add_argument(
+        "slug",
+        help=(
+            "Slug of the task to update, or comma-separated slugs for bulk "
+            "(e.g. task-a,task-b,task-c)"
+        ),
+    )
     update_parser.add_argument(
         "--blocked-by",
         help="Comma-separated list of prerequisite task slugs that block this task (use empty string to clear)",
