@@ -1487,6 +1487,115 @@ def cmd_commit_tasks(
         console.print(f"[red]Unexpected error: {e}[/red]")
 
 
+def cmd_store(console: Console, args) -> None:
+    """Read-only / low-risk store data-root and registry commands (Phase 1).
+
+    Does not migrate historical data. Migration is Phase 2 (``ta store migrate``).
+    """
+    from taskagent.store_registry import (
+        MachineRegistry,
+        get_data_root,
+        inspect_host,
+        resolve_moniker_for_host,
+    )
+
+    sub = getattr(args, "store_command", None)
+    if not sub:
+        console.print(
+            "[yellow]Usage: ta store {data-root|moniker|list|inspect|rebuild-index}[/yellow]"
+        )
+        console.print(
+            "[dim]Phase 1 is read-only foundation. Migration is not enabled yet.[/dim]"
+        )
+        return
+
+    if sub == "data-root":
+        console.print(str(get_data_root()))
+        return
+
+    if sub == "moniker":
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        moniker, origin = resolve_moniker_for_host(host)
+        console.print(moniker)
+        if origin:
+            console.print(f"[dim]origin: {origin}[/dim]")
+        return
+
+    if sub == "list":
+        reg = MachineRegistry()
+        entries = reg.list_entries()
+        if not entries:
+            console.print(
+                f"[dim]No registered stores under {get_data_root()} "
+                f"(registry empty or missing).[/dim]"
+            )
+            return
+        table = Table(title="Machine task stores", box=None, show_header=True)
+        table.add_column("Moniker", style="cyan")
+        table.add_column("Store path")
+        table.add_column("Remote", style="dim")
+        table.add_column("Host paths", style="dim")
+        for e in entries:
+            table.add_row(
+                e.moniker,
+                e.store_path,
+                e.remote or "—",
+                ", ".join(e.host_paths) if e.host_paths else "—",
+            )
+        console.print(table)
+        return
+
+    if sub == "inspect":
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        report = inspect_host(host)
+        if getattr(args, "json", False):
+            console.print_json(data=report)
+            return
+        console.print(f"[bold]Host[/bold]:          {report['host_path']}")
+        console.print(f"[bold]Moniker[/bold]:       {report['moniker']}")
+        console.print(f"[bold]Origin[/bold]:        {report['origin'] or '—'}")
+        console.print(f"[bold]Data root[/bold]:     {report['data_root']}")
+        console.print(
+            f"[bold]Canonical store[/bold]: {report['canonical_store_path']} "
+            f"({'exists' if report['canonical_store_exists'] else 'missing'})"
+        )
+        console.print(
+            f"[bold]Migrated[/bold]:      {'yes' if report['migrated'] else 'no'}"
+        )
+        console.print(
+            f"[bold]Legacy store[/bold]:  {report['legacy_store_path'] or '—'}"
+        )
+        if report["legacy_kind"]:
+            console.print(
+                f"[bold]Legacy kind[/bold]:   {report['legacy_kind']}"
+                + (
+                    f" (remote: {report['legacy_remote']})"
+                    if report["legacy_remote"]
+                    else ""
+                )
+            )
+        if report["registry_entry"]:
+            console.print(f"[bold]Registry[/bold]:      {report['registry_entry']}")
+        else:
+            console.print("[bold]Registry[/bold]:      (not registered)")
+        console.print(
+            "\n[dim]No files were modified. Phase 2 will add: ta store migrate[/dim]"
+        )
+        return
+
+    if sub == "rebuild-index":
+        reg = MachineRegistry()
+        rebuilt = reg.rebuild_from_stores()
+        console.print(
+            f"[green]Rebuilt registry from {reg.stores_dir} "
+            f"({len(rebuilt)} store(s)).[/green]"
+        )
+        console.print(f"[dim]Wrote {reg.registry_path}[/dim]")
+        return
+
+    console.print(f"[red]Unknown store command: {sub}[/red]")
+
+
 def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
     """Automate the move of docs/tasks to a separate repository."""
     source_dir = manager.issues_root
@@ -3989,6 +4098,10 @@ def display_overview(console: Console, manager: TaskAgent):
         ("push", "Push the mission repository to origin"),
         ("commit", "Commit pending changes in the active task directory"),
         ("eject-mission", "Move mission queue to a separate repository"),
+        (
+            "store",
+            "Machine data root / moniker / registry (Phase 1: read-only)",
+        ),
         ("", ""),  # Spacer
         ("active", "Mark a task as active without starting a worktree"),
         ("promote", "Promote a draft task to pending"),
@@ -4332,6 +4445,43 @@ Usage:
         "--public", action="store_true", help="Make the new mission repo public"
     )
 
+    # store — machine data root / moniker / registry (Phase 1: no migration)
+    store_parser = subparsers.add_parser(
+        "store",
+        help="Inspect machine-level task store layout (data root, moniker, registry)",
+    )
+    store_sub = store_parser.add_subparsers(dest="store_command")
+    store_sub.add_parser(
+        "data-root", help="Print the machine task-agent data root path"
+    )
+    moniker_p = store_sub.add_parser(
+        "moniker", help="Print the moniker for a host path (default: cwd)"
+    )
+    moniker_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: current directory)",
+    )
+    store_sub.add_parser("list", help="List registered machine task stores")
+    inspect_p = store_sub.add_parser(
+        "inspect",
+        help="Read-only inspect: moniker, legacy store, migration status",
+    )
+    inspect_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: current directory)",
+    )
+    inspect_p.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    store_sub.add_parser(
+        "rebuild-index",
+        help="Rebuild registry.json by scanning stores/ under the data root",
+    )
+
     delete_parser = subparsers.add_parser(
         "delete", help="Soft-delete a task (archive without commit, restorable)"
     )
@@ -4521,6 +4671,8 @@ Usage:
         cmd_merge(console, manager, args.slug, message=args.message, push=args.push)
     elif args.command == "eject-mission":
         cmd_eject_mission(console, manager, public=args.public)
+    elif args.command == "store":
+        cmd_store(console, args)
     elif args.command == "done":
         cmd_done(
             console,
