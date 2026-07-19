@@ -1044,3 +1044,133 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
         "migrated": migrated,
         "pointers_ok": pointers_ok,
     }
+
+
+# ---------------------------------------------------------------------------
+# Store remotes (Phase 4) — core speaks git URLs only; providers suggest
+# ---------------------------------------------------------------------------
+
+
+def default_remote_providers():
+    """Built-in TasksRemoteProvider instances."""
+    from taskagent.plugins.github import GitHubTasksRemoteProvider
+
+    return [GitHubTasksRemoteProvider()]
+
+
+def suggest_store_remotes(
+    host_path: Path,
+    *,
+    moniker: Optional[str] = None,
+    origin_url: Optional[str] = None,
+) -> List[Any]:
+    """Collect remote suggestions from all registered providers.
+
+    Returns a list of ``RemoteSuggestion`` (typed loosely to avoid import cycles
+    at module load in constrained environments).
+    """
+    host = host_path.expanduser().resolve()
+    top = git_toplevel(host) or host
+    if moniker is None or origin_url is None:
+        derived_moniker, derived_origin = resolve_moniker_for_host(top)
+        moniker = moniker or derived_moniker
+        origin_url = origin_url if origin_url is not None else derived_origin
+
+    if not origin_url:
+        return []
+
+    suggestions: List[Any] = []
+    for provider in default_remote_providers():
+        try:
+            suggestions.extend(provider.suggest_remote(origin_url, moniker))
+        except Exception:
+            continue
+    return suggestions
+
+
+def set_store_remote(
+    store_path: Path,
+    url: str,
+    *,
+    remote_name: str = "origin",
+    moniker: Optional[str] = None,
+    data_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Set (or add) a git remote on a task store and update metadata/registry.
+
+    Does not create the remote repository on a host; only configures local git.
+    """
+    store = store_path.expanduser().resolve()
+    if not store.is_dir() or not looks_like_store(store):
+        raise ValueError(f"Not a task store: {store}")
+
+    url = url.strip()
+    if not url:
+        raise ValueError("Empty remote URL")
+
+    # Ensure git repo
+    if not (store / ".git").exists() and not is_nested_git_repo(store):
+        _git_init_and_commit(
+            store,
+            "chore: initialize task store git before setting remote",
+        )
+
+    existing = _list_git_remotes(store)
+    if remote_name in existing:
+        subprocess.run(
+            ["git", "-C", str(store), "remote", "set-url", remote_name, url],
+            check=True,
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        action = "set-url"
+    else:
+        subprocess.run(
+            ["git", "-C", str(store), "remote", "add", remote_name, url],
+            check=True,
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        action = "add"
+
+    # Resolve moniker for metadata
+    meta = read_store_meta(store) or {}
+    use_moniker = moniker or meta.get("moniker")
+    if not use_moniker:
+        try:
+            use_moniker = moniker_from_remote(url)
+        except ValueError:
+            use_moniker = store.name.replace("_", "/", 1)
+
+    write_store_meta(
+        store,
+        moniker=str(use_moniker),
+        remote=url if remote_name == "origin" else meta.get("remote"),
+        extra={
+            "remote_name": remote_name,
+            **(
+                {"remotes": {**(meta.get("remotes") or {}), remote_name: url}}
+                if True
+                else {}
+            ),
+        },
+    )
+
+    reg = MachineRegistry(data_root)
+    reg.upsert(
+        StoreEntry(
+            moniker=str(use_moniker),
+            store_path=str(store),
+            host_paths=[],
+            remote=url if remote_name == "origin" else None,
+        )
+    )
+
+    return {
+        "action": action,
+        "remote_name": remote_name,
+        "url": url,
+        "store_path": str(store),
+        "moniker": use_moniker,
+        "remotes": _list_git_remotes(store),
+    }

@@ -439,6 +439,55 @@ def test_migrate_nested_git_preserves_remote(tmp_path):
     assert url == remote
 
 
+def test_github_remote_suggestions():
+    from taskagent.plugins.github import GitHubTasksRemoteProvider
+
+    p = GitHubTasksRemoteProvider()
+    sug = p.suggest_remote("git@github.com:acme/app.git", "acme/app")
+    labels = {s.label: s.url for s in sug}
+    assert labels["sibling-tasks"] == "git@github.com:acme/app-tasks.git"
+    assert labels["wiki"] == "git@github.com:acme/app.wiki.git"
+    assert labels["same-repo"] == "git@github.com:acme/app.git"
+
+    sug_https = p.suggest_remote("https://github.com/acme/app.git", "acme/app")
+    assert sug_https[0].url.startswith("https://github.com/")
+    assert p.suggest_remote("git@gitlab.com:g/r.git", "g/r") == []
+
+
+def test_set_store_remote(tmp_path):
+    from taskagent.store_registry import (
+        _list_git_remotes,
+        migrate_store,
+        set_store_remote,
+    )
+
+    data = tmp_path / "data"
+    host = tmp_path / "proj"
+    host.mkdir()
+    _make_host_tree_store(host)
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert result.success
+    dest = Path(result.plan.destination)
+
+    info = set_store_remote(
+        dest,
+        "git@github.com:acme/proj-tasks.git",
+        moniker=result.plan.moniker,
+        data_root=data,
+    )
+    assert info["action"] == "add"
+    assert _list_git_remotes(dest)["origin"] == "git@github.com:acme/proj-tasks.git"
+
+    info2 = set_store_remote(
+        dest,
+        "git@github.com:acme/proj-tasks-v2.git",
+        moniker=result.plan.moniker,
+        data_root=data,
+    )
+    assert info2["action"] == "set-url"
+    assert _list_git_remotes(dest)["origin"] == "git@github.com:acme/proj-tasks-v2.git"
+
+
 def test_migrate_refuses_overwrite_existing_dest(tmp_path):
     from taskagent.store_registry import migrate_store
 

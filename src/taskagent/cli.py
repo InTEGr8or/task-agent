@@ -1501,7 +1501,7 @@ def cmd_store(console: Console, args) -> None:
     if not sub:
         console.print(
             "[yellow]Usage: ta store "
-            "{data-root|moniker|list|inspect|rebuild-index|migrate}[/yellow]"
+            "{data-root|moniker|list|inspect|rebuild-index|migrate|remote}[/yellow]"
         )
         return
 
@@ -1587,6 +1587,90 @@ def cmd_store(console: Console, args) -> None:
             f"({len(rebuilt)} store(s)).[/green]"
         )
         console.print(f"[dim]Wrote {reg.registry_path}[/dim]")
+        return
+
+    if sub == "remote":
+        from taskagent.store_registry import (
+            inspect_host,
+            set_store_remote,
+            suggest_store_remotes,
+            _list_git_remotes,
+        )
+
+        rcmd = getattr(args, "remote_command", None)
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        report = inspect_host(host)
+        store_path = Path(
+            report["canonical_store_path"]
+            if report.get("canonical_store_exists")
+            else (report.get("legacy_store_path") or report["canonical_store_path"])
+        )
+
+        if rcmd == "show":
+            if not store_path.is_dir():
+                console.print(f"[red]No store at {store_path}[/red]")
+                raise SystemExit(1)
+            remotes = _list_git_remotes(store_path)
+            if not remotes:
+                console.print(f"[dim]No remotes configured on {store_path}[/dim]")
+            else:
+                for rname, rurl in remotes.items():
+                    console.print(f"[cyan]{rname}[/cyan]\t{rurl}")
+            return
+
+        if rcmd == "suggest":
+            suggestions = suggest_store_remotes(
+                host, moniker=report.get("moniker"), origin_url=report.get("origin")
+            )
+            if not suggestions:
+                console.print(
+                    "[dim]No provider suggestions "
+                    f"(origin={report.get('origin') or '—'}). "
+                    "Pass a URL to [bold]ta store remote set[/bold].[/dim]"
+                )
+                return
+            table = Table(title="Suggested task-store remotes", box=None)
+            table.add_column("Provider", style="cyan")
+            table.add_column("Label")
+            table.add_column("URL")
+            table.add_column("Notes", style="dim")
+            for s in suggestions:
+                table.add_row(s.provider, s.label, s.url, s.notes)
+            console.print(table)
+            console.print("\n[dim]Apply with: ta store remote set <url>[/dim]")
+            return
+
+        if rcmd == "set":
+            raw_url = getattr(args, "url", None)
+            if not raw_url or not isinstance(raw_url, str):
+                console.print("[red]Usage: ta store remote set <url>[/red]")
+                raise SystemExit(1)
+            if not store_path.is_dir():
+                console.print(
+                    f"[red]Store does not exist yet: {store_path}[/red]\n"
+                    "[dim]Run [bold]ta store migrate[/bold] first.[/dim]"
+                )
+                raise SystemExit(1)
+            remote_name = getattr(args, "name", None) or "origin"
+            if not isinstance(remote_name, str):
+                remote_name = "origin"
+            try:
+                info = set_store_remote(
+                    store_path,
+                    raw_url,
+                    remote_name=remote_name,
+                    moniker=report.get("moniker"),
+                )
+            except Exception as e:
+                console.print(f"[red]Failed to set remote:[/red] {e}")
+                raise SystemExit(1)
+            console.print(
+                f"[green]Remote {info['remote_name']} {info['action']}:[/green] {info['url']}"
+            )
+            console.print(f"[dim]Store: {info['store_path']}[/dim]")
+            return
+
+        console.print("[yellow]Usage: ta store remote {show|suggest|set}[/yellow]")
         return
 
     if sub == "migrate":
@@ -4550,6 +4634,46 @@ Usage:
     )
     migrate_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    remote_parser = store_sub.add_parser(
+        "remote",
+        help="Show, suggest, or set the git remote for a task store",
+    )
+    remote_sub = remote_parser.add_subparsers(dest="remote_command")
+    remote_show = remote_sub.add_parser(
+        "show", help="List git remotes on the current project's task store"
+    )
+    remote_show.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
+    )
+    remote_suggest = remote_sub.add_parser(
+        "suggest",
+        help="Suggest remotes via provider plugins (GitHub sibling/wiki)",
+    )
+    remote_suggest.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
+    )
+    remote_set = remote_sub.add_parser(
+        "set",
+        help="Set the store's git remote URL (does not create the remote host repo)",
+    )
+    remote_set.add_argument("url", help="Git remote URL")
+    remote_set.add_argument(
+        "--name",
+        default="origin",
+        help="Remote name (default: origin)",
+    )
+    remote_set.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
     )
 
     delete_parser = subparsers.add_parser(
