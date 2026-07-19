@@ -532,6 +532,9 @@ class MigrationPlan:
     destination: str
     kind: Optional[str]  # nested_git | host_tree | already_migrated | none
     remotes_before: Dict[str, str] = field(default_factory=dict)
+    subject_origin: Optional[str] = (
+        None  # host code remote (identity), not always store remote
+    )
     already_migrated: bool = False
     steps: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -539,6 +542,29 @@ class MigrationPlan:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def write_host_store_config(host_path: Path, moniker: str) -> Path:
+    """Write/update ``.ta-config.json`` with ``store_moniker`` for rename-resilient binding.
+
+    This is the greppable host-side pointer: moniker identity survives path moves
+    and outlives a GitHub rename until ``ta store rebind`` is run.
+    """
+    host = host_path.expanduser().resolve()
+    path = host / ".ta-config.json"
+    data: Dict[str, Any] = {}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = raw
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    data["store_moniker"] = moniker
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return path
 
 
 @dataclass
@@ -563,12 +589,14 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
     """Build a migration plan for the host project (no side effects)."""
     host = host_path.expanduser().resolve()
     top = git_toplevel(host) or host
-    moniker, _origin = resolve_moniker_for_host(top)
+    moniker, subject_origin = resolve_moniker_for_host(top)
     root = data_root if data_root is not None else get_data_root()
     dest = store_path_for_moniker(moniker, root)
     steps: List[str] = []
     warnings: List[str] = []
     errors: List[str] = []
+    if subject_origin:
+        steps.append(f"Subject host origin (identity): {subject_origin}")
 
     # Prefer the physical eject location as the source to move.
     eject_path = top / ".task-agent" / "tasks"
@@ -588,6 +616,7 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
                 destination=str(dest),
                 kind="already_migrated",
                 already_migrated=True,
+                subject_origin=subject_origin,
                 steps=["No-op: .task-agent/tasks already symlinks to canonical store"],
             )
         if target is not None and target.is_dir() and looks_like_store(target):
@@ -615,6 +644,7 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
                 destination=str(dest),
                 kind="already_migrated",
                 already_migrated=True,
+                subject_origin=subject_origin,
                 steps=[
                     "No-op: canonical store already exists; no in-host source to move"
                 ],
@@ -626,6 +656,7 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
             source=None,
             destination=str(dest),
             kind="none",
+            subject_origin=subject_origin,
             errors=[
                 "No legacy task store found under host (.task-agent/tasks or docs/tasks)"
             ],
@@ -645,7 +676,24 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
 
     nested = is_nested_git_repo(source)
     kind = "nested_git" if nested else "host_tree"
-    remotes_before = _list_git_remotes(source) if nested else {}
+    # Always inspect remotes on the source path (may walk to host for host_tree)
+    raw_remotes = _list_git_remotes(source)
+    if nested:
+        remotes_before = raw_remotes
+        if remotes_before:
+            steps.append(f"Preserve nested store remotes: {remotes_before}")
+        else:
+            warnings.append("Nested git store has no remotes configured")
+    else:
+        # host_tree: remotes belong to the host worktree, not a dedicated tasks repo
+        remotes_before = {}
+        if raw_remotes:
+            warnings.append(
+                f"Source is host_tree (no nested .git). Visible remotes {raw_remotes} "
+                "belong to the subject host repo and will NOT be copied as store remotes. "
+                "After migrate: `ta store remote suggest` / `ta store remote set <url>`."
+            )
+        steps.append("git init store without inventing a remote (host_tree)")
 
     # Destination conflicts
     if dest.exists():
@@ -672,20 +720,12 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
         )
         if remotes_before:
             steps.append(f"Verify remotes after move: {remotes_before}")
-        else:
-            warnings.append("Nested git store has no remotes configured")
     else:
         steps.append(f"Move host_tree store {source} → {dest}")
-        steps.append("git init in destination (no remote invented)")
         steps.append("Create initial commit of station tree")
-        if remotes_before:
-            warnings.append(
-                "Unexpected remotes on host_tree source; they belong to the host repo "
-                "and will not be copied as store remotes"
-            )
-        remotes_before = {}  # do not treat host remotes as store remotes
 
-    steps.append("Write .task-agent/store.json moniker metadata")
+    steps.append("Write .task-agent/store.json moniker metadata (+ subject_origin)")
+    steps.append(f"Write host .ta-config.json store_moniker={moniker}")
     steps.append("Register moniker in machine registry.json")
     steps.append(f"Point {eject_path} symlink → {dest}")
     steps.append(f"Point docs/tasks (and docks/tasks if present) → {dest}")
@@ -704,6 +744,7 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
         destination=str(dest),
         kind=kind,
         remotes_before=remotes_before,
+        subject_origin=subject_origin,
         already_migrated=False,
         steps=steps,
         warnings=warnings,
@@ -843,6 +884,18 @@ def migrate_store(
         applied: List[str] = []
         if dest.is_dir() and looks_like_store(dest):
             applied.extend(_update_host_pointers(host, dest))
+            write_host_store_config(host, plan.moniker)
+            applied.append(f"wrote {host / '.ta-config.json'} store_moniker")
+            # Ensure subject_origin is recorded if missing
+            meta = read_store_meta(dest) or {}
+            if plan.subject_origin and not meta.get("subject_origin"):
+                write_store_meta(
+                    dest,
+                    moniker=plan.moniker,
+                    remote=meta.get("remote") or git_remote_url(dest),
+                    extra={**meta, "subject_origin": plan.subject_origin},
+                )
+                applied.append("recorded subject_origin in store.json")
             reg = MachineRegistry(data_root)
             reg.upsert(
                 StoreEntry(
@@ -915,9 +968,13 @@ def migrate_store(
                 "migrated_from": str(source),
                 "migrated_at": datetime.now(timezone.utc).isoformat(),
                 "kind": plan.kind,
+                "subject_origin": plan.subject_origin,
+                "remotes_before": plan.remotes_before or None,
             },
         )
         applied.append("wrote store.json")
+        write_host_store_config(host, plan.moniker)
+        applied.append(f"wrote {host / '.ta-config.json'} store_moniker")
 
         verify_errors = verify_store(dest, remotes_expected=remotes_expected)
         if source_count and _count_entries(dest) < max(1, source_count // 2):
@@ -1030,13 +1087,22 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
         )
     )
 
+    store_remotes: Dict[str, str] = {}
+    subject_origin_meta = None
+    if canonical.is_dir():
+        store_remotes = _list_git_remotes(canonical)
+        meta = read_store_meta(canonical) or {}
+        subject_origin_meta = meta.get("subject_origin")
+
     return {
         "host_path": str(top),
         "moniker": moniker,
         "origin": origin,
+        "subject_origin_recorded": subject_origin_meta,
         "data_root": str(root),
         "canonical_store_path": str(canonical),
         "canonical_store_exists": canonical.is_dir(),
+        "store_remotes": store_remotes,
         "registry_entry": entry.to_dict() if entry else None,
         "legacy_store_path": str(legacy) if legacy else None,
         "legacy_kind": legacy_kind,
@@ -1242,6 +1308,131 @@ def manager_for_repo_query(
 
     resolved = resolve_repo_query(query, data_root=data_root)
     return TaskAgent(config_dir=str(resolved.store_path)), resolved
+
+
+def rebind_store_moniker(
+    host_path: Path,
+    new_moniker: Optional[str] = None,
+    data_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Rebind a host project to a (possibly new) moniker after a repo rename.
+
+    Resolution of the *current* store prefers:
+    1. ``.ta-config.json`` / pyproject ``store_moniker``
+    2. Registry by host path
+    3. Moniker derived from current origin
+
+    Then updates store.json, renames the data-root directory if needed,
+    rewrites the host pointer, and updates the registry.
+
+    Args:
+        host_path: Subject project path.
+        new_moniker: Explicit moniker; default = moniker from current host origin.
+        data_root: Optional data root override.
+    """
+    host = host_path.expanduser().resolve()
+    top = git_toplevel(host) or host
+    root = data_root if data_root is not None else get_data_root()
+    reg = MachineRegistry(root)
+
+    # Find existing binding
+    derived, subject_origin = resolve_moniker_for_host(top)
+    target_moniker = (new_moniker or derived).strip()
+    if not target_moniker:
+        raise ValueError("Cannot derive moniker; pass new_moniker explicitly")
+
+    entry = reg.find_by_host_path(top) or reg.get(derived)
+    # Also try ta-config moniker
+    config_moniker = None
+    cfg = top / ".ta-config.json"
+    if cfg.is_file():
+        try:
+            raw = json.loads(cfg.read_text(encoding="utf-8"))
+            config_moniker = raw.get("store_moniker") or raw.get("moniker")
+        except (OSError, json.JSONDecodeError):
+            pass
+    if entry is None and config_moniker:
+        entry = reg.get(str(config_moniker))
+
+    if entry is None:
+        # Fall back to canonical path for derived moniker
+        cand = store_path_for_moniker(derived, root)
+        if not (cand.is_dir() and looks_like_store(cand)):
+            raise FileNotFoundError(
+                f"No registered store for host {top}; run ta store migrate first"
+            )
+        old_moniker = derived
+        old_path = cand
+    else:
+        old_moniker = entry.moniker
+        old_path = Path(entry.store_path).resolve()
+
+    new_path = store_path_for_moniker(target_moniker, root)
+    moved = False
+    if old_path.resolve() != new_path.resolve():
+        if new_path.exists():
+            raise FileExistsError(
+                f"Destination store already exists: {new_path}. "
+                "Remove or choose a different moniker."
+            )
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_path), str(new_path))
+        moved = True
+    else:
+        new_path = old_path
+
+    meta = read_store_meta(new_path) or {}
+    write_store_meta(
+        new_path,
+        moniker=target_moniker,
+        remote=meta.get("remote") or git_remote_url(new_path),
+        extra={
+            **{
+                k: v
+                for k, v in meta.items()
+                if k not in ("moniker", "remote", "version")
+            },
+            "subject_origin": subject_origin or meta.get("subject_origin"),
+            "previous_moniker": old_moniker
+            if old_moniker != target_moniker
+            else meta.get("previous_moniker"),
+            "rebound_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    write_host_store_config(top, target_moniker)
+    _update_host_pointers(top, new_path)
+
+    # Registry: drop old moniker key if renamed
+    entries = reg.load()
+    if old_moniker in entries and old_moniker != target_moniker:
+        old_entry = entries.pop(old_moniker)
+        hosts = list(dict.fromkeys([*old_entry.host_paths, str(top)]))
+        entries[target_moniker] = StoreEntry(
+            moniker=target_moniker,
+            store_path=str(new_path.resolve()),
+            host_paths=hosts,
+            remote=old_entry.remote or git_remote_url(new_path),
+            registered_at=old_entry.registered_at,
+        )
+        reg.save(entries)
+    else:
+        reg.upsert(
+            StoreEntry(
+                moniker=target_moniker,
+                store_path=str(new_path.resolve()),
+                host_paths=[str(top)],
+                remote=git_remote_url(new_path),
+            )
+        )
+
+    return {
+        "old_moniker": old_moniker,
+        "new_moniker": target_moniker,
+        "store_path": str(new_path.resolve()),
+        "moved": moved,
+        "subject_origin": subject_origin,
+        "host_config": str(top / ".ta-config.json"),
+    }
 
 
 def set_store_remote(

@@ -570,6 +570,7 @@ class TaskAgent:
         issues.append(new_issue)
         self.save_mission(issues)
         self.sync_mission()
+        self._commit_task_store(f"task: restore {slug} → {to_status}")
 
         return new_issue
 
@@ -838,7 +839,9 @@ class TaskAgent:
         self.init_project()
         # Reload to get the issue with proper priority from mission.usv
         issues = self.load_mission()
-        return next(i for i in issues if i.slug == slug)
+        created = next(i for i in issues if i.slug == slug)
+        self._commit_task_store(f"task: create {created.slug}")
+        return created
 
     def promote_issue(self, slug: str) -> Issue:
         """Promote an issue from draft to pending. Also promotes any draft children."""
@@ -874,6 +877,7 @@ class TaskAgent:
 
         self.sync_mission()
         target.status = "pending"
+        self._commit_task_store(f"task: promote {slug}")
         return target
 
     def demote_issue(self, slug: str) -> Issue:
@@ -910,6 +914,7 @@ class TaskAgent:
 
         self.sync_mission()
         target.status = to_status
+        self._commit_task_store(f"task: demote {slug} → {to_status}")
         return target
 
     def move_to_active(self, slug: str) -> Issue:
@@ -939,6 +944,7 @@ class TaskAgent:
         shutil.move(str(source), str(dest))
         self.sync_mission()
         target.status = "active"
+        self._commit_task_store(f"task: active {slug}")
         return target
 
     def add_dependency(self, slug: str, blocked_by: str) -> Issue:
@@ -985,6 +991,7 @@ class TaskAgent:
                 updated_issue = issue
                 break
         self.save_mission(issues)
+        self._commit_task_store(f"task: add blocked_by on {slug}")
 
         if updated_issue:
             return updated_issue
@@ -1026,6 +1033,7 @@ class TaskAgent:
                 updated_issue = issue
                 break
         self.save_mission(issues)
+        self._commit_task_store(f"task: remove blocked_by on {slug}")
 
         if updated_issue:
             return updated_issue
@@ -1035,6 +1043,76 @@ class TaskAgent:
             blocked_by=new_blocked_by,
             status="completed",
         )
+
+    def _commit_task_store(self, message: str, no_verify: bool = True) -> str:
+        """Commit task-store changes to the mission git root only.
+
+        Targets ``mission_root`` (the store's git repo when dual/centralized).
+        Uses ``git add -f`` so single-repo setups still capture gitignored
+        ``.task-agent/tasks`` paths. Never creates empty commits.
+
+        Returns short hash, ``no_changes``, ``no_git``, or ``failed``.
+        """
+        if os.environ.get("TA_NO_AUTO_COMMIT", "").lower() in ("1", "true", "yes"):
+            return "no_changes"
+
+        if not self.mission_root:
+            return "no_git"
+
+        root = self.mission_root.resolve()
+        issues = self.issues_root.resolve()
+        try:
+            rel = issues.relative_to(root)
+            pathspec = "." if str(rel) == "." else str(rel).replace("\\", "/")
+        except ValueError:
+            return "failed"
+
+        add_cmd = ["git", "-C", str(root), "add", "-f", "--", pathspec]
+        subprocess.run(
+            add_cmd,
+            check=False,
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+
+        # Staged?
+        staged = subprocess.run(
+            ["git", "-C", str(root), "diff", "--cached", "--quiet"],
+            capture_output=True,
+            shell=(os.name == "nt"),
+        )
+        if staged.returncode == 0:
+            return "no_changes"
+
+        cmd = ["git", "-C", str(root), "commit", "-m", message]
+        if no_verify:
+            cmd.append("--no-verify")
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, shell=(os.name == "nt")
+        )
+        if res.returncode != 0:
+            combined = (res.stdout or "") + (res.stderr or "")
+            if any(
+                s in combined
+                for s in (
+                    "nothing to commit",
+                    "nothing added to commit",
+                    "working tree clean",
+                    "no changes added to commit",
+                )
+            ):
+                return "no_changes"
+            return "failed"
+
+        try:
+            return subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                shell=(os.name == "nt"),
+            ).strip()
+        except Exception:
+            return "unknown"
 
     def _git_commit(
         self,
@@ -1057,8 +1135,9 @@ class TaskAgent:
         if files:
             for f in files:
                 git_add_path = _get_git_add_path(f)
+                # Force-add so gitignored task paths are included when needed
                 subprocess.run(
-                    ["git", "-C", str(repo_root), "add", git_add_path],
+                    ["git", "-C", str(repo_root), "add", "-f", git_add_path],
                     check=False,
                     shell=(os.name == "nt"),
                 )
@@ -1235,19 +1314,21 @@ class TaskAgent:
                 else:
                     committed = True
 
-            # B. Commit Mission Changes (Mission Repo)
-            # If they are different, we perform a second commit
+            # B. Commit Mission Changes (Mission Repo / centralized store)
             if self.is_dual_repo and self.mission_root:
                 mission_msg = f"task: finalize {target_issue.slug}"
-                mission_hash = self._git_commit(
-                    self.mission_root, mission_msg, no_verify=no_verify
-                )
+                mission_hash = self._commit_task_store(mission_msg, no_verify=no_verify)
                 if mission_hash == "failed":
                     raise RuntimeError(
                         "Failed to commit changes to mission repository."
                     )
-                if mission_hash != "no_changes":
+                if mission_hash not in ("no_changes", "no_git"):
                     committed = True
+            elif self.code_root and self.mission_root:
+                # Single-repo: force-include gitignored task paths before/with code
+                self._commit_task_store(
+                    f"task: finalize {target_issue.slug}", no_verify=no_verify
+                )
 
         # 5. Update issue file with the code hash
         # If we didn't commit, we use the current HEAD or 'pending'
@@ -1526,6 +1607,7 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._commit_task_store(f"task: update {slug}")
 
         # Return the issue object
         for i in issues:
@@ -1580,6 +1662,7 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._commit_task_store(f"task: set blocked_by on {slug}")
 
         # Return the updated issue object
         for i in issues:
@@ -1631,6 +1714,7 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._commit_task_store(f"task: set subtask_of on {slug}")
 
         # Return the updated issue object
         for i in issues:
@@ -1958,7 +2042,11 @@ class TaskAgent:
         if sync:
             self.sync_mission(ingest=False)
 
-        return len(new_issues), len(existing_issues) - len(present_issues)
+        n_new = len(new_issues)
+        n_removed = len(existing_issues) - len(present_issues)
+        if n_new or n_removed:
+            self._commit_task_store(f"task: ingest (+{n_new}/-{n_removed})")
+        return n_new, n_removed
 
     # ── Strategy ─────────────────────────────────────────────────────
 

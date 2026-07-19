@@ -1480,6 +1480,10 @@ def cmd_store_help(console: Console) -> None:
             "remote set <url>",
             "Set the store's git remote URL (local only; no host create)",
         ),
+        (
+            "rebind [moniker]",
+            "Rebind after subject repo rename (moniker, pointers, registry)",
+        ),
     ]
     for cmd, desc in commands:
         table.add_row(cmd, desc)
@@ -1554,7 +1558,20 @@ def cmd_store(console: Console, args) -> None:
             return
         console.print(f"[bold]Host[/bold]:          {report['host_path']}")
         console.print(f"[bold]Moniker[/bold]:       {report['moniker']}")
-        console.print(f"[bold]Origin[/bold]:        {report['origin'] or '—'}")
+        console.print(f"[bold]Host origin[/bold]:   {report['origin'] or '—'}")
+        if report.get("subject_origin_recorded"):
+            console.print(
+                f"[bold]Recorded origin[/bold]: {report['subject_origin_recorded']}"
+            )
+        remotes = report.get("store_remotes") or {}
+        if remotes:
+            for rname, rurl in remotes.items():
+                console.print(f"[bold]Store remote[/bold]:  {rname} → {rurl}")
+        else:
+            console.print(
+                "[bold]Store remote[/bold]:  — "
+                "[dim](none; host_tree migrate does not invent remotes)[/dim]"
+            )
         console.print(f"[bold]Data root[/bold]:     {report['data_root']}")
         console.print(
             f"[bold]Canonical store[/bold]: {report['canonical_store_path']} "
@@ -1678,6 +1695,26 @@ def cmd_store(console: Console, args) -> None:
         console.print("[yellow]Usage: ta store remote {show|suggest|set}[/yellow]")
         return
 
+    if sub == "rebind":
+        from taskagent.store_registry import rebind_store_moniker
+
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        new_moniker = getattr(args, "moniker", None)
+        try:
+            info = rebind_store_moniker(host, new_moniker=new_moniker)
+        except Exception as e:
+            console.print(f"[red]Rebind failed:[/red] {e}")
+            raise SystemExit(1)
+        console.print(
+            f"[green]Rebound[/green] [cyan]{info['old_moniker']}[/cyan] → "
+            f"[cyan]{info['new_moniker']}[/cyan]"
+        )
+        console.print(f"[dim]Store: {info['store_path']} (moved={info['moved']})[/dim]")
+        console.print(f"[dim]Host pointer: {info['host_config']}[/dim]")
+        if info.get("subject_origin"):
+            console.print(f"[dim]Subject origin: {info['subject_origin']}[/dim]")
+        return
+
     if sub == "migrate":
         host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
         dry_run = bool(getattr(args, "dry_run", False))
@@ -1694,8 +1731,12 @@ def cmd_store(console: Console, args) -> None:
         console.print(f"[bold]Kind[/bold]:     {plan.kind or '—'}")
         console.print(f"[bold]Source[/bold]:   {plan.source or '—'}")
         console.print(f"[bold]Dest[/bold]:     {plan.destination}")
+        if plan.subject_origin:
+            console.print(f"[bold]Subject origin[/bold]: {plan.subject_origin}")
         if plan.remotes_before:
-            console.print(f"[bold]Remotes[/bold]:  {plan.remotes_before}")
+            console.print(
+                f"[bold]Store remotes (preserve)[/bold]: {plan.remotes_before}"
+            )
         if plan.warnings:
             for w in plan.warnings:
                 console.print(f"[yellow]Warning:[/yellow] {w}")
@@ -4743,6 +4784,21 @@ Usage:
     remote_set.add_argument(
         "path",
         nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
+    )
+    rebind_p = store_sub.add_parser(
+        "rebind",
+        help="Rebind store moniker after subject repo rename",
+    )
+    rebind_p.add_argument(
+        "moniker",
+        nargs="?",
+        default=None,
+        help="New moniker (default: derive from current host origin)",
+    )
+    rebind_p.add_argument(
+        "--path",
         default=None,
         help="Host project path (default: cwd)",
     )
