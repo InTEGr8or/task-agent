@@ -25,48 +25,56 @@ def _update_env_var(env_path: Path, key: str, value: str):
 
 
 def _repo_root_for(path: Path) -> Path:
-    """Map a path to its main repo root (unwrap task-agent .gwt worktrees)."""
-    if path.parent.name == ".gwt":
-        return path.parent.parent
-    return path
+    """Map a path to its main repo root (unwrap .gwt / git worktrees).
+
+    Delegates to store_registry.project_host_root so discovery and migrate
+    agree on where the legacy task store lives.
+    """
+    from taskagent.store_registry import project_host_root
+
+    return project_host_root(path)
 
 
 def _heal_docs_tasks_symlink(root: Path, target: Path) -> None:
-    """Ensure docs/tasks (and docks/tasks if present) point at target.
+    """Ensure docs/tasks points at target when human symlink preference is on.
+
+    Only manages ``docs/tasks`` (human convenience). Respects
+    ``store_symlink: false`` in ``.ta-config.json`` so ``ta store symlink off``
+    is not undone by discovery auto-heal.
 
     Non-destructive: only creates/replaces missing, empty, or symlink links.
     Does not merge a populated real directory.
     """
-    target_abs = target.resolve()
-    for rel in (Path("docs") / "tasks", Path("docks") / "tasks"):
-        link = root / rel
-        parent = link.parent
-        if not parent.is_dir():
-            if parent.exists() or parent.is_symlink():
-                continue
-            # Only auto-create docs/ when healing (not docks)
-            if rel.parts[0] == "docs":
-                try:
-                    parent.mkdir(parents=True, exist_ok=True)
-                except OSError:
-                    continue
-            else:
-                continue
+    from taskagent.store_registry import store_symlink_preferred
 
+    if not store_symlink_preferred(root):
+        return
+
+    target_abs = target.resolve()
+    link = root / "docs" / "tasks"
+    parent = link.parent
+    if not parent.is_dir():
+        if parent.exists() or parent.is_symlink():
+            return
         try:
-            if link.is_symlink() and link.resolve() == target_abs:
-                continue
-            if link.is_symlink():
-                link.unlink()
-            elif link.is_dir():
-                if any(link.iterdir()):
-                    continue  # leave populated trees alone
-                link.rmdir()
-            elif link.exists():
-                continue
-            os.symlink(str(target_abs), str(link))
+            parent.mkdir(parents=True, exist_ok=True)
         except OSError:
-            pass
+            return
+
+    try:
+        if link.is_symlink() and link.resolve() == target_abs:
+            return
+        if link.is_symlink():
+            link.unlink()
+        elif link.is_dir():
+            if any(link.iterdir()):
+                return  # leave populated trees alone
+            link.rmdir()
+        elif link.exists():
+            return
+        os.symlink(str(target_abs), str(link))
+    except OSError:
+        pass
 
 
 def _resolve_centralized_store(

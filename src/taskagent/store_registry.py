@@ -230,13 +230,75 @@ def git_toplevel(path: Path) -> Optional[Path]:
         return None
 
 
+def project_host_root(path: Path) -> Path:
+    """Resolve the *main* project root for task-store discovery and migrate.
+
+    Task stores live on the primary project tree (e.g. ``turboship/.task-agent/tasks``),
+    never on a linked worktree. Callers often run ``ta`` from ``.gwt/<slug>`` or
+    another git worktree whose ``rev-parse --show-toplevel`` is the worktree
+    path — that must not be treated as the host.
+
+    Resolution order:
+    1. Unwrap ``.gwt/<slug>`` (task-agent worktrees) by walking parents.
+    2. ``git rev-parse --git-common-dir`` → directory that owns ``.git/`` (main
+       worktree), works for any git worktree. Walks up if ``path`` is not yet
+       a directory that git accepts.
+    3. Fall back to ``git_toplevel``, still unwrapping ``.gwt``.
+    4. Resolved path itself.
+    """
+    p = path.expanduser().resolve()
+
+    # 1) Explicit .gwt unwrap (works even without a valid git context)
+    for cur in [p, *p.parents]:
+        if cur.parent.name == ".gwt":
+            return cur.parent.parent.resolve()
+        if cur.name == ".gwt":
+            return cur.parent.resolve()
+
+    # 2) Main worktree via git common dir — try path and parents so nested
+    #    non-existent or non-git dirs still resolve (e.g. worktree/subdir).
+    for cur in [p, *p.parents]:
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(cur), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=True,
+                shell=(os.name == "nt"),
+            )
+            common = Path(res.stdout.strip())
+            if not common.is_absolute():
+                common = (cur / common).resolve()
+            else:
+                common = common.resolve()
+            # common is typically <main>/.git  (dir) or under it
+            if common.name == ".git":
+                return common.parent.resolve()
+            for parent in common.parents:
+                if parent.name == ".git":
+                    return parent.parent.resolve()
+            break
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            continue
+
+    # 3) Toplevel with .gwt unwrap
+    for cur in [p, *p.parents]:
+        top = git_toplevel(cur)
+        if top is not None:
+            top = top.resolve()
+            if top.parent.name == ".gwt":
+                return top.parent.parent.resolve()
+            return top
+
+    return p
+
+
 def resolve_moniker_for_host(host_path: Path) -> tuple[str, Optional[str]]:
     """Resolve (moniker, origin_url_or_none) for a host project path.
 
-    Prefers origin remote; falls back to path-derived moniker.
+    Prefers origin remote on the **main** project root; falls back to path moniker.
     """
-    host = host_path.expanduser().resolve()
-    top = git_toplevel(host) or host
+    top = project_host_root(host_path)
     origin = git_remote_url(top)
     if origin:
         try:
@@ -246,20 +308,26 @@ def resolve_moniker_for_host(host_path: Path) -> tuple[str, Optional[str]]:
     return moniker_from_path(top), origin
 
 
-def detect_legacy_store(host_path: Path) -> Optional[Path]:
-    """Locate a legacy in-host task store if present.
-
-    Checks, in order:
-    - ``{host}/.task-agent/tasks`` (current eject target)
-    - ``{host}/docs/tasks`` when it is a real directory (not only a broken link)
-    """
-    host = host_path.expanduser().resolve()
-    candidates = [
+def legacy_store_candidates(host_path: Path) -> List[Path]:
+    """Paths checked for a legacy in-host task store (main project root)."""
+    host = project_host_root(host_path)
+    return [
         host / ".task-agent" / "tasks",
         host / "docs" / "tasks",
         host / "docks" / "tasks",
     ]
-    for cand in candidates:
+
+
+def detect_legacy_store(host_path: Path) -> Optional[Path]:
+    """Locate a legacy in-host task store if present.
+
+    Always resolves against the main project root (not a ``.gwt`` worktree).
+
+    Checks, in order:
+    - ``{host}/.task-agent/tasks`` (current eject target; may be nested git)
+    - ``{host}/docs/tasks`` / ``docks/tasks`` (dir or symlink into store)
+    """
+    for cand in legacy_store_candidates(host_path):
         if cand.is_dir() and not cand.is_symlink():
             return cand.resolve()
         if cand.is_symlink():
@@ -619,27 +687,259 @@ class MigrationPlan:
         return asdict(self)
 
 
-def write_host_store_config(host_path: Path, moniker: str) -> Path:
-    """Write/update ``.ta-config.json`` with ``store_moniker`` for rename-resilient binding.
-
-    This is the greppable host-side pointer: moniker identity survives path moves
-    and outlives a GitHub rename until ``ta store rebind`` is run.
-    """
-    host = host_path.expanduser().resolve()
+def read_host_store_config(host_path: Path) -> Dict[str, Any]:
+    """Read ``.ta-config.json`` from the main project root (empty dict if missing)."""
+    host = project_host_root(host_path)
     path = host / ".ta-config.json"
-    data: Dict[str, Any] = {}
-    if path.is_file():
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                data = raw
-        except (OSError, json.JSONDecodeError):
-            data = {}
-    data["store_moniker"] = moniker
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_host_store_config(
+    host_path: Path,
+    moniker: Optional[str] = None,
+    *,
+    store_symlink: Optional[bool] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """Write/update ``.ta-config.json`` host binding.
+
+    Keys:
+      - store_moniker: stable identity for the task store
+      - store_symlink: whether docs/tasks should be a human-facing symlink to the store
+    """
+    host = project_host_root(host_path)
+    path = host / ".ta-config.json"
+    data = read_host_store_config(host)
+    if moniker is not None:
+        data["store_moniker"] = moniker
+    if store_symlink is not None:
+        data["store_symlink"] = bool(store_symlink)
+    if extra:
+        data.update(extra)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
     return path
+
+
+def store_symlink_preferred(host_path: Path) -> bool:
+    """Whether docs/tasks human symlink should exist (default True if unset)."""
+    cfg = read_host_store_config(host_path)
+    if "store_symlink" not in cfg:
+        return True
+    return bool(cfg.get("store_symlink"))
+
+
+def ensure_gitignore_entry(host_path: Path, entry: str = "docs/tasks") -> bool:
+    """Ensure ``entry`` is listed in host ``.gitignore``. Returns True if added."""
+    host = project_host_root(host_path)
+    gitignore = host / ".gitignore"
+    line = entry.strip().strip("/")
+    # Accept docs/tasks or /docs/tasks
+    patterns = {line, f"/{line}", f"{line}/", f"/{line}/"}
+    if gitignore.is_file():
+        text = gitignore.read_text(encoding="utf-8")
+        existing = {ln.strip() for ln in text.splitlines() if ln.strip()}
+        if existing & patterns:
+            return False
+        with gitignore.open("a", encoding="utf-8") as f:
+            if text and not text.endswith("\n"):
+                f.write("\n")
+            f.write(f"\n# task-agent: human-facing store symlink\n{line}\n")
+        return True
+    gitignore.write_text(
+        f"# task-agent: human-facing store symlink\n{line}\n", encoding="utf-8"
+    )
+    return True
+
+
+class StoreSymlinkError(RuntimeError):
+    """Raised when docs/tasks cannot safely become a store symlink."""
+
+
+def docs_tasks_symlink_status(
+    host_path: Path, store_path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Describe docs/tasks symlink state for the host project."""
+    host = project_host_root(host_path)
+    link = host / "docs" / "tasks"
+    preferred = store_symlink_preferred(host)
+    store = store_path
+    if store is None:
+        report = inspect_host(host)
+        store = Path(report["canonical_store_path"])
+        if not store.is_dir() and report.get("legacy_store_path"):
+            store = Path(report["legacy_store_path"])
+
+    target: Optional[str] = None
+    kind = "absent"
+    points_to_store = False
+    if link.is_symlink():
+        kind = "symlink"
+        try:
+            target = str(link.resolve())
+            if store is not None and store.is_dir():
+                points_to_store = Path(target).resolve() == store.resolve()
+        except OSError:
+            target = str(link.readlink())
+            kind = "broken_symlink"
+    elif link.is_dir():
+        kind = "directory"
+    elif link.is_file():
+        kind = "file"
+    elif link.exists():
+        kind = "other"
+
+    return {
+        "host_path": str(host),
+        "link_path": str(link),
+        "kind": kind,
+        "target": target,
+        "store_path": str(store.resolve())
+        if store and store.exists()
+        else (str(store) if store else None),
+        "points_to_store": points_to_store,
+        "preferred": preferred,
+        "gitignore_has_docs_tasks": _gitignore_has_docs_tasks(host),
+    }
+
+
+def _gitignore_has_docs_tasks(host: Path) -> bool:
+    gitignore = host / ".gitignore"
+    if not gitignore.is_file():
+        return False
+    existing = {ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()}
+    return bool(existing & {"docs/tasks", "/docs/tasks", "docs/tasks/", "/docs/tasks/"})
+
+
+def set_docs_tasks_symlink(
+    host_path: Path,
+    *,
+    enabled: bool,
+    store_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Turn the human-facing ``docs/tasks`` → store symlink on or off.
+
+    - **on**: create/repair symlink; ensure ``docs/tasks`` is gitignored.
+      Fails with :class:`StoreSymlinkError` if a real file/dir is in the way.
+    - **off**: remove the symlink if it points at the store (or is broken);
+      leave a real user ``docs/tasks`` tree alone. Preference stored as false.
+
+    Does **not** delete the centralized store. Binding remains via moniker/registry.
+    """
+    host = project_host_root(host_path)
+    report = inspect_host(host)
+    store = store_path or Path(report["canonical_store_path"])
+    if report.get("registry_entry") and report["registry_entry"].get("store_path"):
+        cand = Path(report["registry_entry"]["store_path"])
+        if cand.is_dir():
+            store = cand
+    if not store.is_dir() or not looks_like_store(store):
+        # fall back to legacy resolved path if still on host
+        leg = detect_legacy_store(host)
+        if leg is not None and looks_like_store(leg):
+            store = leg
+        else:
+            raise StoreSymlinkError(
+                f"No task store found for {host}. "
+                "Run `ta store migrate` first, or ensure data-root store exists."
+            )
+
+    store = store.resolve()
+    link = host / "docs" / "tasks"
+    actions: List[str] = []
+
+    if enabled:
+        if link.is_symlink():
+            try:
+                current = link.resolve()
+            except OSError:
+                link.unlink()
+                actions.append(f"removed broken symlink {link}")
+            else:
+                if current == store:
+                    actions.append(f"symlink already correct: {link} → {store}")
+                else:
+                    raise StoreSymlinkError(
+                        f"{link} is a symlink to {current}, not the task store "
+                        f"({store}). Remove or retarget it manually, then re-run "
+                        "`ta store symlink on`."
+                    )
+        elif link.is_dir():
+            if any(link.iterdir()):
+                raise StoreSymlinkError(
+                    f"{link} is a real directory with content (not a task-agent "
+                    "symlink). It may be your own docs. Move or rename it, then "
+                    "run `ta store symlink on` to create a symlink to the "
+                    f"centralized store at {store}."
+                )
+            link.rmdir()
+            actions.append(f"removed empty directory {link}")
+        elif link.is_file():
+            raise StoreSymlinkError(
+                f"{link} is a regular file, not a symlink. Move or rename it, "
+                "then run `ta store symlink on`."
+            )
+        elif link.exists():
+            raise StoreSymlinkError(
+                f"{link} exists and is not a symlink (type conflict). "
+                "Resolve manually, then re-run `ta store symlink on`."
+            )
+
+        if not link.exists() and not link.is_symlink():
+            link.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(str(store), str(link))
+            actions.append(f"created symlink {link} → {store}")
+
+        if ensure_gitignore_entry(host, "docs/tasks"):
+            actions.append("added docs/tasks to .gitignore")
+        else:
+            actions.append("docs/tasks already in .gitignore")
+
+        moniker = report.get("moniker") or resolve_moniker_for_host(host)[0]
+        write_host_store_config(host, moniker=moniker, store_symlink=True)
+        actions.append("set store_symlink=true in .ta-config.json")
+    else:
+        # off
+        if link.is_symlink():
+            try:
+                current = link.resolve()
+            except OSError:
+                link.unlink()
+                actions.append(f"removed broken symlink {link}")
+            else:
+                if current == store or not current.exists():
+                    link.unlink()
+                    actions.append(f"removed symlink {link}")
+                else:
+                    raise StoreSymlinkError(
+                        f"{link} points to {current}, not this project's store "
+                        f"({store}). Not removing a foreign symlink. "
+                        "Fix manually if needed."
+                    )
+        elif link.exists():
+            actions.append(f"left {link} in place (not a task-agent store symlink)")
+        else:
+            actions.append(f"{link} already absent")
+
+        moniker = report.get("moniker") or resolve_moniker_for_host(host)[0]
+        write_host_store_config(host, moniker=moniker, store_symlink=False)
+        actions.append("set store_symlink=false in .ta-config.json")
+
+    return {
+        "enabled": enabled,
+        "host_path": str(host),
+        "store_path": str(store),
+        "link_path": str(link),
+        "actions": actions,
+        "status": docs_tasks_symlink_status(host, store),
+    }
 
 
 @dataclass
@@ -663,7 +963,8 @@ class MigrationResult:
 def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> MigrationPlan:
     """Build a migration plan for the host project (no side effects)."""
     host = host_path.expanduser().resolve()
-    top = git_toplevel(host) or host
+    # Always main project root — never a .gwt/<slug> worktree path
+    top = project_host_root(host)
     moniker, subject_origin = resolve_moniker_for_host(top)
     root = data_root if data_root is not None else get_data_root()
     dest = store_path_for_moniker(moniker, root)
@@ -725,6 +1026,7 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
                 ],
                 warnings=["Consider repairing host symlinks with another migrate run"],
             )
+        checked = ", ".join(str(c) for c in legacy_store_candidates(top))
         return MigrationPlan(
             host_path=str(top),
             moniker=moniker,
@@ -733,7 +1035,9 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
             kind="none",
             subject_origin=subject_origin,
             errors=[
-                "No legacy task store found under host (.task-agent/tasks or docs/tasks)"
+                "No legacy task store found under main project root. "
+                f"Checked: {checked}. "
+                "If you ran from a worktree (.gwt/…), store lives on the main tree."
             ],
         )
 
@@ -1121,7 +1425,7 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
     Safe: does not create directories, registry entries, or move data.
     """
     host = host_path.expanduser().resolve()
-    top = git_toplevel(host) or host
+    top = project_host_root(host)
     moniker, origin = resolve_moniker_for_host(top)
     root = data_root if data_root is not None else get_data_root()
     registry = MachineRegistry(root)
@@ -1211,7 +1515,7 @@ def suggest_store_remotes(
     at module load in constrained environments).
     """
     host = host_path.expanduser().resolve()
-    top = git_toplevel(host) or host
+    top = project_host_root(host)
     if moniker is None or origin_url is None:
         derived_moniker, derived_origin = resolve_moniker_for_host(top)
         moniker = moniker or derived_moniker
@@ -1406,7 +1710,7 @@ def rebind_store_moniker(
         data_root: Optional data root override.
     """
     host = host_path.expanduser().resolve()
-    top = git_toplevel(host) or host
+    top = project_host_root(host)
     root = data_root if data_root is not None else get_data_root()
     reg = MachineRegistry(root)
 

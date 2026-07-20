@@ -1471,8 +1471,16 @@ def cmd_store_help(console: Console) -> None:
     table.add_column("Description", style="white")
 
     commands = [
-        ("data-root", "Print the machine task-agent data root path"),
+        ("data-root", "Print the machine-wide task-agent data home"),
+        (
+            "path [path]",
+            "Print this project's task store directory (under data-root/stores/…)",
+        ),
         ("moniker [path]", "Print the moniker for a host path (default: cwd)"),
+        (
+            "symlink on|off|status",
+            "Human-facing docs/tasks → store symlink (gitignore when on)",
+        ),
         ("list", "List registered machine task stores"),
         (
             "inspect [path]",
@@ -1536,12 +1544,93 @@ def cmd_store(console: Console, args) -> None:
         console.print(str(get_data_root()))
         return
 
+    if sub == "path":
+        # Plain path only (script-friendly), like data-root
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        report = inspect_host(host)
+        canonical = Path(report["canonical_store_path"])
+        legacy = (
+            Path(report["legacy_store_path"])
+            if report.get("legacy_store_path")
+            else None
+        )
+        entry = report.get("registry_entry") or {}
+        entry_path = Path(entry["store_path"]) if entry.get("store_path") else None
+
+        # Prefer live store: registry path → canonical → legacy pointer target
+        for candidate in (entry_path, canonical, legacy):
+            if candidate is None:
+                continue
+            try:
+                if candidate.is_dir():
+                    console.print(str(candidate.resolve()))
+                    return
+            except OSError:
+                continue
+
+        # Not migrated yet: still print intended canonical path for planning
+        console.print(str(canonical))
+        return
+
     if sub == "moniker":
         host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
         moniker, origin = resolve_moniker_for_host(host)
         console.print(moniker)
         if origin:
             console.print(f"[dim]origin: {origin}[/dim]")
+        return
+
+    if sub == "symlink":
+        from taskagent.store_registry import (
+            StoreSymlinkError,
+            docs_tasks_symlink_status,
+            set_docs_tasks_symlink,
+        )
+
+        action = getattr(args, "symlink_action", None)
+        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        if action in (None, "status"):
+            st = docs_tasks_symlink_status(host)
+            pref = "on" if st["preferred"] else "off"
+            console.print(f"[bold]Host[/bold]:       {st['host_path']}")
+            console.print(f"[bold]Preference[/bold]: symlink {pref} (.ta-config.json)")
+            console.print(f"[bold]docs/tasks[/bold]: {st['kind']}")
+            if st.get("target"):
+                console.print(f"[bold]Target[/bold]:     {st['target']}")
+            console.print(f"[bold]Store[/bold]:      {st.get('store_path') or '—'}")
+            if st["kind"] == "symlink":
+                ok = st.get("points_to_store")
+                console.print(
+                    f"[bold]Points to store[/bold]: "
+                    f"{'[green]yes[/green]' if ok else '[yellow]no[/yellow]'}"
+                )
+            console.print(
+                f"[bold].gitignore[/bold]: "
+                f"{'docs/tasks listed' if st.get('gitignore_has_docs_tasks') else 'docs/tasks not listed'}"
+            )
+            console.print(
+                "\n[dim]Human convenience only — agents should use "
+                "[bold]ta store path[/bold] / MCP, not docs/tasks.[/dim]"
+            )
+            return
+
+        if action not in ("on", "off"):
+            console.print("[yellow]Usage: ta store symlink {on|off|status}[/yellow]")
+            return
+        try:
+            symlink_result = set_docs_tasks_symlink(host, enabled=(action == "on"))
+        except StoreSymlinkError as exc:
+            console.print(f"[red]Cannot turn symlink {action}:[/red]\n{exc}")
+            raise SystemExit(1)
+        except Exception as exc:
+            console.print(f"[red]symlink {action} failed:[/red] {exc}")
+            raise SystemExit(1)
+        console.print(
+            f"[bold green]symlink {action}[/bold green] "
+            f"for {symlink_result['host_path']}"
+        )
+        for act in symlink_result.get("actions") or []:
+            console.print(f"  ✓ {act}")
         return
 
     if sub == "list":
@@ -1567,23 +1656,23 @@ def cmd_store(console: Console, args) -> None:
         table.add_column("Status", style="white")
         table.add_column("Store path", style="dim")
         table.add_column("Host paths", style="dim")
-        for e in entries:
-            live = mission_remote_status(Path(e.store_path))
+        for entry in entries:
+            live = mission_remote_status(Path(entry.store_path))
             if live["state"] == "configured":
                 status = "[green]remote✓[/green]"
-                remote_disp = live.get("origin") or e.remote or "—"
+                remote_disp = live.get("origin") or entry.remote or "—"
             elif live["state"] == "local_only":
                 status = "[yellow]local only[/yellow]"
-                remote_disp = e.remote or "—"
+                remote_disp = entry.remote or "—"
             else:
                 status = "[red]no git[/red]"
-                remote_disp = e.remote or "—"
+                remote_disp = entry.remote or "—"
             table.add_row(
-                e.moniker,
+                entry.moniker,
                 remote_disp,
                 status,
-                e.store_path,
-                ", ".join(e.host_paths) if e.host_paths else "—",
+                entry.store_path,
+                ", ".join(entry.host_paths) if entry.host_paths else "—",
             )
         console.print(table)
         return
@@ -1842,11 +1931,11 @@ def cmd_store(console: Console, args) -> None:
     if sub == "migrate":
         host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
         dry_run = bool(getattr(args, "dry_run", False))
-        result = migrate_store(host, dry_run=dry_run)
-        plan = result.plan
+        mig = migrate_store(host, dry_run=dry_run)
+        plan = mig.plan
         if getattr(args, "json", False):
-            console.print_json(data=result.to_dict())
-            if not result.success:
+            console.print_json(data=mig.to_dict())
+            if not mig.success:
                 raise SystemExit(1)
             return
 
@@ -1870,17 +1959,17 @@ def cmd_store(console: Console, args) -> None:
         console.print("\n[bold]Steps:[/bold]")
         for s in plan.steps:
             console.print(f"  • {s}")
-        if result.applied_steps and not dry_run:
+        if mig.applied_steps and not dry_run:
             console.print("\n[bold]Applied:[/bold]")
-            for s in result.applied_steps:
+            for s in mig.applied_steps:
                 console.print(f"  ✓ {s}")
 
-        if result.success:
+        if mig.success:
             style = "green" if not dry_run else "cyan"
             label = "Dry-run OK" if dry_run else "Success"
-            console.print(f"\n[{style}]{label}:[/{style}] {result.message}")
+            console.print(f"\n[{style}]{label}:[/{style}] {mig.message}")
         else:
-            console.print(f"\n[red]Failed:[/red] {result.message}")
+            console.print(f"\n[red]Failed:[/red] {mig.message}")
             raise SystemExit(1)
         return
 
@@ -4838,7 +4927,18 @@ Usage:
     )
     store_sub = store_parser.add_subparsers(dest="store_command")
     store_sub.add_parser(
-        "data-root", help="Print the machine task-agent data root path"
+        "data-root",
+        help="Print the machine-wide task-agent data home (~/.local/share/task-agent)",
+    )
+    path_p = store_sub.add_parser(
+        "path",
+        help="Print this project's task store directory (data-root/stores/<moniker>)",
+    )
+    path_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: current directory)",
     )
     moniker_p = store_sub.add_parser(
         "moniker", help="Print the moniker for a host path (default: cwd)"
@@ -4848,6 +4948,26 @@ Usage:
         nargs="?",
         default=None,
         help="Host project path (default: current directory)",
+    )
+    symlink_p = store_sub.add_parser(
+        "symlink",
+        help=(
+            "Manage human-facing docs/tasks → store symlink "
+            "(on ensures .gitignore; fails if a real docs/tasks exists)"
+        ),
+    )
+    symlink_p.add_argument(
+        "symlink_action",
+        nargs="?",
+        choices=["on", "off", "status"],
+        default="status",
+        help="on | off | status (default: status)",
+    )
+    symlink_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
     )
     store_sub.add_parser("list", help="List registered machine task stores")
     inspect_p = store_sub.add_parser(
