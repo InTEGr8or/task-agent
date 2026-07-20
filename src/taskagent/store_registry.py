@@ -124,6 +124,81 @@ def store_path_for_moniker(moniker: str, data_root: Optional[Path] = None) -> Pa
     return get_stores_dir(data_root) / moniker_to_dir_name(moniker)
 
 
+def mission_remote_status(
+    mission_root: Optional[Path],
+    *,
+    issues_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Summarize whether a mission/task store has a git remote.
+
+    Intended for front-of-CLI UX so users always see durability state.
+
+    Returns keys:
+      state: ``no_git`` | ``local_only`` | ``configured``
+      remotes: dict name→url
+      origin: preferred origin URL if any
+      label: short human label
+      detail: one-line detail for dim text
+    """
+    if mission_root is None:
+        return {
+            "state": "no_git",
+            "remotes": {},
+            "origin": None,
+            "label": "no git",
+            "detail": "Task store is not inside a git repository",
+        }
+    root = mission_root.expanduser().resolve()
+    if not (root / ".git").exists() and git_toplevel(root) is None:
+        return {
+            "state": "no_git",
+            "remotes": {},
+            "origin": None,
+            "label": "no git",
+            "detail": f"No git at {root}",
+        }
+    remotes = _list_git_remotes(root)
+    origin = remotes.get("origin") or (
+        next(iter(remotes.values())) if remotes else None
+    )
+    if not remotes:
+        return {
+            "state": "local_only",
+            "remotes": {},
+            "origin": None,
+            "label": "local only",
+            "detail": "No remote — task history is only on this machine",
+        }
+    return {
+        "state": "configured",
+        "remotes": remotes,
+        "origin": origin,
+        "label": "remote ok",
+        "detail": origin or ", ".join(f"{k}={v}" for k, v in remotes.items()),
+    }
+
+
+def format_remote_status_line(status: Dict[str, Any]) -> str:
+    """Rich markup one-liner for task-store remote durability."""
+    state = status.get("state")
+    if state == "configured":
+        return (
+            f"[bold green]Store remote[/bold green]: "
+            f"[cyan]{status.get('origin') or status.get('detail')}[/cyan]"
+        )
+    if state == "local_only":
+        return (
+            "[bold yellow]Store remote[/bold yellow]: "
+            "[yellow]none (local only)[/yellow]  "
+            "[dim]ta store remote set <url>[/dim]"
+        )
+    return (
+        "[bold red]Store remote[/bold red]: "
+        "[red]no git[/red]  "
+        "[dim]ta store migrate[/dim]"
+    )
+
+
 def git_remote_url(repo_path: Path, remote: str = "origin") -> Optional[str]:
     """Return the URL for ``remote`` if ``repo_path`` is inside a git worktree."""
     try:
@@ -1446,6 +1521,7 @@ def set_store_remote(
     """Set (or add) a git remote on a task store and update metadata/registry.
 
     Does not create the remote repository on a host; only configures local git.
+    Does not fetch or push — use :func:`attach_store_remote` for a full reconnect.
     """
     store = store_path.expanduser().resolve()
     if not store.is_dir() or not looks_like_store(store):
@@ -1520,4 +1596,318 @@ def set_store_remote(
         "store_path": str(store),
         "moniker": use_moniker,
         "remotes": _list_git_remotes(store),
+    }
+
+
+def _git_out(
+    store: Path, *args: str, check: bool = True
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(store), *args],
+        capture_output=True,
+        text=True,
+        check=check,
+        shell=(os.name == "nt"),
+    )
+
+
+def _local_branch(store: Path) -> str:
+    res = _git_out(store, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    name = (res.stdout or "").strip()
+    if res.returncode != 0 or not name or name == "HEAD":
+        return "main"
+    return name
+
+
+def _remote_heads(store: Path, remote_name: str = "origin") -> Dict[str, str]:
+    """Return {branch: sha} for remote heads after fetch."""
+    res = _git_out(store, "ls-remote", "--heads", remote_name, check=False)
+    heads: Dict[str, str] = {}
+    if res.returncode != 0:
+        return heads
+    for line in (res.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+            heads[parts[1][len("refs/heads/") :]] = parts[0]
+    return heads
+
+
+def _histories_related(store: Path, local_ref: str, remote_ref: str) -> bool:
+    """True if local and remote refs share a merge-base (related history)."""
+    res = _git_out(store, "merge-base", local_ref, remote_ref, check=False)
+    return res.returncode == 0 and bool((res.stdout or "").strip())
+
+
+def _gh_repo_edit_default_branch(store: Path, branch: str) -> tuple[bool, str]:
+    """Set GitHub default branch via ``gh repo edit`` run in the store cwd.
+
+    Returns (ok, message). Prefers the user's default gh config when agent
+    config cannot see private task remotes.
+    """
+    env = os.environ.copy()
+    # Prefer personal gh host config if agent token cannot see private repos
+    default_hosts = Path.home() / ".config" / "gh" / "default"
+    if default_hosts.is_dir() and "GH_CONFIG_DIR" not in env:
+        env["GH_CONFIG_DIR"] = str(default_hosts)
+
+    attempts = [
+        env,
+        {k: v for k, v in env.items() if k != "GH_CONFIG_DIR"},
+    ]
+    last_err = ""
+    for attempt_env in attempts:
+        res = subprocess.run(
+            ["gh", "repo", "edit", f"--default-branch={branch}"],
+            cwd=str(store),
+            capture_output=True,
+            text=True,
+            env=attempt_env,
+            shell=(os.name == "nt"),
+        )
+        if res.returncode == 0:
+            return True, (res.stdout or "").strip() or f"default branch → {branch}"
+        last_err = ((res.stderr or "") + (res.stdout or "")).strip()
+    return False, last_err or "gh repo edit failed"
+
+
+def attach_store_remote(
+    store_path: Path,
+    url: str,
+    *,
+    remote_name: str = "origin",
+    local_branch: Optional[str] = None,
+    default_branch: str = "main",
+    moniker: Optional[str] = None,
+    data_root: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Connect a task store to an existing remote and publish local history.
+
+    Lessons from the task-agent-tasks recovery:
+
+    1. ``set`` alone only configures the URL — not enough for durability.
+    2. After host_tree migrate, local history may be **unrelated** to a stale
+       remote seed (e.g. old ``master`` eject commit).
+    3. Do **not** force-push over a remote tip without preserving it. If
+       histories are unrelated, **rename** each mismatched tip to
+       ``mismatched_branch_{name}_{datetime}`` (kept for comparison), push
+       local as ``main``, and set the default branch. Do **not** delete the
+       mismatched history — tell the user how to compare via git or the web UI.
+    4. If histories **are** related, a normal non-force push is enough.
+
+    Steps when unrelated::
+
+        set-url / add remote
+        fetch
+        rename each unrelated tip → mismatched_branch_<name>_<datetime>
+        push local branch → origin/main (or default_branch)
+        gh repo edit --default-branch main
+        notify user about mismatched branches (no delete)
+
+    Args:
+        store_path: Centralized or legacy task store directory.
+        url: Git remote URL.
+        remote_name: Usually ``origin``.
+        local_branch: Branch to publish (default: current HEAD branch).
+        default_branch: Canonical remote branch name (default ``main``).
+        dry_run: Plan only; no network mutations after set-url.
+    """
+    steps: List[str] = []
+    warnings: List[str] = []
+
+    set_info = set_store_remote(
+        store_path,
+        url,
+        remote_name=remote_name,
+        moniker=moniker,
+        data_root=data_root,
+    )
+    store = Path(set_info["store_path"])
+    steps.append(f"remote {set_info['action']}: {remote_name} → {url}")
+
+    branch = local_branch or _local_branch(store)
+    steps.append(f"local branch: {branch}")
+
+    if dry_run:
+        # Fetch-less plan using ls-remote (cannot classify relatedness without objects)
+        heads = _remote_heads(store, remote_name)
+        return {
+            "ok": True,
+            "dry_run": True,
+            "mode": "plan",
+            "store_path": str(store),
+            "url": url,
+            "local_branch": branch,
+            "default_branch": default_branch,
+            "remote_heads": heads,
+            "steps": steps
+            + [
+                f"fetch {remote_name}",
+                "if unrelated: rename remote tips → mismatched_branch_<name>_<datetime>",
+                f"push {branch} → {remote_name}/{default_branch}",
+                f"gh repo edit --default-branch {default_branch}",
+                "notify user about mismatched branches (no delete)",
+            ],
+            "warnings": [
+                "Dry-run does not fetch; run without --dry-run to publish",
+                *warnings,
+            ],
+            "set": set_info,
+        }
+
+    # Fetch
+    fetch = _git_out(store, "fetch", remote_name, "--prune", check=False)
+    if fetch.returncode != 0:
+        raise RuntimeError(
+            f"git fetch failed: {(fetch.stderr or fetch.stdout or '').strip()}"
+        )
+    steps.append(f"fetched {remote_name}")
+
+    heads = _remote_heads(store, remote_name)
+    steps.append(f"remote heads: {sorted(heads) or '(none)'}")
+
+    # Classify remote tips relative to local HEAD
+    unrelated: List[str] = []
+    related: List[str] = []
+    local_ref = "HEAD"
+    for rb in heads:
+        remote_ref = f"{remote_name}/{rb}"
+        # ensure remote-tracking ref exists after fetch
+        if not _histories_related(store, local_ref, remote_ref):
+            unrelated.append(rb)
+        else:
+            related.append(rb)
+
+    mode = "fast_forward_or_push"
+    mismatched: List[Dict[str, str]] = []
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    if heads and not related and unrelated:
+        mode = "unrelated_rename_and_publish"
+        warnings.append(
+            "No shared history with remote tips. Renaming mismatched remote "
+            "branches for comparison, then publishing local as default. "
+            "Mismatched tips are kept — not deleted."
+        )
+        for rb in unrelated:
+            # Keep original name in the renamed branch for easy identification
+            safe = re.sub(r"[^\w.\-]+", "_", rb).strip("_") or "branch"
+            rename_to = f"mismatched_branch_{safe}_{stamp}"
+            sha = heads[rb]
+            push_ren = _git_out(
+                store,
+                "push",
+                remote_name,
+                f"{sha}:refs/heads/{rename_to}",
+                check=False,
+            )
+            if push_ren.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to rename remote branch {rb!r} → {rename_to}: "
+                    f"{(push_ren.stderr or push_ren.stdout or '').strip()}"
+                )
+            mismatched.append(
+                {
+                    "original": rb,
+                    "renamed_to": rename_to,
+                    "sha": sha,
+                }
+            )
+            steps.append(
+                f"renamed origin/{rb} → {rename_to} ({sha[:8]}) [kept for compare]"
+            )
+    elif not heads:
+        mode = "empty_remote_publish"
+        steps.append("remote has no heads; first publish")
+    else:
+        steps.append(f"related remote branches: {related}")
+
+    # Publish local branch as default_branch (main)
+    # Force only when replacing an unrelated tip on the same branch name
+    # (the tip was already copied to mismatched_branch_* above).
+    push_args = ["push", "-u", remote_name, f"{branch}:{default_branch}"]
+    need_force = mode == "unrelated_rename_and_publish" and default_branch in unrelated
+    if need_force:
+        push_args.insert(1, "--force")
+        steps.append(
+            f"force-push {branch} → {remote_name}/{default_branch} "
+            f"(prior tip saved as mismatched_branch_*)"
+        )
+    else:
+        steps.append(f"push {branch} → {remote_name}/{default_branch}")
+
+    push = _git_out(store, *push_args, check=False)
+    if push.returncode != 0:
+        err = (push.stderr or push.stdout or "").strip()
+        raise RuntimeError(f"git push failed: {err}")
+
+    steps.append(f"published {default_branch}")
+
+    # Point remote default/HEAD at default_branch
+    default_set = False
+    gh_ok, gh_msg = _gh_repo_edit_default_branch(store, default_branch)
+    if gh_ok:
+        steps.append(f"default branch set to {default_branch} (gh)")
+        default_set = True
+    else:
+        remote_url = url
+        if remote_url.endswith(".git") or (
+            Path(remote_url).exists() and (Path(remote_url) / "HEAD").exists()
+        ):
+            bare = Path(remote_url)
+            if bare.is_dir() and (bare / "HEAD").is_file():
+                sym = subprocess.run(
+                    [
+                        "git",
+                        "--git-dir",
+                        str(bare),
+                        "symbolic-ref",
+                        "HEAD",
+                        f"refs/heads/{default_branch}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    shell=(os.name == "nt"),
+                )
+                if sym.returncode == 0:
+                    steps.append(f"default branch set to {default_branch} (bare HEAD)")
+                    default_set = True
+        if not default_set:
+            warnings.append(
+                f"Could not set default branch via gh ({gh_msg}). "
+                f"Run from the store: gh repo edit --default-branch {default_branch}"
+            )
+
+    # Notify: mismatched branches kept for user comparison (no deletes)
+    if mismatched:
+        names = ", ".join(m["renamed_to"] for m in mismatched)
+        warnings.append(
+            f"Mismatched remote history preserved as: {names}. "
+            "Compare with git (e.g. git log main..mismatched_branch_…) "
+            "or the host web UI branch list. Original tip SHAs are unchanged."
+        )
+        for m in mismatched:
+            steps.append(
+                f"compare tip: git log {default_branch}..{m['renamed_to']} "
+                f"(was origin/{m['original']})"
+            )
+
+    # Prune local remote-tracking
+    _git_out(store, "fetch", remote_name, "--prune", check=False)
+
+    return {
+        "ok": True,
+        "dry_run": False,
+        "mode": mode,
+        "store_path": str(store),
+        "url": url,
+        "local_branch": branch,
+        "default_branch": default_branch,
+        "related": related,
+        "unrelated": unrelated,
+        "mismatched": mismatched,
+        "steps": steps,
+        "warnings": warnings,
+        "set": set_info,
+        "status": mission_remote_status(store),
     }
