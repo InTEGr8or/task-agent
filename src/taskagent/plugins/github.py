@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+from pathlib import Path
 from typing import List, Optional
 
 from githubkit import GitHub
@@ -77,12 +80,123 @@ def _format_github_remote(style: str, owner: str, repo: str) -> str:
     return f"git@github.com:{owner}/{repo}.git"
 
 
-def _github_token() -> Optional[str]:
-    return (
-        os.environ.get("GITHUB_TOKEN")
-        or os.environ.get("GH_TOKEN")
-        or os.environ.get("github_token")
+def _read_op_secret(ref: str) -> Optional[str]:
+    """Read a 1Password secret reference (``op://…``).
+
+    Prefers ``op.exe`` (WSL → Windows Hello / desktop app, same pattern as
+    ``~/.aws/scripts/1password-aws-credentials.sh``), then plain ``op``.
+    """
+    ref = (ref or "").strip()
+    if not ref.startswith("op://"):
+        return None
+    # Longer timeout: biometric unlock can wait for the user
+    for cmd in (
+        ["op.exe", "read", ref, "--no-newline"],
+        ["op", "read", ref, "--no-newline"],
+    ):
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                shell=(os.name == "nt"),
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if res.returncode == 0:
+            token = (res.stdout or "").strip().replace("\r", "")
+            if token:
+                return token
+    return None
+
+
+def _settings_github_token_op() -> Optional[str]:
+    """Optional op:// ref from ~/.config/task-agent/settings.json."""
+    path = Path("~/.config/task-agent/settings.json").expanduser()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_github = data.get("github")
+    github: dict = raw_github if isinstance(raw_github, dict) else {}
+    ref = (
+        data.get("github_token_op")
+        or github.get("token_op")
+        or github.get("oauth_token_op")
     )
+    if isinstance(ref, str) and ref.startswith("op://"):
+        return ref
+    return None
+
+
+def _gh_auth_token() -> Optional[str]:
+    """Fall back to ``gh auth token`` (non-interactive if already logged in)."""
+    for env in (
+        {**os.environ, "GH_CONFIG_DIR": str(Path("~/.config/gh/default").expanduser())},
+        os.environ,
+    ):
+        try:
+            res = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=env,
+                shell=(os.name == "nt"),
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if res.returncode == 0:
+            token = (res.stdout or "").strip()
+            if token:
+                return token
+    return None
+
+
+def _github_token() -> Optional[str]:
+    """Resolve a GitHub token for API calls (create repo, visibility, …).
+
+    Order:
+    1. ``GITHUB_TOKEN`` / ``GH_TOKEN`` / ``github_token`` environment
+    2. ``TA_GITHUB_TOKEN_OP`` / ``GITHUB_TOKEN_OP`` (``op://…`` secret ref)
+    3. ``~/.config/task-agent/settings.json`` → ``github_token_op``
+    4. Default op ref ``op://Private/GitHub CLI Token/oauth_token`` (1Password)
+    5. ``gh auth token`` if the CLI is already authenticated
+    """
+    for key in ("GITHUB_TOKEN", "GH_TOKEN", "github_token"):
+        val = os.environ.get(key)
+        if val and not val.startswith("op://"):
+            return val
+        if val and val.startswith("op://"):
+            tok = _read_op_secret(val)
+            if tok:
+                return tok
+
+    for key in ("TA_GITHUB_TOKEN_OP", "GITHUB_TOKEN_OP"):
+        ref = os.environ.get(key)
+        if ref:
+            tok = _read_op_secret(ref)
+            if tok:
+                return tok
+
+    settings_ref = _settings_github_token_op()
+    if settings_ref:
+        tok = _read_op_secret(settings_ref)
+        if tok:
+            return tok
+
+    # User-local default matching AWS-style 1Password refs
+    default_ref = "op://Private/GitHub CLI Token/oauth_token"
+    tok = _read_op_secret(default_ref)
+    if tok:
+        return tok
+
+    return _gh_auth_token()
 
 
 def _parse_full_name(name: str) -> tuple[str, str]:
@@ -178,8 +292,14 @@ class GitHubTasksRemoteProvider:
         token = _github_token()
         if not token:
             raise ValueError(
-                "GitHub token required to create a tasks repo. "
-                "Set GITHUB_TOKEN or GH_TOKEN (repo scope)."
+                "GitHub token required to create a tasks repo.\n"
+                "  • Set GITHUB_TOKEN / GH_TOKEN, or\n"
+                "  • Set TA_GITHUB_TOKEN_OP=op://Vault/Item/field "
+                "(1Password; uses op.exe for Windows Hello when available), or\n"
+                '  • Put {"github_token_op": "op://…"} in '
+                "~/.config/task-agent/settings.json, or\n"
+                "  • Log in with: gh auth login\n"
+                "Token needs the 'repo' scope to create repositories."
             )
 
         gh = GitHub(token)
