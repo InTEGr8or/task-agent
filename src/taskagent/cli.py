@@ -412,6 +412,19 @@ def get_created_date(manager: TaskAgent, slug: str) -> str:
     return "unknown"
 
 
+def show_store_remote_status(console: Console, manager: TaskAgent) -> None:
+    """Always-on one-liner: does this mission store have a push remote?"""
+    from taskagent.store_registry import (
+        format_remote_status_line,
+        mission_remote_status,
+    )
+
+    status = mission_remote_status(
+        manager.mission_root, issues_root=manager.issues_root
+    )
+    console.print(format_remote_status_line(status))
+
+
 def maybe_show_strategy(console: Console, manager: TaskAgent) -> bool:
     """Show the project strategy panel if the cooldown has elapsed.
 
@@ -563,6 +576,7 @@ def cmd_strategy(
 
 def cmd_next(console: Console, manager: TaskAgent):
     """Show the top issue."""
+    show_store_remote_status(console, manager)
     maybe_show_strategy(console, manager)
     next_issue = manager.get_next_issue()
     if not next_issue:
@@ -1478,7 +1492,11 @@ def cmd_store_help(console: Console) -> None:
         ),
         (
             "remote set <url>",
-            "Set the store's git remote URL (local only; no host create)",
+            "Configure remote URL only (no fetch/push)",
+        ),
+        (
+            "remote attach <url>",
+            "Connect + publish: rename mismatched remote tips, push main, set default",
         ),
         (
             "rebind [moniker]",
@@ -1527,6 +1545,8 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "list":
+        from taskagent.store_registry import mission_remote_status
+
         reg = MachineRegistry()
         entries = reg.list_entries()
         if not entries:
@@ -1535,16 +1555,34 @@ def cmd_store(console: Console, args) -> None:
                 f"(registry empty or missing).[/dim]"
             )
             return
-        table = Table(title="Machine task stores", box=None, show_header=True)
+        table = Table(
+            title="Machine task stores",
+            box=theme.table_box,
+            header_style=theme.header_style,
+            padding=theme.table_padding,
+            show_header=True,
+        )
         table.add_column("Moniker", style="cyan")
-        table.add_column("Store path")
-        table.add_column("Remote", style="dim")
+        table.add_column("Remote", style="white")
+        table.add_column("Status", style="white")
+        table.add_column("Store path", style="dim")
         table.add_column("Host paths", style="dim")
         for e in entries:
+            live = mission_remote_status(Path(e.store_path))
+            if live["state"] == "configured":
+                status = "[green]remote✓[/green]"
+                remote_disp = live.get("origin") or e.remote or "—"
+            elif live["state"] == "local_only":
+                status = "[yellow]local only[/yellow]"
+                remote_disp = e.remote or "—"
+            else:
+                status = "[red]no git[/red]"
+                remote_disp = e.remote or "—"
             table.add_row(
                 e.moniker,
+                remote_disp,
+                status,
                 e.store_path,
-                e.remote or "—",
                 ", ".join(e.host_paths) if e.host_paths else "—",
             )
         console.print(table)
@@ -1613,6 +1651,7 @@ def cmd_store(console: Console, args) -> None:
 
     if sub == "remote":
         from taskagent.store_registry import (
+            attach_store_remote,
             inspect_host,
             set_store_remote,
             suggest_store_remotes,
@@ -1638,6 +1677,12 @@ def cmd_store(console: Console, args) -> None:
             else:
                 for rname, rurl in remotes.items():
                     console.print(f"[cyan]{rname}[/cyan]\t{rurl}")
+            from taskagent.store_registry import (
+                format_remote_status_line,
+                mission_remote_status,
+            )
+
+            console.print(format_remote_status_line(mission_remote_status(store_path)))
             return
 
         if rcmd == "suggest":
@@ -1648,7 +1693,7 @@ def cmd_store(console: Console, args) -> None:
                 console.print(
                     "[dim]No provider suggestions "
                     f"(origin={report.get('origin') or '—'}). "
-                    "Pass a URL to [bold]ta store remote set[/bold].[/dim]"
+                    "Pass a URL to [bold]ta store remote attach <url>[/bold].[/dim]"
                 )
                 return
             table = Table(title="Suggested task-store remotes", box=None)
@@ -1659,7 +1704,11 @@ def cmd_store(console: Console, args) -> None:
             for s in suggestions:
                 table.add_row(s.provider, s.label, s.url, s.notes)
             console.print(table)
-            console.print("\n[dim]Apply with: ta store remote set <url>[/dim]")
+            console.print(
+                "\n[dim]Configure URL only: [bold]ta store remote set <url>[/bold]\n"
+                "Connect + publish (handles unrelated history): "
+                "[bold]ta store remote attach <url>[/bold][/dim]"
+            )
             return
 
         if rcmd == "set":
@@ -1690,9 +1739,84 @@ def cmd_store(console: Console, args) -> None:
                 f"[green]Remote {info['remote_name']} {info['action']}:[/green] {info['url']}"
             )
             console.print(f"[dim]Store: {info['store_path']}[/dim]")
+            console.print(
+                "[yellow]URL only — not published.[/yellow] "
+                "To fetch/publish (incl. unrelated history recovery): "
+                f"[bold]ta store remote attach {raw_url}[/bold]"
+            )
             return
 
-        console.print("[yellow]Usage: ta store remote {show|suggest|set}[/yellow]")
+        if rcmd == "attach":
+            raw_url = getattr(args, "url", None)
+            if not raw_url or not isinstance(raw_url, str):
+                console.print(
+                    "[red]Usage: ta store remote attach <url> [--dry-run][/red]"
+                )
+                raise SystemExit(1)
+            if not store_path.is_dir():
+                console.print(
+                    f"[red]Store does not exist yet: {store_path}[/red]\n"
+                    "[dim]Run [bold]ta store migrate[/bold] first.[/dim]"
+                )
+                raise SystemExit(1)
+            remote_name = getattr(args, "name", None) or "origin"
+            if not isinstance(remote_name, str):
+                remote_name = "origin"
+            dry = bool(getattr(args, "dry_run", False))
+            try:
+                info = attach_store_remote(
+                    store_path,
+                    raw_url,
+                    remote_name=remote_name,
+                    moniker=report.get("moniker"),
+                    dry_run=dry,
+                )
+            except Exception as e:
+                console.print(f"[red]Attach failed:[/red] {e}")
+                raise SystemExit(1)
+
+            console.print(f"[bold]Mode[/bold]:   {info.get('mode')}")
+            console.print(f"[bold]Store[/bold]:  {info.get('store_path')}")
+            console.print(f"[bold]URL[/bold]:    {info.get('url')}")
+            console.print(
+                f"[bold]Branch[/bold]: {info.get('local_branch')} → "
+                f"{info.get('default_branch')}"
+            )
+            mismatched = info.get("mismatched") or []
+            if mismatched:
+                console.print(
+                    "\n[bold yellow]Mismatched remote branches "
+                    "(kept for comparison — not deleted):[/bold yellow]"
+                )
+                for m in mismatched:
+                    console.print(
+                        f"  • was [cyan]origin/{m['original']}[/cyan] "
+                        f"({m['sha'][:8]}) → [cyan]{m['renamed_to']}[/cyan]"
+                    )
+                console.print(
+                    "[dim]Compare in git, e.g. "
+                    f"[bold]git fetch origin && git log "
+                    f"{info.get('default_branch', 'main')}.."
+                    f"{mismatched[0]['renamed_to']}[/bold], "
+                    "or browse branches in the host web UI.[/dim]"
+                )
+            console.print("\n[bold]Steps:[/bold]")
+            for s in info.get("steps") or []:
+                console.print(f"  • {s}")
+            for w in info.get("warnings") or []:
+                console.print(f"[yellow]Warning:[/yellow] {w}")
+            if info.get("ok") and not dry:
+                console.print(
+                    "\n[bold green]Attach complete.[/bold green] "
+                    "Task store remote is ready for push."
+                )
+            elif dry:
+                console.print("\n[cyan]Dry-run only — no publish.[/cyan]")
+            return
+
+        console.print(
+            "[yellow]Usage: ta store remote {show|suggest|set|attach}[/yellow]"
+        )
         return
 
     if sub == "rebind":
@@ -2258,7 +2382,10 @@ def cmd_list(
             )
 
     if output_format == "table":
+        show_store_remote_status(console, manager)
         maybe_show_strategy(console, manager)
+    elif output_format == "text":
+        show_store_remote_status(console, manager)
     issues = manager.sync_mission()
     if not issues:
         if output_format == "json":
@@ -2443,6 +2570,7 @@ def _format_age(dt: Optional[datetime]) -> str:
 
 def cmd_dashboard(console: Console, manager: TaskAgent):
     """Show a live dashboard of all task stations."""
+    show_store_remote_status(console, manager)
     issues = manager.sync_mission()
 
     completed_pairs = manager.walk_completed()
@@ -4287,20 +4415,30 @@ def cmd_triage(
 
 def display_overview(console: Console, manager: TaskAgent):
     """Display a rich overview of the task agent state and available commands."""
+    from taskagent.store_registry import mission_remote_status
+
     v = get_tool_version()
     repo_info = ""
     if manager.is_dual_repo and manager.mission_root:
         repo_info = (
             f" [bold magenta](Dual-Repo: {manager.mission_root.name})[/bold magenta]"
         )
+    rstat = mission_remote_status(manager.mission_root, issues_root=manager.issues_root)
+    if rstat["state"] == "configured":
+        remote_badge = " [bold green]remote✓[/bold green]"
+    elif rstat["state"] == "local_only":
+        remote_badge = " [bold yellow]local-only[/bold yellow]"
+    else:
+        remote_badge = " [bold red]no-git[/bold red]"
 
     console.print(
         Panel(
-            f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}",
+            f"[bold core]Task Agent[/bold core] [dim]v{v}[/dim]{repo_info}{remote_badge}",
             expand=False,
             box=theme.panel_box,
         )
     )
+    show_store_remote_status(console, manager)
 
     # Plan
     plan_path = manager.plan_path
@@ -4773,7 +4911,7 @@ Usage:
     )
     remote_set = remote_sub.add_parser(
         "set",
-        help="Set the store's git remote URL (does not create the remote host repo)",
+        help="Set the store's git remote URL only (no fetch/push)",
     )
     remote_set.add_argument("url", help="Git remote URL")
     remote_set.add_argument(
@@ -4782,6 +4920,30 @@ Usage:
         help="Remote name (default: origin)",
     )
     remote_set.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
+    )
+    remote_attach = remote_sub.add_parser(
+        "attach",
+        help=(
+            "Connect store to an existing remote and publish: rename mismatched "
+            "remote tips for comparison, push main, set default branch"
+        ),
+    )
+    remote_attach.add_argument("url", help="Git remote URL")
+    remote_attach.add_argument(
+        "--name",
+        default="origin",
+        help="Remote name (default: origin)",
+    )
+    remote_attach.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only; set-url may still run, no fetch/push publish",
+    )
+    remote_attach.add_argument(
         "path",
         nargs="?",
         default=None,

@@ -439,6 +439,40 @@ def test_migrate_nested_git_preserves_remote(tmp_path):
     assert url == remote
 
 
+def test_mission_remote_status_states(tmp_path):
+    from taskagent.store_registry import (
+        format_remote_status_line,
+        mission_remote_status,
+    )
+
+    none = mission_remote_status(None)
+    assert none["state"] == "no_git"
+    assert "no git" in format_remote_status_line(none)
+
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    local = mission_remote_status(bare)
+    # no .git
+    assert local["state"] == "no_git"
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    only = mission_remote_status(repo)
+    assert only["state"] == "local_only"
+    assert "local only" in format_remote_status_line(only)
+
+    subprocess.run(
+        ["git", "-C", str(repo), "remote", "add", "origin", "git@gh.com:a/b.git"],
+        check=True,
+        capture_output=True,
+    )
+    ok = mission_remote_status(repo)
+    assert ok["state"] == "configured"
+    assert ok["origin"] == "git@gh.com:a/b.git"
+    assert "Store remote" in format_remote_status_line(ok)
+
+
 def test_github_remote_suggestions():
     from taskagent.plugins.github import GitHubTasksRemoteProvider
 
