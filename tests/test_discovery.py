@@ -299,6 +299,66 @@ def test_discover_prefers_centralized_store_over_legacy_docs(tmp_path, monkeypat
     assert manager.issues_root.resolve() == central.resolve()
     assert (manager.issues_root / "CENTRAL_ONLY").is_file()
     assert not (manager.issues_root / "LEGACY_ONLY").exists()
+    # Must not recreate legacy host eject path for migrated stores
+    eject = root / ".task-agent" / "tasks"
+    assert not eject.exists() and not eject.is_symlink()
+
+
+def test_discover_does_not_heal_eject_when_centralized(tmp_path, monkeypatch):
+    """Discovery must not recreate .task-agent/tasks after it was removed."""
+    data = tmp_path / "ta-data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
+    monkeypatch.delenv("TA_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("TA_STORE_MONIKER", raising=False)
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _init_git_repo(root)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:acme/app.git",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    moniker = "acme/app"
+    from taskagent.store_registry import (
+        MachineRegistry,
+        StoreEntry,
+        store_path_for_moniker,
+        write_host_store_config,
+        write_store_meta,
+    )
+
+    central = store_path_for_moniker(moniker, data)
+    central.mkdir(parents=True)
+    (central / "pending").mkdir()
+    (central / ".task-agent").mkdir()
+    (central / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nC\x1fc\x1f\n", encoding="utf-8"
+    )
+    write_store_meta(central, moniker=moniker)
+    MachineRegistry(data).upsert(
+        StoreEntry(
+            moniker=moniker,
+            store_path=str(central),
+            host_paths=[str(root)],
+        )
+    )
+    write_host_store_config(root, moniker)
+
+    eject = root / ".task-agent" / "tasks"
+    assert not eject.exists()
+    manager = discover(start_path=root)
+    assert manager.issues_root.resolve() == central.resolve()
+    assert not eject.exists() and not eject.is_symlink()
 
 
 def test_discover_legacy_eject_when_not_migrated(tmp_path, monkeypatch):

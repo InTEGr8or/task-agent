@@ -395,8 +395,7 @@ def test_migrate_host_tree_apply(tmp_path):
     assert rem.stdout.strip() == ""
 
     eject = host / ".task-agent" / "tasks"
-    assert eject.is_symlink()
-    assert eject.resolve() == dest.resolve()
+    assert not eject.exists() and not eject.is_symlink()
     docs = host / "docs" / "tasks"
     assert docs.is_symlink()
     assert docs.resolve() == dest.resolve()
@@ -413,10 +412,11 @@ def test_migrate_host_tree_apply(tmp_path):
     assert report["migrated"] is True
     assert report["pointers_ok"] is True
 
-    # Idempotent second run
+    # Idempotent second run (still no eject path)
     result2 = migrate_store(host, dry_run=False, data_root=data)
     assert result2.success
     assert result2.plan.already_migrated
+    assert not eject.exists() and not eject.is_symlink()
 
 
 def test_migrate_nested_git_preserves_remote(tmp_path):
