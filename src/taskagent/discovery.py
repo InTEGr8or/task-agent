@@ -158,12 +158,13 @@ def _handle_ejected_symlink(current_root: Path):
     repo_root = _repo_root_for(current_root)
     new_target = repo_root / ".task-agent" / "tasks"
 
-    # Phase 3: if a centralized store already exists, heal toward it instead of
-    # creating a fresh in-repo .task-agent/tasks.
+    # Phase 3: if a centralized store already exists, prefer it.
+    # Do **not** create or heal ``.task-agent/tasks`` — that eject path is
+    # legacy; moniker/registry resolve the data-root store. Optional docs/tasks
+    # human symlink is controlled by store_symlink preference.
     moniker_override = os.environ.get("TA_STORE_MONIKER") or None
     centralized = _resolve_centralized_store(repo_root, moniker_override)
     if centralized is not None:
-        # Keep env / docs pointing at the data-root store without moving data.
         if env_path.exists() or eject_enabled or target_path_str:
             env_file = env_path if env_path.exists() else (repo_root / ".env")
             _update_env_var(env_file, "TA_EJECT_TASKS", "true")
@@ -174,20 +175,6 @@ def _handle_ejected_symlink(current_root: Path):
                 env_file, "TA_EJECTED_ISSUES_PATH", str(centralized.resolve())
             )
         _heal_docs_tasks_symlink(current_root, centralized)
-        # Also keep .task-agent/tasks pointer for tools that look there
-        eject_link = repo_root / ".task-agent" / "tasks"
-        try:
-            if not eject_link.exists() and not eject_link.is_symlink():
-                eject_link.parent.mkdir(parents=True, exist_ok=True)
-                os.symlink(str(centralized.resolve()), str(eject_link))
-            elif (
-                eject_link.is_symlink()
-                and eject_link.resolve() != centralized.resolve()
-            ):
-                eject_link.unlink()
-                os.symlink(str(centralized.resolve()), str(eject_link))
-        except OSError:
-            pass
         return
 
     # --- Auto-migrate old sibling ejection to .task-agent/tasks/ ---
@@ -356,24 +343,11 @@ def discover(start_path: Optional[Path] = None) -> TaskAgent:
         current = parent
 
     # Phase 3: prefer existing data-root store for this host before legacy eject.
+    # Migrated hosts bind via moniker/registry only — no .task-agent/tasks heal.
     if repo_boundary is not None:
         central = _resolve_centralized_store(repo_boundary, moniker_env)
         if central is not None:
             _heal_docs_tasks_symlink(repo_boundary, central)
-            # Light pointer heal for main eject path without creating empty stores
-            main_root = _repo_root_for(repo_boundary)
-            eject_link = main_root / ".task-agent" / "tasks"
-            try:
-                if eject_link.is_symlink() or not eject_link.exists():
-                    eject_link.parent.mkdir(parents=True, exist_ok=True)
-                    if eject_link.is_symlink():
-                        if eject_link.resolve() != central.resolve():
-                            eject_link.unlink()
-                            os.symlink(str(central.resolve()), str(eject_link))
-                    else:
-                        os.symlink(str(central.resolve()), str(eject_link))
-            except OSError:
-                pass
             return TaskAgent(config_dir=str(central))
 
         # Unmigrated: keep legacy eject auto-heal

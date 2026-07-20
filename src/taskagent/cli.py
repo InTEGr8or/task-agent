@@ -1766,8 +1766,17 @@ def cmd_store(console: Console, args) -> None:
             console.print(f"[bold]Registry[/bold]:      {report['registry_entry']}")
         else:
             console.print("[bold]Registry[/bold]:      (not registered)")
-        if report.get("pointers_ok"):
-            console.print("[bold]Pointers[/bold]:      ok (.task-agent/tasks → store)")
+        if report.get("migrated"):
+            if report.get("pointers_ok"):
+                console.print(
+                    "[bold]Pointers[/bold]:      ok (no host .task-agent/tasks eject)"
+                )
+            else:
+                eject = Path(report["host_path"]) / ".task-agent" / "tasks"
+                console.print(
+                    f"[bold]Pointers[/bold]:      leftover eject at {eject} "
+                    "(remove it, or re-run [bold]ta store migrate[/bold])"
+                )
         console.print("\n[dim]Read-only inspect; no files were modified.[/dim]")
         return
 

@@ -997,7 +997,11 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
                 kind="already_migrated",
                 already_migrated=True,
                 subject_origin=subject_origin,
-                steps=["No-op: .task-agent/tasks already symlinks to canonical store"],
+                steps=[
+                    "Already migrated (data-root store present)",
+                    f"Remove leftover host eject symlink {eject_path}",
+                    "Refresh moniker config / registry / optional docs symlink",
+                ],
             )
         if target is not None and target.is_dir() and looks_like_store(target):
             # Symlink points elsewhere (old custom eject) — migrate that target
@@ -1110,9 +1114,11 @@ def plan_migrate(host_path: Path, data_root: Optional[Path] = None) -> Migration
     steps.append("Write .task-agent/store.json moniker metadata (+ subject_origin)")
     steps.append(f"Write host .ta-config.json store_moniker={moniker}")
     steps.append("Register moniker in machine registry.json")
-    steps.append(f"Point {eject_path} symlink → {dest}")
-    steps.append(f"Point docs/tasks (and docks/tasks if present) → {dest}")
-    steps.append("Update .env TA_EJECT_TASKS / TA_EJECTED_TASKS_PATH to destination")
+    steps.append(
+        f"Remove host eject path {eject_path} (no longer used; store is data-root)"
+    )
+    steps.append("Optional human symlink docs/tasks → store when store_symlink is on")
+    steps.append("Update .env TA_EJECTED_TASKS_PATH to data-root store (not host path)")
     steps.append("Verify store markers (and remotes if nested_git)")
 
     if _path_is_under(dest, top):
@@ -1173,47 +1179,75 @@ def _move_store_tree(source: Path, dest: Path) -> None:
     shutil.move(str(source), str(dest))
 
 
+def _remove_host_eject_path(host: Path) -> List[str]:
+    """Remove legacy ``.task-agent/tasks`` host eject path after migrate.
+
+    Migrated stores live only under the machine data root. Host eject symlinks
+    (and empty residual dirs) are leftover convenience paths that agents should
+    not use; moniker + registry + ``ta store path`` resolve the store.
+    """
+    applied: List[str] = []
+    eject = host / ".task-agent" / "tasks"
+    if eject.is_symlink():
+        eject.unlink()
+        applied.append(f"removed eject symlink {eject}")
+    elif eject.is_dir():
+        if any(eject.iterdir()):
+            raise RuntimeError(f"Legacy path still has contents after move: {eject}")
+        eject.rmdir()
+        applied.append(f"removed empty eject dir {eject}")
+    elif eject.exists():
+        eject.unlink()
+        applied.append(f"removed eject path {eject}")
+    else:
+        applied.append(f"no host eject path at {eject}")
+    return applied
+
+
 def _update_host_pointers(host: Path, dest: Path) -> List[str]:
-    """Leave eject/docs symlinks and .env pointing at the centralized store."""
+    """After migrate: drop host eject path; optional docs symlink; point .env at store.
+
+    - **Always** remove ``.task-agent/tasks`` (symlink or empty dir). Discovery
+      uses moniker/registry; agents must not rely on the eject path.
+    - **docs/tasks** / **docks/tasks**: create/repair only when
+      ``store_symlink`` preference is on; remove store-pointing symlinks when off.
+    - **.env**: ``TA_EJECTED_*_PATH`` points at the data-root store (not a host path).
+    """
     applied: List[str] = []
     dest_abs = dest.resolve()
 
-    eject = host / ".task-agent" / "tasks"
-    # After move, eject may be gone (if it was the source) or a stale symlink
-    if eject.exists() or eject.is_symlink():
-        if eject.is_symlink():
-            eject.unlink()
-        elif eject.is_dir():
-            # Should be empty after move of contents... if source was eject itself,
-            # shutil.move removed it. If residual empty dir, replace.
-            if any(eject.iterdir()):
-                raise RuntimeError(
-                    f"Legacy path still has contents after move: {eject}"
-                )
-            eject.rmdir()
-    _replace_with_symlink(eject, dest_abs)
-    applied.append(f"symlink {eject} → {dest_abs}")
+    applied.extend(_remove_host_eject_path(host))
 
+    prefer_docs = store_symlink_preferred(host)
     for rel in (Path("docs") / "tasks", Path("docks") / "tasks"):
         link = host / rel
-        if link.exists() or link.is_symlink():
+        if prefer_docs:
+            if link.exists() or link.is_symlink():
+                if link.is_symlink():
+                    link.unlink()
+                elif link.is_dir():
+                    # Only re-point if empty (content should have been source already)
+                    if any(link.iterdir()):
+                        applied.append(f"skipped non-empty {link}")
+                        continue
+                    link.rmdir()
+                else:
+                    link.unlink()
+                _replace_with_symlink(link, dest_abs)
+                applied.append(f"symlink {link} → {dest_abs}")
+            elif (host / rel.parent).is_dir():
+                _replace_with_symlink(link, dest_abs)
+                applied.append(f"symlink {link} → {dest_abs}")
+        else:
+            # store_symlink off: drop convenience links that point at the store
             if link.is_symlink():
-                link.unlink()
-            elif link.is_dir():
-                # Only re-point if empty (content should have been source already)
-                if any(link.iterdir()):
-                    # Leave alone if still has content (unexpected)
-                    applied.append(f"skipped non-empty {link}")
-                    continue
-                link.rmdir()
-            else:
-                link.unlink()
-            _replace_with_symlink(link, dest_abs)
-            applied.append(f"symlink {link} → {dest_abs}")
-        elif (host / rel.parent).is_dir():
-            # docs/ exists but tasks missing — create heal symlink
-            _replace_with_symlink(link, dest_abs)
-            applied.append(f"symlink {link} → {dest_abs}")
+                try:
+                    points_store = link.resolve() == dest_abs
+                except OSError:
+                    points_store = True  # broken link → remove
+                if points_store:
+                    link.unlink()
+                    applied.append(f"removed docs symlink {link} (store_symlink off)")
 
     env_path = host / ".env"
     _update_env_var(env_path, "TA_EJECT_TASKS", "true")
@@ -1236,7 +1270,8 @@ def migrate_store(
     - Refuses to overwrite an existing destination store
     - Verifies markers (and nested remotes) before considering success
     - Does **not** invent a git remote for host_tree stores
-    - Leaves host symlinks + .env so pre-Phase-3 discovery still works
+    - Removes host ``.task-agent/tasks`` eject path; optional docs/tasks symlink
+      when store_symlink is on; .env points at the data-root store
 
     Args:
         host_path: Project root (or any path inside it).
@@ -1370,9 +1405,9 @@ def migrate_store(
             raise RuntimeError("Verification failed: " + "; ".join(verify_errors))
         applied.append("verified store")
 
-        # Host pointers (eject may be gone if it was the moved directory)
+        # Host pointers: drop eject path; optional docs/tasks; env → store
         if source_was_eject_dir and not eject.exists():
-            pass  # recreate in _update_host_pointers
+            pass  # already moved away; _update_host_pointers is a no-op for eject
         applied.extend(_update_host_pointers(host, dest))
 
         reg = MachineRegistry(data_root)
@@ -1453,22 +1488,24 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
             legacy_kind = "host_tree"
             legacy_remote = None
 
-    pointers_ok = False
+    # Post-migrate ideal: no host eject path. Leftover .task-agent/tasks is stale.
     eject = top / ".task-agent" / "tasks"
-    if eject.is_symlink():
-        try:
-            pointers_ok = eject.resolve() == canonical.resolve()
-        except OSError:
-            pointers_ok = False
+    eject_present = eject.exists() or eject.is_symlink()
+
+    host_cfg = read_host_store_config(top)
+    has_host_moniker = bool(host_cfg.get("store_moniker") or host_cfg.get("moniker"))
 
     migrated = bool(
         canonical.is_dir()
         and looks_like_store(canonical)
         and (
             (entry and Path(entry.store_path).resolve() == canonical.resolve())
-            or pointers_ok
+            or has_host_moniker
         )
     )
+    # Unmigrated hosts still use .task-agent/tasks as the real store — that is fine.
+    # Migrated hosts must not keep a host eject pointer.
+    pointers_ok = (not eject_present) if migrated else True
 
     store_remotes: Dict[str, str] = {}
     subject_origin_meta = None
