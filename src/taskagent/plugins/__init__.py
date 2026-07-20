@@ -1,4 +1,10 @@
-"""Plugin system for task-agent external integrations."""
+"""Plugin system for task-agent external integrations.
+
+Hosted remotes (GitHub, future GitLab/Bitbucket) implement
+:class:`TasksRemoteProvider`. Core task-agent only stores git URLs; creating
+and naming repos is always plugin work so interoperability is not narrowed
+to a single forge.
+"""
 
 from dataclasses import dataclass
 from typing import List, Optional, Protocol, runtime_checkable
@@ -34,15 +40,32 @@ class RemoteSuggestion:
     notes: str = ""
 
 
+@dataclass(frozen=True)
+class CreatedRemote:
+    """Result of creating (or locating) a tasks remote on a forge."""
+
+    url: str
+    full_name: str
+    private: bool
+    provider: str
+    created: bool  # False if the remote already existed
+    notes: str = ""
+
+
 @runtime_checkable
 class TasksRemoteProvider(Protocol):
-    """Plugin protocol: suggest/validate git remotes for task stores.
+    """Plugin protocol for forge-specific task-store remotes.
 
-    Core task-agent only stores and uses git URLs. Provider-specific
-    knowledge (sibling ``*-tasks`` repos, GitHub Wiki, etc.) lives here.
+    Core only speaks git URLs after create. Implementations may use their
+    forge's SDK/API (not interactive CLIs). Future GitLab/Bitbucket plugins
+    implement the same protocol.
     """
 
     name: str
+
+    def matches_origin(self, host_origin_url: str) -> bool:
+        """True if this provider can handle the subject's origin URL."""
+        ...
 
     def suggest_remote(
         self, host_origin_url: str, moniker: str
@@ -52,4 +75,24 @@ class TasksRemoteProvider(Protocol):
 
     def validate_remote(self, url: str) -> Optional[str]:
         """Return an error message if ``url`` is invalid for this provider, else None."""
+        ...
+
+    def subject_is_private(self, host_origin_url: str) -> Optional[bool]:
+        """Return True/False if subject repo visibility is known, else None."""
+        ...
+
+    def create_tasks_remote(
+        self,
+        host_origin_url: str,
+        moniker: str,
+        *,
+        private: bool,
+        name: Optional[str] = None,
+    ) -> CreatedRemote:
+        """Create an empty tasks repo on the forge (or return existing).
+
+        Implementations should create without README/license so local history
+        can push cleanly. If the repo already exists, return its URL with
+        ``created=False``.
+        """
         ...

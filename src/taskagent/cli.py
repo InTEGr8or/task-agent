@@ -1496,7 +1496,11 @@ def cmd_store_help(console: Console) -> None:
         ("remote show", "List git remotes on the current project's task store"),
         (
             "remote suggest",
-            "Suggest remotes via provider plugins (GitHub sibling/wiki)",
+            "Suggest tasks remotes via forge plugins (sibling *-tasks)",
+        ),
+        (
+            "remote create [--repo nvim]",
+            "Create sibling *-tasks repo via forge API and attach (plugin)",
         ),
         (
             "remote set <url>",
@@ -1525,6 +1529,45 @@ def cmd_store_help(console: Console) -> None:
     )
 
 
+def _store_host_from_args(console: Console, args) -> Path:
+    """Resolve subject host path from --repo (fuzzy), path, or cwd."""
+    repo = getattr(args, "repo", None)
+    if repo:
+        from taskagent.store_registry import (
+            AmbiguousRepoMatchError,
+            RepoNotFoundError,
+            resolve_repo_query,
+        )
+
+        try:
+            resolved = resolve_repo_query(repo)
+        except AmbiguousRepoMatchError as exc:
+            console.print(f"[red]Ambiguous --repo {repo!r}:[/red]")
+            for c in exc.candidates:
+                console.print(
+                    f"  [cyan]{c.moniker}[/cyan]  {c.store_path}  [dim]({c.reason})[/dim]"
+                )
+            raise SystemExit(1) from exc
+        except RepoNotFoundError as exc:
+            console.print(f"[red]{exc}[/red]")
+            console.print(
+                "[dim]Register the project first: "
+                "[bold]ta store migrate[/bold] in that repo.[/dim]"
+            )
+            raise SystemExit(1) from exc
+        if resolved.host_paths:
+            return Path(resolved.host_paths[0]).expanduser().resolve()
+        # Store known but no host path recorded — still useful for path/list style
+        console.print(
+            f"[yellow]--repo {repo!r} has no host_paths; "
+            f"using store {resolved.store_path}[/yellow]"
+        )
+        return Path(resolved.store_path).resolve()
+    if getattr(args, "path", None):
+        return Path(args.path).expanduser().resolve()
+    return Path.cwd().resolve()
+
+
 def cmd_store(console: Console, args) -> None:
     """Machine data-root / moniker / registry / migrate commands."""
     from taskagent.store_registry import (
@@ -1546,7 +1589,7 @@ def cmd_store(console: Console, args) -> None:
 
     if sub == "path":
         # Plain path only (script-friendly), like data-root
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         report = inspect_host(host)
         canonical = Path(report["canonical_store_path"])
         legacy = (
@@ -1573,7 +1616,7 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "moniker":
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         moniker, origin = resolve_moniker_for_host(host)
         console.print(moniker)
         if origin:
@@ -1588,7 +1631,7 @@ def cmd_store(console: Console, args) -> None:
         )
 
         action = getattr(args, "symlink_action", None)
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         if action in (None, "status"):
             st = docs_tasks_symlink_status(host)
             pref = "on" if st["preferred"] else "off"
@@ -1678,7 +1721,7 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "inspect":
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         report = inspect_host(host)
         if getattr(args, "json", False):
             console.print_json(data=report)
@@ -1741,6 +1784,7 @@ def cmd_store(console: Console, args) -> None:
     if sub == "remote":
         from taskagent.store_registry import (
             attach_store_remote,
+            create_and_attach_store_remote,
             inspect_host,
             set_store_remote,
             suggest_store_remotes,
@@ -1748,7 +1792,7 @@ def cmd_store(console: Console, args) -> None:
         )
 
         rcmd = getattr(args, "remote_command", None)
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         report = inspect_host(host)
         store_path = Path(
             report["canonical_store_path"]
@@ -1794,10 +1838,65 @@ def cmd_store(console: Console, args) -> None:
                 table.add_row(s.provider, s.label, s.url, s.notes)
             console.print(table)
             console.print(
-                "\n[dim]Configure URL only: [bold]ta store remote set <url>[/bold]\n"
-                "Connect + publish (handles unrelated history): "
-                "[bold]ta store remote attach <url>[/bold][/dim]"
+                "\n[dim]Create + attach: [bold]ta store remote create[/bold]\n"
+                "Configure URL only: [bold]ta store remote set <url>[/bold]\n"
+                "Connect + publish: [bold]ta store remote attach <url>[/bold][/dim]"
             )
+            return
+
+        if rcmd == "create":
+            # Visibility: default match subject; --private / --public override
+            private: Optional[bool] = None
+            if getattr(args, "private", False):
+                private = True
+            if getattr(args, "public", False):
+                private = False
+            try:
+                info = create_and_attach_store_remote(
+                    host,
+                    private=private,
+                    name=getattr(args, "name", None),
+                    provider_name=getattr(args, "provider", None),
+                    attach=not bool(getattr(args, "no_attach", False)),
+                    dry_run=bool(getattr(args, "dry_run", False)),
+                )
+            except Exception as exc:
+                console.print(f"[red]remote create failed:[/red] {exc}")
+                raise SystemExit(1)
+
+            if info.get("dry_run"):
+                console.print("[cyan]Dry-run — no create/attach[/cyan]")
+            console.print(f"[bold]Provider[/bold]:   {info.get('provider')}")
+            console.print(f"[bold]Moniker[/bold]:    {info.get('moniker')}")
+            console.print(f"[bold]Subject[/bold]:    {info.get('subject_origin')}")
+            vis = "private" if info.get("private") else "public"
+            console.print(
+                f"[bold]Visibility[/bold]: {vis} "
+                f"[dim]({info.get('visibility_source')})[/dim]"
+            )
+            if info.get("full_name"):
+                console.print(f"[bold]Tasks repo[/bold]: {info.get('full_name')}")
+            if info.get("url"):
+                console.print(f"[bold]URL[/bold]:        {info.get('url')}")
+            if info.get("planned_url"):
+                console.print(f"[bold]Planned URL[/bold]: {info.get('planned_url')}")
+            if info.get("notes"):
+                console.print(f"[dim]{info['notes']}[/dim]")
+            if info.get("created") is True:
+                console.print("[green]Created new empty tasks repository.[/green]")
+            elif info.get("created") is False:
+                console.print("[yellow]Tasks repository already existed.[/yellow]")
+            if info.get("attach_result"):
+                ar = info["attach_result"]
+                console.print(
+                    f"[bold]Attach[/bold]:     mode={ar.get('mode')} ok={ar.get('ok')}"
+                )
+                for w in ar.get("warnings") or []:
+                    console.print(f"[yellow]Warning:[/yellow] {w}")
+            if info.get("ok") and not info.get("dry_run"):
+                console.print(
+                    f"\n[bold green]Done.[/bold green] Store: {info.get('store_path')}"
+                )
             return
 
         if rcmd == "set":
@@ -1904,14 +2003,14 @@ def cmd_store(console: Console, args) -> None:
             return
 
         console.print(
-            "[yellow]Usage: ta store remote {show|suggest|set|attach}[/yellow]"
+            "[yellow]Usage: ta store remote {show|suggest|create|set|attach}[/yellow]"
         )
         return
 
     if sub == "rebind":
         from taskagent.store_registry import rebind_store_moniker
 
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         new_moniker = getattr(args, "moniker", None)
         try:
             info = rebind_store_moniker(host, new_moniker=new_moniker)
@@ -1929,7 +2028,7 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "migrate":
-        host = Path(args.path).resolve() if getattr(args, "path", None) else Path.cwd()
+        host = _store_host_from_args(console, args)
         dry_run = bool(getattr(args, "dry_run", False))
         mig = migrate_store(host, dry_run=dry_run)
         plan = mig.plan
@@ -4935,6 +5034,11 @@ Usage:
         help="Print this project's task store directory (data-root/stores/<moniker>)",
     )
     path_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    path_p.add_argument(
         "path",
         nargs="?",
         default=None,
@@ -4942,6 +5046,11 @@ Usage:
     )
     moniker_p = store_sub.add_parser(
         "moniker", help="Print the moniker for a host path (default: cwd)"
+    )
+    moniker_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
     )
     moniker_p.add_argument(
         "path",
@@ -4964,6 +5073,11 @@ Usage:
         help="on | off | status (default: status)",
     )
     symlink_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    symlink_p.add_argument(
         "path",
         nargs="?",
         default=None,
@@ -4973,6 +5087,11 @@ Usage:
     inspect_p = store_sub.add_parser(
         "inspect",
         help="Read-only inspect: moniker, legacy store, migration status",
+    )
+    inspect_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
     )
     inspect_p.add_argument(
         "path",
@@ -4990,6 +5109,11 @@ Usage:
     migrate_p = store_sub.add_parser(
         "migrate",
         help="Move legacy .task-agent/tasks into the machine data root store",
+    )
+    migrate_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
     )
     migrate_p.add_argument(
         "path",
@@ -5014,6 +5138,11 @@ Usage:
         "show", help="List git remotes on the current project's task store"
     )
     remote_show.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    remote_show.add_argument(
         "path",
         nargs="?",
         default=None,
@@ -5021,9 +5150,62 @@ Usage:
     )
     remote_suggest = remote_sub.add_parser(
         "suggest",
-        help="Suggest remotes via provider plugins (GitHub sibling/wiki)",
+        help="Suggest sibling *-tasks remotes via forge plugins",
     )
     remote_suggest.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    remote_suggest.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: cwd)",
+    )
+    remote_create = remote_sub.add_parser(
+        "create",
+        help=(
+            "Create a sibling *-tasks repo via forge API (plugin) and attach; "
+            "visibility defaults to match the subject repo"
+        ),
+    )
+    remote_create.add_argument(
+        "--private",
+        action="store_true",
+        help="Force private tasks repo (default: match subject visibility)",
+    )
+    remote_create.add_argument(
+        "--public",
+        action="store_true",
+        help="Force public tasks repo (default: match subject visibility)",
+    )
+    remote_create.add_argument(
+        "--name",
+        default=None,
+        help="Tasks repo full name owner/repo-tasks (default: {subject}-tasks)",
+    )
+    remote_create.add_argument(
+        "--provider",
+        default=None,
+        help="Forge plugin name (default: auto from subject origin; e.g. github)",
+    )
+    remote_create.add_argument(
+        "--no-attach",
+        action="store_true",
+        help="Create/set URL only; do not fetch/push publish",
+    )
+    remote_create.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only; do not call forge API or attach",
+    )
+    remote_create.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim) instead of cwd/path",
+    )
+    remote_create.add_argument(
         "path",
         nargs="?",
         default=None,
@@ -5038,6 +5220,11 @@ Usage:
         "--name",
         default="origin",
         help="Remote name (default: origin)",
+    )
+    remote_set.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
     )
     remote_set.add_argument(
         "path",
@@ -5064,6 +5251,11 @@ Usage:
         help="Plan only; set-url may still run, no fetch/push publish",
     )
     remote_attach.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    remote_attach.add_argument(
         "path",
         nargs="?",
         default=None,
@@ -5078,6 +5270,11 @@ Usage:
         nargs="?",
         default=None,
         help="New moniker (default: derive from current host origin)",
+    )
+    rebind_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
     )
     rebind_p.add_argument(
         "--path",

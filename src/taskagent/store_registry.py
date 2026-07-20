@@ -534,12 +534,15 @@ class MachineRegistry:
             for child in sorted(self.stores_dir.iterdir()):
                 if not child.is_dir():
                     continue
+                # Skip junk / partial dirs (e.g. a stray stores/docs/ from tests)
+                if not looks_like_store(child):
+                    continue
                 meta = read_store_meta(child)
                 moniker: Optional[str] = None
                 remote: Optional[str] = None
                 if meta and meta.get("moniker"):
                     moniker = str(meta["moniker"])
-                    remote = meta.get("remote")
+                    remote = meta.get("remote") or git_remote_url(child)
                 else:
                     # Fallback: nested git origin, else directory name as moniker
                     remote = git_remote_url(child)
@@ -547,8 +550,9 @@ class MachineRegistry:
                         try:
                             moniker = moniker_from_remote(remote)
                         except ValueError:
-                            moniker = child.name
+                            moniker = child.name.replace("_", "/", 1)
                     else:
+                        # Dir name uses _ as filesystem encoding of /
                         moniker = child.name.replace("_", "/", 1)
 
                 assert moniker is not None
@@ -1497,10 +1501,36 @@ def inspect_host(host_path: Path, data_root: Optional[Path] = None) -> Dict[str,
 
 
 def default_remote_providers():
-    """Built-in TasksRemoteProvider instances."""
+    """Built-in TasksRemoteProvider instances (forges register here).
+
+    Core never hardcodes forge create/suggest logic outside plugins.
+    """
     from taskagent.plugins.github import GitHubTasksRemoteProvider
 
     return [GitHubTasksRemoteProvider()]
+
+
+def select_remote_provider(
+    host_origin_url: str, *, provider_name: Optional[str] = None
+):
+    """Pick a TasksRemoteProvider for the subject origin (or by name)."""
+    providers = default_remote_providers()
+    if provider_name:
+        for p in providers:
+            if p.name == provider_name:
+                return p
+        raise ValueError(
+            f"Unknown remote provider {provider_name!r}. "
+            f"Available: {', '.join(p.name for p in providers)}"
+        )
+    matching = [p for p in providers if p.matches_origin(host_origin_url)]
+    if not matching:
+        raise ValueError(
+            f"No remote provider matches subject origin {host_origin_url!r}. "
+            "Install/register a forge plugin (github, future gitlab, …) "
+            "or pass an explicit git URL to `ta store remote attach`."
+        )
+    return matching[0]
 
 
 def suggest_store_remotes(
@@ -1527,10 +1557,130 @@ def suggest_store_remotes(
     suggestions: List[Any] = []
     for provider in default_remote_providers():
         try:
+            if not provider.matches_origin(origin_url):
+                continue
             suggestions.extend(provider.suggest_remote(origin_url, moniker))
         except Exception:
             continue
     return suggestions
+
+
+def create_and_attach_store_remote(
+    host_path: Path,
+    *,
+    private: Optional[bool] = None,
+    name: Optional[str] = None,
+    provider_name: Optional[str] = None,
+    attach: bool = True,
+    dry_run: bool = False,
+    data_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Create a tasks remote via the matching forge plugin and optionally attach.
+
+    Visibility:
+      - If ``private`` is None, use subject repo visibility from the plugin API
+        when available; otherwise default to private.
+      - ``private=True/False`` forces visibility.
+
+    Does not use interactive CLIs; providers use forge SDKs (e.g. githubkit).
+    """
+    host = project_host_root(host_path)
+    moniker, origin = resolve_moniker_for_host(host)
+    if not origin:
+        raise ValueError(
+            f"No git origin on subject host {host}; cannot create a tasks remote "
+            "from moniker alone. Pass --name owner/repo-tasks and ensure a provider."
+        )
+
+    provider = select_remote_provider(origin, provider_name=provider_name)
+
+    # Resolve visibility
+    if private is None:
+        detected = provider.subject_is_private(origin)
+        private = True if detected is None else detected
+        visibility_source = "subject" if detected is not None else "default-private"
+    else:
+        visibility_source = "flag"
+
+    # Resolve store path for attach
+    report = inspect_host(host, data_root=data_root)
+    store = Path(report["canonical_store_path"])
+    if report.get("registry_entry") and report["registry_entry"].get("store_path"):
+        cand = Path(report["registry_entry"]["store_path"])
+        if cand.is_dir():
+            store = cand
+    if not store.is_dir() or not looks_like_store(store):
+        leg = detect_legacy_store(host)
+        if leg is not None and looks_like_store(leg):
+            store = leg
+        else:
+            raise FileNotFoundError(
+                f"No task store for {host}. Run `ta store migrate` first."
+            )
+
+    suggestions = provider.suggest_remote(origin, moniker)
+    planned_url = suggestions[0].url if suggestions else None
+
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "provider": provider.name,
+            "moniker": moniker,
+            "subject_origin": origin,
+            "private": private,
+            "visibility_source": visibility_source,
+            "planned_name": name,
+            "planned_url": planned_url,
+            "store_path": str(store.resolve()),
+            "attach": attach,
+            "steps": [
+                f"create empty tasks repo via {provider.name} API "
+                f"({'private' if private else 'public'})",
+                "attach + publish local store to that remote"
+                if attach
+                else "skip attach (--no-attach)",
+            ],
+        }
+
+    created = provider.create_tasks_remote(origin, moniker, private=private, name=name)
+    err = provider.validate_remote(created.url)
+    if err:
+        raise ValueError(err)
+
+    result: Dict[str, Any] = {
+        "ok": True,
+        "dry_run": False,
+        "provider": provider.name,
+        "moniker": moniker,
+        "subject_origin": origin,
+        "private": created.private,
+        "visibility_source": visibility_source,
+        "created": created.created,
+        "full_name": created.full_name,
+        "url": created.url,
+        "notes": created.notes,
+        "store_path": str(store.resolve()),
+        "attach": attach,
+    }
+
+    if attach:
+        attach_info = attach_store_remote(
+            store,
+            created.url,
+            moniker=moniker,
+            data_root=data_root,
+        )
+        result["attach_result"] = attach_info
+        result["status"] = attach_info.get("status")
+    else:
+        set_info = set_store_remote(
+            store, created.url, moniker=moniker, data_root=data_root
+        )
+        result["set_result"] = set_info
+        result["status"] = mission_remote_status(store)
+
+    return result
 
 
 class RepoNotFoundError(LookupError):

@@ -1,15 +1,16 @@
-"""GitHub Issues integration and task-store remote suggestions."""
+"""GitHub Issues integration and task-store remote provider (SDK, not gh CLI)."""
 
 from __future__ import annotations
 
 import os
 import re
 from typing import List, Optional
+
 from githubkit import GitHub
 from githubkit.versions.latest.models import Issue as GitHubIssueModel
 
 from taskagent.models.issue import Issue
-from taskagent.plugins import RemoteSuggestion
+from taskagent.plugins import CreatedRemote, RemoteSuggestion
 
 
 def _parse_github_origin(host_origin_url: str) -> Optional[tuple[str, str, str]]:
@@ -65,7 +66,6 @@ def _parse_github_origin(host_origin_url: str) -> Optional[tuple[str, str, str]]
             style = "ssh"
 
     assert owner is not None and repo is not None
-    # Strip wiki suffix if someone passes a wiki remote as origin
     if repo.endswith(".wiki"):
         repo = repo[: -len(".wiki")]
     return style, owner, repo
@@ -77,10 +77,35 @@ def _format_github_remote(style: str, owner: str, repo: str) -> str:
     return f"git@github.com:{owner}/{repo}.git"
 
 
+def _github_token() -> Optional[str]:
+    return (
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("github_token")
+    )
+
+
+def _parse_full_name(name: str) -> tuple[str, str]:
+    name = name.strip().strip("/")
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
+    parts = name.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"Tasks repo name must be 'owner/repo' (got {name!r})")
+    return parts[0], parts[1]
+
+
 class GitHubTasksRemoteProvider:
-    """Suggest GitHub remotes for centralized task stores (no API required)."""
+    """GitHub forge plugin for task-store remotes (githubkit SDK).
+
+    Does not use the interactive ``gh`` CLI. Other forges implement the same
+    TasksRemoteProvider protocol separately.
+    """
 
     name = "github"
+
+    def matches_origin(self, host_origin_url: str) -> bool:
+        return _parse_github_origin(host_origin_url) is not None
 
     def suggest_remote(
         self, host_origin_url: str, moniker: str
@@ -89,40 +114,129 @@ class GitHubTasksRemoteProvider:
         if not parsed:
             return []
         style, owner, repo = parsed
-        suggestions = [
+        # Sibling *-tasks only (wiki intentionally unsupported as a product path)
+        return [
             RemoteSuggestion(
                 url=_format_github_remote(style, owner, f"{repo}-tasks"),
                 label="sibling-tasks",
                 provider=self.name,
-                notes=f"Dedicated private/public repo {owner}/{repo}-tasks",
-            ),
-            RemoteSuggestion(
-                url=_format_github_remote(style, owner, f"{repo}.wiki"),
-                label="wiki",
-                provider=self.name,
                 notes=(
-                    f"GitHub Wiki remote for {owner}/{repo} "
-                    "(requires wiki enabled; limited tooling)"
-                ),
-            ),
-            RemoteSuggestion(
-                url=_format_github_remote(style, owner, repo),
-                label="same-repo",
-                provider=self.name,
-                notes=(
-                    "Same remote as the subject repo (tasks live on a branch "
-                    "or co-located history — usually not recommended)"
+                    f"Dedicated tasks repo {owner}/{repo}-tasks "
+                    f"(visibility defaults to match subject; override with --private/--public)"
                 ),
             ),
         ]
-        return suggestions
 
     def validate_remote(self, url: str) -> Optional[str]:
         if not url or not url.strip():
             return "Empty remote URL"
         if "github" not in url.lower():
             return "URL does not look like a GitHub remote"
+        if ".wiki" in url.lower():
+            return (
+                "GitHub Wiki remotes are not supported for task stores "
+                "(use a sibling *-tasks repository instead)"
+            )
         return None
+
+    def subject_is_private(self, host_origin_url: str) -> Optional[bool]:
+        parsed = _parse_github_origin(host_origin_url)
+        if not parsed:
+            return None
+        _style, owner, repo = parsed
+        token = _github_token()
+        if not token:
+            return None
+        try:
+            gh = GitHub(token)
+            resp = gh.rest.repos.get(owner, repo)
+            # githubkit model: private is bool
+            return bool(getattr(resp.parsed_data, "private", None))
+        except Exception:
+            return None
+
+    def create_tasks_remote(
+        self,
+        host_origin_url: str,
+        moniker: str,
+        *,
+        private: bool,
+        name: Optional[str] = None,
+    ) -> CreatedRemote:
+        parsed = _parse_github_origin(host_origin_url)
+        if not parsed:
+            raise ValueError(
+                f"Subject origin is not a GitHub URL: {host_origin_url!r}. "
+                "Use a GitHub subject, or pass --provider when other forges are available."
+            )
+        style, owner, repo = parsed
+        if name:
+            tasks_owner, tasks_repo = _parse_full_name(name)
+        else:
+            tasks_owner, tasks_repo = owner, f"{repo}-tasks"
+
+        token = _github_token()
+        if not token:
+            raise ValueError(
+                "GitHub token required to create a tasks repo. "
+                "Set GITHUB_TOKEN or GH_TOKEN (repo scope)."
+            )
+
+        gh = GitHub(token)
+        full_name = f"{tasks_owner}/{tasks_repo}"
+        url = _format_github_remote(style, tasks_owner, tasks_repo)
+
+        # Already exists?
+        try:
+            existing = gh.rest.repos.get(tasks_owner, tasks_repo)
+            priv = bool(getattr(existing.parsed_data, "private", private))
+            return CreatedRemote(
+                url=url,
+                full_name=full_name,
+                private=priv,
+                provider=self.name,
+                created=False,
+                notes=f"Repository {full_name} already exists; will attach",
+            )
+        except Exception:
+            pass
+
+        # Create empty repo (no README/license) so local history can push cleanly
+        try:
+            me = gh.rest.users.get_authenticated()
+            authed_login = getattr(me.parsed_data, "login", None)
+        except Exception as e:
+            raise RuntimeError(f"Failed to identify GitHub user: {e}") from e
+
+        try:
+            if authed_login and tasks_owner.lower() == str(authed_login).lower():
+                gh.rest.repos.create_for_authenticated_user(
+                    name=tasks_repo,
+                    private=private,
+                    auto_init=False,
+                    description=f"task-agent store for {moniker}",
+                )
+            else:
+                gh.rest.repos.create_in_org(
+                    org=tasks_owner,
+                    name=tasks_repo,
+                    private=private,
+                    auto_init=False,
+                    description=f"task-agent store for {moniker}",
+                )
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create GitHub repository {full_name}: {e}"
+            ) from e
+
+        return CreatedRemote(
+            url=url,
+            full_name=full_name,
+            private=private,
+            provider=self.name,
+            created=True,
+            notes=f"Created empty {'private' if private else 'public'} repo {full_name}",
+        )
 
 
 class GitHubPlugin:
@@ -130,7 +244,6 @@ class GitHubPlugin:
 
     def __init__(self, config: dict):
         """Initialize with config dict containing 'token' and optionally 'repo'."""
-        # Allow config to come from worktree-config.json under "github" key
         github_config = config.get("github", {})
 
         self.token = (
@@ -152,14 +265,13 @@ class GitHubPlugin:
 
     def _to_task_agent_issue(self, gh_issue: GitHubIssueModel) -> Issue:
         """Convert a GitHub Issue to TaskAgent Issue."""
-        # Use GitHub issue number as part of slug for uniqueness
         slug = f"gh-{gh_issue.number}-{gh_issue.title.lower().replace(' ', '-')[:50]}"
 
         return Issue(
             name=gh_issue.title or f"GitHub Issue #{gh_issue.number}",
             slug=slug,
-            dependencies=[],  # GitHub doesn't have native dependency tracking
-            priority=0,  # Will be assigned by task-agent
+            dependencies=[],
+            priority=0,
             status="pending" if gh_issue.state == "open" else "completed",
         )
 
@@ -179,11 +291,9 @@ class GitHubPlugin:
         issues: List[Issue] = []
 
         try:
-            # Get open issues (excluding pull requests)
             resp = self.github.rest.issues.list_for_repo(owner, repo, state="open")
 
             for gh_issue in resp.parsed_data:  # type: ignore[attr-defined]
-                # Skip pull requests (they appear as issues in GitHub API)
                 if hasattr(gh_issue, "pull_request"):
                     continue
 

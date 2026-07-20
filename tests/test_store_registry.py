@@ -178,6 +178,9 @@ def test_rebuild_from_stores_preserves_host_paths(tmp_path):
     stores = tmp_path / "stores"
     store = stores / "acme_app"
     store.mkdir(parents=True)
+    (store / "pending").mkdir()
+    (store / ".task-agent").mkdir()
+    (store / ".task-agent" / "mission.usv").write_text("a\x1fb\x1f\n")
     write_store_meta(store, moniker="acme/app", remote="git@gh.com:acme/app.git")
 
     reg = MachineRegistry(tmp_path)
@@ -480,12 +483,15 @@ def test_github_remote_suggestions():
     sug = p.suggest_remote("git@github.com:acme/app.git", "acme/app")
     labels = {s.label: s.url for s in sug}
     assert labels["sibling-tasks"] == "git@github.com:acme/app-tasks.git"
-    assert labels["wiki"] == "git@github.com:acme/app.wiki.git"
-    assert labels["same-repo"] == "git@github.com:acme/app.git"
+    assert "wiki" not in labels  # wiki deliberately unsupported
+    assert "same-repo" not in labels
+    assert p.matches_origin("git@github.com:acme/app.git")
+    assert not p.matches_origin("git@gitlab.com:g/r.git")
 
     sug_https = p.suggest_remote("https://github.com/acme/app.git", "acme/app")
     assert sug_https[0].url.startswith("https://github.com/")
     assert p.suggest_remote("git@gitlab.com:g/r.git", "g/r") == []
+    assert p.validate_remote("git@github.com:a/b.wiki.git") is not None
 
 
 def test_set_store_remote(tmp_path):

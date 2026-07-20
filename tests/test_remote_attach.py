@@ -68,17 +68,29 @@ def test_histories_related_and_unrelated(tmp_path):
     assert not _histories_related(a, "HEAD", "other/main")
 
 
-def test_set_store_remote_only_configures(tmp_path):
+def test_set_store_remote_only_configures(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
     store = tmp_path / "store"
     _seed_store(store, "seed")
     remote_repo = tmp_path / "remote.git"
     _run(tmp_path, "git", "init", "--bare", str(remote_repo))
-    info = set_store_remote(store, str(remote_repo), moniker="acme/app")
+    info = set_store_remote(store, str(remote_repo), moniker="acme/app", data_root=data)
     assert info["action"] == "add"
     assert "origin" in info["remotes"]
+    from taskagent.store_registry import MachineRegistry
+
+    # Registry writes must land under the test data root only
+    reg = MachineRegistry()  # honors TA_DATA_ROOT monkeypatch
+    assert reg.data_root == data.resolve()
+    entry = reg.get("acme/app")
+    assert entry is not None
+    assert str(entry.store_path).startswith(str(tmp_path))
 
 
-def test_attach_empty_remote_publishes(tmp_path):
+def test_attach_empty_remote_publishes(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
     store = tmp_path / "store"
     _seed_store(store, "local-seed")
     assert looks_like_store(store)
@@ -90,6 +102,7 @@ def test_attach_empty_remote_publishes(tmp_path):
         str(remote_repo),
         moniker="acme/app",
         default_branch="main",
+        data_root=data,
     )
     assert info["ok"]
     assert info["mode"] in ("empty_remote_publish", "fast_forward_or_push")
@@ -103,8 +116,10 @@ def test_attach_empty_remote_publishes(tmp_path):
     assert "refs/heads/main" in out.stdout
 
 
-def test_attach_unrelated_renames_then_publishes(tmp_path):
+def test_attach_unrelated_renames_then_publishes(tmp_path, monkeypatch):
     """Remote has unrelated seed branch; tip is renamed, not deleted."""
+    data = tmp_path / "data"
+    monkeypatch.setenv("TA_DATA_ROOT", str(data))
     # Remote with only master seed (unrelated)
     remote_work = tmp_path / "remote-work"
     _seed_store(remote_work, "stale-eject-seed")
@@ -121,6 +136,7 @@ def test_attach_unrelated_renames_then_publishes(tmp_path):
         str(remote_bare),
         moniker="acme/app",
         default_branch="main",
+        data_root=data,
     )
     assert info["ok"]
     assert info["mode"] == "unrelated_rename_and_publish"
