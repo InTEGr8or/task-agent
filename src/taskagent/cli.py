@@ -2232,9 +2232,7 @@ def refuse_if_native_windows_store_ops(console: Console, command: str) -> None:
     """
     if not is_native_windows():
         return
-    console.print(
-        f"[red]Refused:[/red] [bold]{command}[/bold] on native Windows.\n"
-    )
+    console.print(f"[red]Refused:[/red] [bold]{command}[/bold] on native Windows.\n")
     console.print(_NATIVE_WINDOWS_STORE_OPS_MSG)
     raise SystemExit(1)
 

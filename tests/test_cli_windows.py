@@ -56,7 +56,9 @@ def test_cmd_store_migrate_refuses_native_windows(monkeypatch):
     monkeypatch.setattr(
         cli,
         "_store_host_from_args",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not resolve host")),
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("should not resolve host")
+        ),
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -72,7 +74,9 @@ def test_cmd_store_data_root_not_refused_on_native_windows(monkeypatch):
     monkeypatch.setattr(cli, "is_native_windows", lambda: True)
     monkeypatch.setattr(
         "taskagent.store_registry.get_data_root",
-        lambda: MagicMock(__str__=lambda self: "C:\\Users\\x\\.local\\share\\task-agent"),
+        lambda: MagicMock(
+            __str__=lambda self: "C:\\Users\\x\\.local\\share\\task-agent"
+        ),
     )
     console = MagicMock()
     args = SimpleNamespace(store_command="data-root")

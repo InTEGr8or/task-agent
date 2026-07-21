@@ -716,15 +716,11 @@ def test_init_strategy_creates_files(manager):
 
 def test_collect_dependent_slugs_subtask_and_blocked_by(manager):
     parent = manager.create_issue("Parent", body="root")
-    child = manager.create_issue(
-        "Child Sub", body="sub", subtask_of=parent.slug
-    )
+    child = manager.create_issue("Child Sub", body="sub", subtask_of=parent.slug)
     blocked = manager.create_issue(
         "Child Blocked", body="blocked", blocked_by=parent.slug
     )
-    grand = manager.create_issue(
-        "Grandchild", body="grand", subtask_of=child.slug
-    )
+    grand = manager.create_issue("Grandchild", body="grand", subtask_of=child.slug)
 
     deps = manager.collect_dependent_slugs([parent.slug])
     assert child.slug in deps
@@ -738,12 +734,8 @@ def test_collect_dependent_slugs_subtask_and_blocked_by(manager):
 
 def test_collect_dependent_slugs_excludes_completed_by_default(manager):
     parent = manager.create_issue("Done Parent", body="root")
-    open_child = manager.create_issue(
-        "Open Child", body="open", subtask_of=parent.slug
-    )
-    done_child = manager.create_issue(
-        "Done Child", body="done", subtask_of=parent.slug
-    )
+    open_child = manager.create_issue("Open Child", body="open", subtask_of=parent.slug)
+    done_child = manager.create_issue("Done Child", body="done", subtask_of=parent.slug)
     manager.complete_issue(done_child.slug, should_commit=False)
 
     open_only = manager.collect_dependent_slugs([parent.slug], include_completed=False)

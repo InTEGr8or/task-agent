@@ -151,9 +151,7 @@ def test_cmd_show_multi_and_children(manager, temp_issues_dir, capsys):
     cmd_new(console, manager, "Root Task", "Root body", draft=False)
     cmd_new(console, manager, "Other Task", "Other body", draft=False)
     manager.create_issue("Root Child", body="Child body", subtask_of="root-task")
-    manager.create_issue(
-        "Blocked Child", body="Blocked body", blocked_by="root-task"
-    )
+    manager.create_issue("Blocked Child", body="Blocked body", blocked_by="root-task")
 
     # Multi-slug list
     cmd_show(console, manager, ["root-task", "other-task"])
@@ -188,9 +186,7 @@ def test_cmd_show_children_completed_flag(manager, temp_issues_dir):
     assert "Done body" not in out
 
     console2 = Console(force_terminal=False, record=True)
-    cmd_show(
-        console2, manager, parent.slug, children=True, include_completed=True
-    )
+    cmd_show(console2, manager, parent.slug, children=True, include_completed=True)
     out2 = console2.export_text()
     assert "Open body" in out2
     assert "Done body" in out2
@@ -582,7 +578,10 @@ def test_agy_mcp_config_path_user_and_project(tmp_path, monkeypatch):
     from taskagent.cli import _agy_mcp_config_path
 
     monkeypatch.chdir(tmp_path)
-    assert _agy_mcp_config_path("project") == tmp_path.resolve() / ".agents" / "mcp_config.json"
+    assert (
+        _agy_mcp_config_path("project")
+        == tmp_path.resolve() / ".agents" / "mcp_config.json"
+    )
     user_path = _agy_mcp_config_path("user")
     assert user_path == Path.home() / ".gemini" / "antigravity-cli" / "mcp_config.json"
 

@@ -656,7 +656,13 @@ def get_task_details(
         completed: If True (with children), include completed dependents.
     """
     manager = get_manager()
-    queries = _parse_name_list(name) if "," in name else [name.strip()] if name.strip() else []
+    queries = (
+        _parse_name_list(name)
+        if "," in name
+        else [name.strip()]
+        if name.strip()
+        else []
+    )
     if not queries:
         return "No task name provided."
 

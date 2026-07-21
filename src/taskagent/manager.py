@@ -1883,9 +1883,7 @@ class TaskAgent:
             )
         return issues
 
-    def load_issues_for_relations(
-        self, include_completed: bool = False
-    ) -> List[Issue]:
+    def load_issues_for_relations(self, include_completed: bool = False) -> List[Issue]:
         """Mission issues plus optional completed tasks for dependency graphs."""
         issues = list(self.load_mission())
         if include_completed:
