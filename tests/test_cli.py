@@ -350,6 +350,156 @@ def test_version_detection_priority(tmp_path):
     assert source == "pyproject.toml"
 
 
+def _git_repo_with_version(tmp_path, version: str = "1.0.0"):
+    """Init a tiny git repo with pyproject version committed."""
+    import subprocess
+
+    repo = tmp_path / "relrepo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    (repo / "pyproject.toml").write_text(
+        f'[project]\nname = "demo"\nversion = "{version}"\n'
+    )
+    subprocess.run(["git", "add", "pyproject.toml"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: initial"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    return repo
+
+
+def test_can_amend_when_local_only(tmp_path):
+    from taskagent.cli import _can_amend_version_safely, _git
+
+    repo = _git_repo_with_version(tmp_path)
+    ok, reason = _can_amend_version_safely(repo)
+    assert ok is True
+    assert "local-only" in reason
+
+    # Simulate a remote that contains HEAD
+    bare = tmp_path / "remote.git"
+    import subprocess
+
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    _git("remote", "add", "origin", str(bare), cwd=repo)
+    _git("push", "-u", "origin", "HEAD", cwd=repo)
+    ok2, reason2 = _can_amend_version_safely(repo)
+    assert ok2 is False
+    assert "remote" in reason2.lower()
+
+
+def test_promote_amends_local_head(tmp_path, monkeypatch):
+    from taskagent.cli import promote_project_version, get_committed_version, _git
+
+    repo = _git_repo_with_version(tmp_path, "1.0.0")
+    console = Console(force_terminal=False)
+
+    def fake_bump(part, project_root, source):
+        assert part == "patch"
+        (project_root / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\nversion = "1.0.1"\n'
+        )
+        return "1.0.1"
+
+    monkeypatch.setattr("taskagent.cli._bump_project_version", fake_bump)
+    monkeypatch.chdir(repo)
+
+    before = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    new_v = promote_project_version(console, "patch", project_root=repo)
+    assert new_v == "1.0.1"
+    after = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    # Amend rewrites HEAD (same parent, new SHA) — still one commit ahead of empty?
+    # Parent of HEAD should still be empty root's only parent chain length 1
+    count = _git("rev-list", "--count", "HEAD", cwd=repo).stdout.strip()
+    assert count == "1"
+    assert before != after
+    assert get_committed_version(repo)[0] == "1.0.1"
+    log = _git("log", "-1", "--format=%s", cwd=repo).stdout.strip()
+    assert log == "feat: initial"  # message preserved by amend
+
+
+def test_promote_new_commit_when_published(tmp_path, monkeypatch):
+    from taskagent.cli import promote_project_version, get_committed_version, _git
+    import subprocess
+
+    repo = _git_repo_with_version(tmp_path, "1.0.0")
+    bare = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    _git("remote", "add", "origin", str(bare), cwd=repo)
+    _git("push", "-u", "origin", "HEAD", cwd=repo)
+
+    def fake_bump(part, project_root, source):
+        (project_root / "pyproject.toml").write_text(
+            '[project]\nname = "demo"\nversion = "1.0.1"\n'
+        )
+        return "1.0.1"
+
+    monkeypatch.setattr("taskagent.cli._bump_project_version", fake_bump)
+    console = Console(force_terminal=False)
+    promote_project_version(console, "patch", project_root=repo)
+
+    count = _git("rev-list", "--count", "HEAD", cwd=repo).stdout.strip()
+    assert count == "2"
+    log = _git("log", "-1", "--format=%s", cwd=repo).stdout.strip()
+    assert log == "chore(release): v1.0.1"
+    assert get_committed_version(repo)[0] == "1.0.1"
+
+
+def test_tag_requires_matching_working_tree(tmp_path):
+    from taskagent.cli import tag_project_version
+
+    repo = _git_repo_with_version(tmp_path, "1.0.0")
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "9.9.9"\n'
+    )
+    console = Console(force_terminal=False)
+    with pytest.raises(RuntimeError, match="differs from HEAD"):
+        tag_project_version(console, project_root=repo, push=False)
+
+
+def test_tag_refuses_existing_other_commit(tmp_path, monkeypatch):
+    from taskagent.cli import tag_project_version, _git
+
+    repo = _git_repo_with_version(tmp_path, "1.0.0")
+    # Tag current HEAD as v1.0.0
+    _git("tag", "v1.0.0", cwd=repo)
+    # New commit still at 1.0.0
+    (repo / "extra.txt").write_text("x")
+    _git("add", "extra.txt", cwd=repo)
+    _git("commit", "-m", "chore: extra", cwd=repo)
+
+    console = Console(force_terminal=False)
+    with pytest.raises(RuntimeError, match="already exists but points"):
+        tag_project_version(console, project_root=repo, push=False)
+
+
+def test_tag_idempotent_on_same_head(tmp_path):
+    from taskagent.cli import tag_project_version, _git
+
+    repo = _git_repo_with_version(tmp_path, "1.0.0")
+    console = Console(force_terminal=False)
+    t1 = tag_project_version(console, project_root=repo, push=False)
+    t2 = tag_project_version(console, project_root=repo, push=False)
+    assert t1 == t2 == "v1.0.0"
+    # single tag
+    tags = _git("tag", cwd=repo).stdout.strip().splitlines()
+    assert tags == ["v1.0.0"]
+
+
 def test_cmd_init_mcp_claude(tmp_path):
     from unittest.mock import patch, MagicMock
     from taskagent.cli import cmd_init_mcp

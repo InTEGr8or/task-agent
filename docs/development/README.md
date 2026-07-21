@@ -61,21 +61,24 @@ ta done <slug>
 -   **Auto-move**: Automatically moves the issue to `completed/{year}/`.
 -   **Auto-commit**: Creates a git commit with a standard message (e.g., `feat: complete <slug>`).
 -   **Traceability**: Automatically records the commit hash directly into the completed issue file for future reference.
--   **Versioning**: If the project has a `pyproject.toml` or `package.json`, it will auto-promote the patch version.
+-   **Versioning**: Does not auto-bump. When ready to publish: `ta version release patch`.
 
 ## 📦 Releasing
 
-Releases are automated via GitHub Actions when a tag is pushed.
+Releases are automated via GitHub Actions when a version tag is pushed.
 
-1.  Bump the version:
-    ```bash
-    ta version promote patch  # or minor/major
-    ```
-2.  Tag and push:
-    ```bash
-    ta version tag
-    git push origin master --tags
-    ```
+**Preferred (atomic):**
+```bash
+ta version release patch   # or minor / major
+```
+
+This bumps the version, commits it (amends only if HEAD is unpushed/untagged; otherwise `chore(release): vX.Y.Z`), tags `vX.Y.Z`, pushes the branch, then pushes the tag.
+
+**Two-step:**
+```bash
+ta version promote patch
+ta version tag             # pushes branch then tag (use --no-push for local only)
+```
 
 ## 🤖 Continuous Integration
 

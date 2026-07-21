@@ -460,6 +460,9 @@ EXPECTED_TOOLS = {
     "commit_repo",
     "commit_tasks",
     "get_strategy",
+    "list_inbox",
+    "send_inbox_message",
+    "ack_inbox",
 }
 
 

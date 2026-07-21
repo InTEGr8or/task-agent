@@ -88,7 +88,9 @@ def display_version_info(console: Console):
         pass
 
 
-def get_committed_version() -> Tuple[str, Optional[str]]:
+def get_committed_version(
+    root: Optional[Path] = None,
+) -> Tuple[str, Optional[str]]:
     """Read the version from HEAD (committed code), not working tree."""
     files_to_check = [
         ("pyproject.toml", r'version\s*=\s*"(.*?)"'),
@@ -96,10 +98,14 @@ def get_committed_version() -> Tuple[str, Optional[str]]:
         ("Cargo.toml", r'^version\s*=\s*"(.*?)"'),
     ]
 
+    git_c = ["git"]
+    if root is not None:
+        git_c = ["git", "-C", str(root)]
+
     for filename, pattern in files_to_check:
         try:
             result = subprocess.run(
-                ["git", "show", f"HEAD:{filename}"],
+                git_c + ["show", f"HEAD:{filename}"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -121,6 +127,373 @@ def get_committed_version() -> Tuple[str, Optional[str]]:
             pass
 
     return "unknown", None
+
+
+# --- Version release workflow (promote / tag / release) ---
+
+_VERSION_FILES = ("pyproject.toml", "package.json", "uv.lock", "Cargo.toml")
+
+
+def _git(
+    *args: str,
+    cwd: Optional[Path] = None,
+    check: bool = False,
+    text: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a git command; ``cwd`` is passed as ``git -C`` when set."""
+    cmd = ["git"]
+    if cwd is not None:
+        cmd.extend(["-C", str(cwd)])
+    cmd.extend(args)
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=text,
+        check=check,
+        shell=(os.name == "nt"),
+    )
+
+
+def _find_git_root(start: Optional[Path] = None) -> Optional[Path]:
+    start = start or Path.cwd()
+    res = _git("rev-parse", "--show-toplevel", cwd=start)
+    if res.returncode != 0:
+        return None
+    return Path(res.stdout.strip())
+
+
+def _git_head_sha(git_root: Path) -> Optional[str]:
+    res = _git("rev-parse", "HEAD", cwd=git_root)
+    if res.returncode != 0:
+        return None
+    return res.stdout.strip()
+
+
+def _git_head_is_on_remote(git_root: Path) -> bool:
+    """True if any remote-tracking branch contains HEAD (commit is published)."""
+    res = _git("branch", "-r", "--contains", "HEAD", cwd=git_root)
+    return res.returncode == 0 and bool(res.stdout.strip())
+
+
+def _git_tags_pointing_at_head(git_root: Path) -> List[str]:
+    res = _git("tag", "--points-at", "HEAD", cwd=git_root)
+    if res.returncode != 0 or not res.stdout.strip():
+        return []
+    return [t.strip() for t in res.stdout.splitlines() if t.strip()]
+
+
+def _git_tag_target(git_root: Path, tag_name: str) -> Optional[str]:
+    """Return the commit SHA a tag points at, or None if missing."""
+    res = _git("rev-parse", "--verify", f"refs/tags/{tag_name}^{{}}", cwd=git_root)
+    if res.returncode != 0:
+        # Lightweight tags: try without peel
+        res = _git("rev-parse", "--verify", f"refs/tags/{tag_name}", cwd=git_root)
+        if res.returncode != 0:
+            return None
+    return res.stdout.strip()
+
+
+def _can_amend_version_safely(git_root: Path) -> Tuple[bool, str]:
+    """Whether folding the version bump into HEAD via amend is safe.
+
+    Amend rewrites the commit SHA. That is only safe when HEAD has never been
+    published (no remote contains it) and is not already tagged.
+    """
+    if _git_head_is_on_remote(git_root):
+        return False, "HEAD is already on a remote (amend would rewrite published history)"
+    tags = _git_tags_pointing_at_head(git_root)
+    if tags:
+        return False, f"HEAD is already tagged ({', '.join(tags)})"
+    # Detached HEAD: still OK if not published
+    return True, "HEAD is local-only and untagged"
+
+
+def _stage_version_files(git_root: Path, project_root: Path) -> List[str]:
+    """Stage only known version files; return relative paths that were staged."""
+    staged: List[str] = []
+    for name in _VERSION_FILES:
+        path = project_root / name
+        if not path.exists():
+            continue
+        try:
+            rel = path.resolve().relative_to(git_root.resolve())
+        except ValueError:
+            rel = Path(name)
+        rel_s = str(rel).replace("\\", "/")
+        _git("add", "--", rel_s, cwd=git_root)
+        staged.append(rel_s)
+    return staged
+
+
+def _bump_project_version(
+    part: str,
+    project_root: Path,
+    source: str,
+) -> str:
+    """Bump version files in place; return the new version string."""
+    if source == "pyproject.toml":
+        subprocess.run(
+            [
+                "uv",
+                "run",
+                "bump-my-version",
+                "bump",
+                part,
+                "--no-commit",
+                "--no-tag",
+            ],
+            check=True,
+            cwd=str(project_root),
+            shell=(os.name == "nt"),
+        )
+        if (project_root / "uv.lock").exists():
+            subprocess.run(
+                ["uv", "lock"],
+                check=True,
+                cwd=str(project_root),
+                shell=(os.name == "nt"),
+            )
+    elif source == "package.json":
+        subprocess.run(
+            ["npm", "version", part, "--no-git-tag-version"],
+            check=True,
+            cwd=str(project_root),
+            shell=(os.name == "nt"),
+        )
+    else:
+        raise RuntimeError(
+            f"Cannot bump version: unsupported project file source {source!r}"
+        )
+
+    new_v, _ = get_project_version(project_root)
+    if new_v == "unknown":
+        raise RuntimeError("Version bump ran but new version could not be read.")
+    return new_v
+
+
+def _commit_version_bump(
+    console: Console,
+    git_root: Path,
+    project_root: Path,
+    new_v: str,
+    *,
+    allow_amend: bool = True,
+) -> str:
+    """Commit staged version bump. Returns ``amend`` or ``commit``.
+
+    Prefers amend only when HEAD is unpublished and untagged; otherwise creates
+    a new ``chore(release): vX.Y.Z`` commit so main stays fast-forwardable.
+    """
+    staged = _stage_version_files(git_root, project_root)
+    if not staged:
+        raise RuntimeError("No version files found to stage after bump.")
+
+    # Refuse to accidentally fold unrelated staged files into the release commit
+    cached = _git("diff", "--cached", "--name-only", cwd=git_root)
+    extra = [
+        line.strip()
+        for line in (cached.stdout or "").splitlines()
+        if line.strip() and line.strip() not in staged
+    ]
+    if extra:
+        raise RuntimeError(
+            "Refusing to commit version bump: unrelated files are staged: "
+            + ", ".join(extra)
+            + ". Unstage them and retry."
+        )
+
+    mode = "commit"
+    if allow_amend:
+        ok, reason = _can_amend_version_safely(git_root)
+        if ok:
+            res = _git("commit", "--amend", "--no-edit", cwd=git_root)
+            if res.returncode != 0:
+                err = (res.stderr or res.stdout or "").strip()
+                raise RuntimeError(f"git commit --amend failed: {err}")
+            mode = "amend"
+            console.print(
+                f"[dim]Amended version {new_v} into HEAD ({reason})[/dim]"
+            )
+        else:
+            console.print(
+                f"[dim]Creating new release commit (cannot amend: {reason})[/dim]"
+            )
+
+    if mode == "commit":
+        msg = f"chore(release): v{new_v}"
+        res = _git("commit", "-m", msg, cwd=git_root)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or "").strip()
+            if "nothing to commit" in err.lower():
+                raise RuntimeError(
+                    "Nothing to commit after version bump "
+                    "(working tree already at this version?)."
+                )
+            raise RuntimeError(f"git commit failed: {err}")
+        console.print(f"[dim]Committed {msg}[/dim]")
+
+    committed_v, _ = get_committed_version(git_root)
+    if committed_v != new_v:
+        raise RuntimeError(
+            f"Post-commit verification failed: HEAD has version {committed_v!r}, "
+            f"expected {new_v!r}."
+        )
+    return mode
+
+
+def _push_branch_and_tag(
+    console: Console,
+    git_root: Path,
+    tag_name: str,
+    *,
+    push_branch: bool = True,
+) -> None:
+    """Push current branch (if possible) then the release tag.
+
+    Branch push uses a normal fast-forward push. Tag is only pushed after the
+    branch push succeeds (or is skipped), so we never publish a tag for a commit
+    the remote branch does not have.
+    """
+    if push_branch:
+        # Resolve upstream; if missing, push HEAD to origin with current branch name
+        upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=git_root)
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_root)
+        branch_name = (branch.stdout or "").strip() or "HEAD"
+
+        console.print(f"[blue]Pushing branch {branch_name} to origin...[/blue]")
+        if upstream.returncode == 0:
+            res = _git("push", cwd=git_root)
+        else:
+            res = _git("push", "-u", "origin", "HEAD", cwd=git_root)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or "").strip()
+            raise RuntimeError(
+                f"Failed to push branch (tag not pushed): {err}\n"
+                "Fix the branch push (history rewrite? set upstream?), then run "
+                f"`ta version tag` again or `git push origin {tag_name}`."
+            )
+        console.print(f"[bold green]Pushed branch {branch_name}[/bold green]")
+
+    console.print(f"[blue]Pushing tag {tag_name} to origin...[/blue]")
+    res = _git("push", "origin", tag_name, cwd=git_root)
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout or "").strip()
+        raise RuntimeError(f"Failed to push tag {tag_name}: {err}")
+    console.print(f"[bold green]Pushed tag {tag_name}[/bold green]")
+
+
+def promote_project_version(
+    console: Console,
+    part: str,
+    *,
+    project_root: Optional[Path] = None,
+    allow_amend: bool = True,
+) -> str:
+    """Bump project version and commit it. Returns the new version string.
+
+    Amends HEAD only when it is unpublished and untagged; otherwise creates
+    ``chore(release): vX.Y.Z``. Raises on failure (no silent half-states).
+    """
+    project_root = (project_root or Path.cwd()).resolve()
+    git_root = _find_git_root(project_root)
+    if not git_root:
+        raise RuntimeError("Not inside a git repository.")
+
+    working_v, source = get_project_version(project_root)
+    if not source or working_v == "unknown":
+        raise RuntimeError(
+            "Could not find a project version file (pyproject.toml / package.json)."
+        )
+
+    pre_committed, _ = get_committed_version(git_root)
+    console.print(
+        f"[blue]Bumping {part} from working {working_v} "
+        f"(HEAD {pre_committed}) via {source}...[/blue]"
+    )
+
+    new_v = _bump_project_version(part, project_root, source)
+    console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
+    _commit_version_bump(
+        console, git_root, project_root, new_v, allow_amend=allow_amend
+    )
+    return new_v
+
+
+def tag_project_version(
+    console: Console,
+    *,
+    project_root: Optional[Path] = None,
+    push: bool = True,
+    push_branch: bool = True,
+) -> str:
+    """Create ``vX.Y.Z`` on HEAD from the *committed* version and optionally push.
+
+    Verifies working tree version matches HEAD before tagging. Pushes the
+    branch first, then the tag, so CI never sees a floating tag.
+    Returns the tag name.
+    """
+    project_root = (project_root or Path.cwd()).resolve()
+    git_root = _find_git_root(project_root)
+    if not git_root:
+        raise RuntimeError("Not inside a git repository.")
+
+    committed_v, _ = get_committed_version(git_root)
+    if committed_v == "unknown":
+        raise RuntimeError(
+            "Could not read version from HEAD. "
+            "Run `ta version promote <part>` first."
+        )
+
+    working_v, _ = get_project_version(project_root)
+    if working_v != "unknown" and working_v != committed_v:
+        raise RuntimeError(
+            f"Working tree version {working_v} differs from HEAD {committed_v}. "
+            "Commit or discard local version edits (or run `ta version promote`) "
+            "before tagging."
+        )
+
+    tag_name = f"v{committed_v}"
+    head = _git_head_sha(git_root)
+    if not head:
+        raise RuntimeError("Could not resolve HEAD.")
+
+    existing = _git_tag_target(git_root, tag_name)
+    if existing:
+        # Compare full object names (peel annotated tags)
+        head_full = _git("rev-parse", head, cwd=git_root).stdout.strip() or head
+        existing_full = (
+            _git("rev-parse", existing, cwd=git_root).stdout.strip() or existing
+        )
+        if existing_full == head_full:
+            console.print(
+                f"[dim]Tag {tag_name} already points at HEAD[/dim]"
+            )
+        else:
+            raise RuntimeError(
+                f"Tag {tag_name} already exists but points at {existing_full[:12]}, "
+                f"not HEAD ({head_full[:12]}). Delete it (`git tag -d {tag_name}`) "
+                "only if you intend to retarget, or promote to a new version."
+            )
+    else:
+        res = _git("tag", tag_name, cwd=git_root)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or "").strip()
+            raise RuntimeError(f"Failed to create tag {tag_name}: {err}")
+        console.print(
+            f"[bold green]Tagged HEAD as {tag_name}[/bold green] "
+            f"[dim]({head[:12]})[/dim]"
+        )
+
+    if push:
+        _push_branch_and_tag(
+            console, git_root, tag_name, push_branch=push_branch
+        )
+    else:
+        console.print(
+            f"[dim]Skipped push. When ready: git push && git push origin {tag_name}[/dim]"
+        )
+
+    return tag_name
 
 
 def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
@@ -1190,6 +1563,186 @@ def cmd_document(console: Console, manager: TaskAgent, args) -> None:
     )
 
 
+def maybe_show_inbox_banner(console: Console, manager: TaskAgent) -> None:
+    """Print an unread inbox banner if present (never mutates inbox state)."""
+    try:
+        from taskagent.inbox import format_unread_banner, moniker_for_store
+
+        store = manager.issues_root
+        if not store:
+            return
+        moniker = moniker_for_store(store)
+        banner = format_unread_banner(store, moniker=moniker)
+        if banner:
+            console.print(f"[bold magenta]{banner}[/bold magenta]")
+    except Exception:
+        pass
+
+
+def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
+    """Inbox messaging: list / show / send / ack / gc."""
+    from taskagent.inbox import (
+        DEFAULT_RETENTION_DAYS,
+        ack_message,
+        find_unread_message,
+        format_unread_banner,
+        gc_inbox,
+        list_unread,
+        moniker_for_store,
+        parse_message_file,
+        resolve_sender_moniker,
+        send_to_repo,
+        snapshot_from_issue,
+    )
+    from taskagent.store_registry import (
+        AmbiguousRepoMatchError,
+        RepoNotFoundError,
+    )
+
+    action = getattr(args, "inbox_command", None)
+    store = manager.issues_root
+    moniker = moniker_for_store(store) if store else None
+
+    if action == "list":
+        thread = getattr(args, "thread", None)
+        msgs = list_unread(store, thread=thread)
+        if not msgs:
+            scope = f" (thread={thread})" if thread else ""
+            console.print(f"[dim]No unread inbox messages{scope}.[/dim]")
+            return
+        title = "[bold blue]Unread inbox[/bold blue]"
+        if moniker:
+            title += f" [dim]({moniker})[/dim]"
+        console.print(f"{title} — {len(msgs)} message(s)")
+        for m in msgs:
+            console.print(f"  {m.summary_line()}")
+        return
+
+    if action == "show":
+        path = find_unread_message(store, args.id)
+        if path is None:
+            # Also allow showing already-read by scanning? v1: unread only + path
+            console.print(f"[red]Unread message not found: {args.id}[/red]")
+            return
+        msg = parse_message_file(path, status="unread")
+        console.print(
+            Panel(
+                f"[bold]id[/bold]: {msg.id}\n"
+                f"[bold]from[/bold]: {msg.from_moniker}\n"
+                f"[bold]kind[/bold]: {msg.kind}\n"
+                f"[bold]thread[/bold]: {msg.thread or '—'}\n"
+                f"[bold]created_at[/bold]: {msg.created_at}\n"
+                f"[bold]path[/bold]: {msg.path}",
+                title="Inbox message",
+                box=theme.panel_box,
+            )
+        )
+        console.print(Markdown(msg.body or "_(empty body)_"))
+        return
+
+    if action == "send":
+        to_repo = args.to
+        kind = args.kind or "info"
+        body = args.body or ""
+        if args.file:
+            body = Path(args.file).read_text(encoding="utf-8")
+        elif not body and not sys.stdin.isatty():
+            body = sys.stdin.read()
+        thread = args.thread
+        snapshot = None
+        if args.task:
+            slug = manager.resolve_issue_slug(args.task) or manager.slugify(args.task)
+            issues = manager.load_mission()
+            issue = next((i for i in issues if i.slug == slug), None)
+            if issue is None:
+                # completed fallback
+                issue_file = manager.find_issue_file(slug, include_completed=True)
+                if issue_file:
+                    from taskagent.models.issue import Issue
+
+                    issue = Issue(
+                        name=manager.extract_title(issue_file),
+                        slug=slug,
+                        status="completed",
+                        priority=0,
+                    )
+            if issue is not None:
+                snapshot = snapshot_from_issue(issue)
+                if not thread:
+                    thread = issue.slug
+            else:
+                console.print(
+                    f"[yellow]Task {args.task!r} not found; sending without snapshot.[/yellow]"
+                )
+
+        from_moniker = args.sender or resolve_sender_moniker(
+            store_path=store, host_path=Path.cwd()
+        )
+        try:
+            msg, resolved = send_to_repo(
+                to_repo,
+                from_moniker=from_moniker,
+                body=body,
+                kind=kind,
+                thread=thread,
+                task_snapshot=snapshot,
+            )
+        except (RepoNotFoundError, AmbiguousRepoMatchError, ValueError, FileExistsError) as e:
+            console.print(f"[red]Send failed: {e}[/red]")
+            return
+        console.print(
+            f"[bold green]Sent[/bold green] [cyan]{msg.id}[/cyan] → "
+            f"[cyan]{resolved.moniker}[/cyan] "
+            f"[dim]({resolved.store_path}/.task-agent/inbox/unread/)[/dim]"
+        )
+        return
+
+    if action == "ack":
+        try:
+            msg = ack_message(store, args.id)
+        except (FileNotFoundError, FileExistsError) as e:
+            console.print(f"[red]{e}[/red]")
+            return
+        console.print(
+            f"[bold green]Acked[/bold green] [cyan]{msg.id}[/cyan] → "
+            f"[dim]{msg.path}[/dim]"
+        )
+        return
+
+    if action == "gc":
+        retention = getattr(args, "days", None)
+        if retention is None:
+            retention = DEFAULT_RETENTION_DAYS
+        dry = bool(getattr(args, "dry_run", False))
+        deleted = gc_inbox(
+            store, retention_days=int(retention), dry_run=dry
+        )
+        if not deleted:
+            console.print(
+                f"[dim]Inbox GC: nothing to remove "
+                f"(retention={retention}d, dry_run={dry}).[/dim]"
+            )
+            return
+        verb = "Would delete" if dry else "Deleted"
+        console.print(
+            f"[bold blue]Inbox GC[/bold blue]: {verb} {len(deleted)} day dir(s)"
+        )
+        for d in deleted:
+            console.print(f"  • {d}")
+        return
+
+    # Default: banner + list hint
+    banner = format_unread_banner(store, moniker=moniker)
+    if banner:
+        console.print(f"[bold magenta]{banner}[/bold magenta]")
+    else:
+        console.print("[dim]Inbox empty (no unread).[/dim]")
+    console.print(
+        "[dim]Commands: ta inbox list | show <id> | send --to <repo> | "
+        "ack <id> | gc[/dim]"
+    )
+
+
 def cmd_report(console: Console, manager: TaskAgent, slug: str):
     """View metadata/logs for a task."""
     issue_file = manager.find_issue_file(slug, include_completed=True)
@@ -1347,7 +1900,17 @@ def cmd_done(
         if commit_hash:
             console.print(f"Commit: {commit_hash}")
 
-        promote_version(console, manager)
+        # Releases are explicit — do not auto-amend/bump on done (that rewrote
+        # history and orphaned tags). Hint when a project version file exists.
+        try:
+            pv, psrc = get_project_version()
+            if psrc and pv != "unknown":
+                console.print(
+                    f"[dim]Project at v{pv}. Release when ready: "
+                    f"ta version release patch[/dim]"
+                )
+        except Exception:
+            pass
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
@@ -3695,119 +4258,57 @@ def cmd_version(
     promote: Optional[str] = None,
     tag: bool = False,
     push: bool = True,
+    release: Optional[str] = None,
+    push_branch: bool = True,
 ):
-    """Show project version, promote it, or tag it."""
+    """Show project version, promote it, tag it, or run a full release."""
     display_version_info(console)
 
-    if tag:
-        v, source = get_committed_version()
-        if v == "unknown":
+    try:
+        if release:
+            # Atomic: bump+commit, then tag, then push branch+tag
+            new_v = promote_project_version(console, release, allow_amend=True)
             console.print(
-                "[red]Error: Could not determine project version to tag.[/red]"
+                f"[blue]Release {new_v}: tagging and pushing...[/blue]"
+            )
+            tag_project_version(
+                console, push=push, push_branch=push_branch
+            )
+            console.print(
+                f"[bold green]Release v{new_v} complete.[/bold green]"
             )
             return
 
-        # Warn if working tree differs from committed version
-        working_v, _ = get_project_version()
-        if working_v != v:
+        if promote:
+            new_v = promote_project_version(console, promote, allow_amend=True)
             console.print(
-                f"[yellow]Warning: Working tree has version {working_v}, "
-                f"but HEAD has {v}[/yellow]"
+                "[dim]Next: ta version tag[/dim]  "
+                "[dim](or use ta version release for one-shot)[/dim]"
             )
             console.print(
-                "[yellow]Committing changes with 'ta version promote' first is recommended.[/yellow]"
+                f"[dim]HEAD is now v{new_v}; tag when the commit is ready to publish.[/dim]"
             )
+            return
 
-        tag_name = f"v{v}"
-        result = subprocess.run(
-            ["git", "tag", tag_name],
-            capture_output=True,
-            shell=(os.name == "nt"),
-        )
-        if result.returncode != 0:
-            console.print(f"[yellow]Tag {tag_name} already exists.[/yellow]")
-        else:
-            console.print(f"[bold green]Tagged commit as {tag_name}[/bold green]")
-
-            if push:
-                console.print(f"[blue]Pushing tag {tag_name} to origin...[/blue]")
-                subprocess.run(
-                    ["git", "push", "origin", tag_name],
-                    check=True,
-                    shell=(os.name == "nt"),
-                )
-                console.print(
-                    f"[bold green]Successfully pushed {tag_name}[/bold green]"
-                )
-
-    if promote:
-        _, source = get_project_version()
-        if source == "pyproject.toml":
-            subprocess.run(
-                [
-                    "uv",
-                    "run",
-                    "bump-my-version",
-                    "bump",
-                    promote,
-                    "--no-commit",
-                    "--no-tag",
-                ],
-                check=True,
-                shell=(os.name == "nt"),
+        if tag:
+            tag_name = tag_project_version(
+                console, push=push, push_branch=push_branch
             )
-            if Path("uv.lock").exists():
-                subprocess.run(["uv", "lock"], check=True, shell=(os.name == "nt"))
-        elif source == "package.json":
-            subprocess.run(
-                ["npm", "version", promote, "--no-git-tag-version"],
-                check=True,
-                shell=(os.name == "nt"),
-            )
-        new_v, _ = get_project_version()
-        console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
-
-        # Auto-amend version bump into previous commit
-        try:
-            for file in ["pyproject.toml", "package.json", "uv.lock"]:
-                if Path(file).exists():
-                    subprocess.run(
-                        ["git", "add", file],
-                        capture_output=True,
-                        check=False,
-                        shell=(os.name == "nt"),
-                    )
-            result = subprocess.run(
-                ["git", "commit", "--amend", "--no-edit"],
-                capture_output=True,
-                shell=(os.name == "nt"),
-            )
-            if result.returncode == 0:
-                console.print("[dim]Version bump amended into previous commit[/dim]")
-            elif (
-                b"nothing to commit" in result.stdout
-                or b"nothing to commit" in result.stderr
-            ):
-                console.print(
-                    "[yellow]No changes to commit (already amended?)[/yellow]"
-                )
-            else:
-                console.print(
-                    "[yellow]Warning: Could not auto-amend version bump. "
-                    "Run 'git add' and 'git commit --amend --no-edit' manually.[/yellow]"
-                )
-                if result.stderr:
-                    console.print(f"[dim]{result.stderr.decode()}[/dim]")
-        except Exception as e:
             console.print(
-                f"[yellow]Warning: Auto-amend failed: {e}. "
-                "Run 'git commit --amend --no-edit' manually.[/yellow]"
+                f"[dim]Tag {tag_name} is bound to the version in HEAD's project file.[/dim]"
             )
+            return
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 def promote_version(console: Console, manager: TaskAgent):
-    """Auto-promote project version when a task is completed."""
-    # Find the project root containing project files relative to manager's issues_root
+    """Deprecated auto-promote path (no longer called from ``ta done``).
+
+    Kept for compatibility if external callers import it; uses the safe
+    promote implementation (amend only when unpublished).
+    """
     project_root = None
     if manager.issues_root:
         curr = Path(manager.issues_root).resolve()
@@ -3824,88 +4325,12 @@ def promote_version(console: Console, manager: TaskAgent):
     if not project_root:
         return
 
-    _, source = get_project_version(project_root)
-    if not source:
-        return
-
-    if source == "pyproject.toml":
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "bump-my-version",
-                "bump",
-                "patch",
-                "--no-commit",
-                "--no-tag",
-            ],
-            check=True,
-            cwd=str(project_root),
-            shell=(os.name == "nt"),
-        )
-        if (project_root / "uv.lock").exists():
-            subprocess.run(
-                ["uv", "lock"],
-                check=True,
-                cwd=str(project_root),
-                shell=(os.name == "nt"),
-            )
-    elif source == "package.json":
-        subprocess.run(
-            ["npm", "version", "patch", "--no-git-tag-version"],
-            check=True,
-            cwd=str(project_root),
-            shell=(os.name == "nt"),
-        )
-    new_v, _ = get_project_version(project_root)
-    console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
-
-    # Auto-amend version bump into previous commit
     try:
-        git_root = None
-        curr = project_root
-        while curr.parent != curr:
-            if (curr / ".git").exists():
-                git_root = curr
-                break
-            curr = curr.parent
-
-        if not git_root:
-            return
-
-        for file in ["pyproject.toml", "package.json", "uv.lock"]:
-            if (project_root / file).exists():
-                rel_path = (project_root / file).relative_to(git_root)
-                subprocess.run(
-                    ["git", "-C", str(git_root), "add", str(rel_path)],
-                    capture_output=True,
-                    check=False,
-                    shell=(os.name == "nt"),
-                )
-        result = subprocess.run(
-            ["git", "-C", str(git_root), "commit", "--amend", "--no-edit"],
-            capture_output=True,
-            shell=(os.name == "nt"),
+        promote_project_version(
+            console, "patch", project_root=project_root, allow_amend=True
         )
-        if result.returncode == 0:
-            console.print("[dim]Version bump amended into previous commit[/dim]")
-        elif (
-            b"nothing to commit" in result.stdout
-            or b"nothing to commit" in result.stderr
-        ):
-            console.print("[yellow]No changes to commit (already amended?)[/yellow]")
-        else:
-            console.print(
-                "[yellow]Warning: Could not auto-amend version bump. "
-                "Run 'git add' and 'git commit --amend --no-edit' manually.[/yellow]"
-            )
-            if result.stderr:
-                console.print(f"[dim]{result.stderr.decode()}[/dim]")
     except Exception as e:
-        console.print(
-            f"[yellow]Warning: Auto-amend failed: {e}. "
-            "Run 'git commit --amend --no-edit' manually.[/yellow]"
-        )
+        console.print(f"[yellow]Version promote skipped: {e}[/yellow]")
 
 
 def cmd_worktree(console: Console, manager: TaskAgent, args):
@@ -4796,6 +5221,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("up/down", "Adjust task priority"),
         ("show", "View a task (README + secondary Markdown docs)"),
         ("document", "Add or list secondary documents on a task"),
+        ("inbox", "Cross-store inbox: list / send / ack / gc"),
         ("ingest", "Scan disk for new markdown tasks"),
         ("triage", "(alias for prior)"),
         ("", ""),  # Spacer
@@ -4899,6 +5325,84 @@ def main():
         "list", help="List secondary Markdown documents on a task"
     )
     doc_list.add_argument("slug", help="Slug or title of the issue")
+
+    inbox_parser = subparsers.add_parser(
+        "inbox",
+        help="Ack-gated inbox messaging between stores (shared filesystem)",
+    )
+    inbox_sub = inbox_parser.add_subparsers(dest="inbox_command")
+    inbox_list = inbox_sub.add_parser("list", help="List unread messages")
+    inbox_list.add_argument(
+        "--thread",
+        help="Only messages with this thread (task slug)",
+    )
+    inbox_show = inbox_sub.add_parser("show", help="Show one unread message")
+    inbox_show.add_argument("id", help="Message id (or unique prefix)")
+    inbox_send = inbox_sub.add_parser(
+        "send", help="Deliver a message to another store's inbox/unread/"
+    )
+    inbox_send.add_argument(
+        "--to",
+        required=True,
+        help="Target store moniker/host fragment (fuzzy, e.g. task-agent)",
+    )
+    inbox_send.add_argument(
+        "-b",
+        "--body",
+        default="",
+        help="Message body (Markdown)",
+    )
+    inbox_send.add_argument(
+        "-f",
+        "--file",
+        help="Read body from a file",
+    )
+    inbox_send.add_argument(
+        "--kind",
+        default="info",
+        choices=[
+            "task-created",
+            "question",
+            "update",
+            "comment",
+            "ack-request",
+            "info",
+        ],
+        help="Message kind (default: info)",
+    )
+    inbox_send.add_argument(
+        "--thread",
+        help="Optional task slug this message is about",
+    )
+    inbox_send.add_argument(
+        "--task",
+        help="Local task slug/title to embed as a snapshot (+ default thread)",
+    )
+    inbox_send.add_argument(
+        "--from",
+        dest="sender",
+        default=None,
+        help="Override sender moniker (default: current store/host moniker)",
+    )
+    inbox_ack = inbox_sub.add_parser(
+        "ack", help="Mark a message read (move to read/YYYY/MM/DD/)"
+    )
+    inbox_ack.add_argument("id", help="Message id (or unique prefix)")
+    inbox_gc = inbox_sub.add_parser(
+        "gc",
+        help="Delete read/ day dirs older than retention (name-only, no file opens)",
+    )
+    inbox_gc.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help=f"Retention days (default: {7})",
+    )
+    inbox_gc.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be deleted without removing",
+    )
 
     subparsers.add_parser(
         "dashboard", help="Show a live dashboard of all task stations"
@@ -5505,18 +6009,48 @@ Usage:
             "(e.g. 'stations', 'InTEGr8or/task-agent'). Does not touch the current mission."
         ),
     )
-    version_parser = subparsers.add_parser("version")
+    version_parser = subparsers.add_parser(
+        "version",
+        help="Show version, promote, tag, or run a full release",
+    )
     v_sub = version_parser.add_subparsers(dest="version_command")
-    p_v = v_sub.add_parser("promote")
+    p_v = v_sub.add_parser(
+        "promote",
+        help=(
+            "Bump semver and commit it (amends only if HEAD is unpushed/untagged; "
+            "otherwise creates chore(release): vX.Y.Z)"
+        ),
+    )
     p_v.add_argument("part", choices=["major", "minor", "patch"])
-    tag_parser = v_sub.add_parser("tag")
+    tag_parser = v_sub.add_parser(
+        "tag",
+        help="Tag HEAD as vX.Y.Z from committed version; push branch then tag",
+    )
     tag_parser.add_argument(
         "--no-push",
         dest="push",
         action="store_false",
-        help="Do not push the tag to origin",
+        help="Create the local tag only (do not push branch or tag)",
     )
-    tag_parser.set_defaults(push=True)
+    tag_parser.add_argument(
+        "--no-push-branch",
+        dest="push_branch",
+        action="store_false",
+        help="When pushing, push only the tag (not the branch)",
+    )
+    tag_parser.set_defaults(push=True, push_branch=True)
+    release_parser = v_sub.add_parser(
+        "release",
+        help="Atomic promote + tag + push branch + push tag",
+    )
+    release_parser.add_argument("part", choices=["major", "minor", "patch"])
+    release_parser.add_argument(
+        "--no-push",
+        dest="push",
+        action="store_false",
+        help="Promote and tag locally only",
+    )
+    release_parser.set_defaults(push=True, push_branch=True)
 
     args = parser.parse_args()
     console = Console()
@@ -5529,6 +6063,10 @@ Usage:
     except (RuntimeError, ValueError, OSError) as e:
         console.print(f"[red]Error: {e}[/red]")
         sys.exit(1)
+
+    # Unread inbox banner (idempotent; never mutates). Skip noisy/server cmds.
+    if args.command not in ("mcp", "mcp-api", "version", "self-up", "init-mcp"):
+        maybe_show_inbox_banner(console, manager)
 
     if args.command == "path":
         issue_file = manager.find_issue_file(args.slug)
@@ -5577,6 +6115,8 @@ Usage:
         cmd_show(console, manager, args.slug)
     elif args.command in ("document", "doc"):
         cmd_document(console, manager, args)
+    elif args.command == "inbox":
+        cmd_inbox(console, manager, args)
     elif args.command == "mcp-api":
         cmd_mcp_api(console)
     elif args.command == "self-up":
@@ -5684,9 +6224,21 @@ Usage:
         cmd_github(console, manager, args)
     elif args.command == "version":
         if args.version_command == "promote":
-            cmd_version(console, promote=args.part, push=False)
+            cmd_version(console, promote=args.part)
         elif args.version_command == "tag":
-            cmd_version(console, tag=True, push=args.push)
+            cmd_version(
+                console,
+                tag=True,
+                push=args.push,
+                push_branch=getattr(args, "push_branch", True),
+            )
+        elif args.version_command == "release":
+            cmd_version(
+                console,
+                release=args.part,
+                push=args.push,
+                push_branch=getattr(args, "push_branch", True),
+            )
         else:
             cmd_version(console)
     else:

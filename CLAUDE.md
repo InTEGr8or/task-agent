@@ -214,32 +214,44 @@ Dev dependencies:
 
 ## Release & Versioning
 
-Versions in `pyproject.toml` follow semver. The release workflow is **two commands**:
+Versions in `pyproject.toml` follow semver. Prefer the **atomic one-shot**:
 
 ```bash
-ta version promote patch   # or minor/major: bumps version AND amends previous commit
-ta version tag             # Creates tag AND pushes to trigger CI publish
+ta version release patch   # bump + commit + tag + push branch + push tag
+# or: minor / major
+```
+
+Or the two-step form when you want to inspect between bump and publish:
+
+```bash
+ta version promote patch   # bump + commit (safe amend or chore(release) commit)
+ta version tag             # tag HEAD as vX.Y.Z, push branch then tag
 ```
 
 ### How It Works
 
-1. **Commit your work** with a meaningful message (e.g., `feat: add new feature`, `fix: resolve issue`)
-2. **`ta version promote patch`**: 
-   - Bumps version in `pyproject.toml` and `uv.lock`
-   - **Amends previous commit** with `--amend --no-edit` (preserves original message)
-   - Version bump is metadata—release notes on PyPI reflect your actual work
-3. **`ta version tag`**: 
-   - Creates git tag matching the version in code
-   - Pushes tag to trigger GitHub Actions publish to PyPI
+1. **Commit your work** with a meaningful message (e.g. `feat: …`, `fix: …`).
+2. **`ta version promote <part>`**:
+   - Bumps `pyproject.toml` / `uv.lock` (or `package.json`)
+   - **Amends HEAD only if** that commit is not on any remote and not already tagged
+   - Otherwise creates a new `chore(release): vX.Y.Z` commit (keeps history fast-forwardable)
+   - Verifies `git show HEAD:…` version matches the bump (fails hard otherwise)
+3. **`ta version tag`**:
+   - Reads version from **HEAD** (not a dirty working tree)
+   - Refuses to tag if working tree version ≠ HEAD, or if `vX.Y.Z` exists on another commit
+   - Pushes the **branch first**, then the tag (so CI never sees an orphan tag)
+4. **`ta version release <part>`** = promote + tag + push in one command
+
+`ta done` does **not** auto-bump versions (that path used to amend and orphaned tags).
 
 ### Critical: Version-Tag Matching
 
-The tag **must** point to a commit where `pyproject.toml` has the matching version. The amended commit ensures they always stay in sync.
+The tag **must** point at a commit whose project file has that version. Promote+tag both verify this.
 
 **If publishing fails:**
-- Check PyPI version: `ta version` shows "Latest PyPI version"
-- Verify with: `git show HEAD:pyproject.toml | grep version`
-- If mismatch: delete bad tag (`git tag -d vX.Y.Z`), bump to next version, re-tag
+- Check PyPI: `ta version`
+- Verify: `git show HEAD:pyproject.toml | grep version` and `git rev-parse vX.Y.Z`
+- If a bad tag exists on the wrong commit: `git tag -d vX.Y.Z` (and delete remote tag if pushed), then promote to the **next** version and re-release
 
 ## Common Tasks for Claude
 

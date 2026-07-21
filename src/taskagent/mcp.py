@@ -105,6 +105,116 @@ def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
 
 
 @mcp.tool()
+def list_inbox(thread: str = "", repo: Optional[str] = None) -> str:
+    """List unread inbox messages for the current (or target) store.
+
+    Display only — never marks messages as read. Use ack_inbox to acknowledge.
+
+    Args:
+        thread: Optional task slug filter (only messages with this thread).
+        repo: Optional moniker fragment for another store (default: current project).
+    """
+    from taskagent.inbox import list_unread, moniker_for_store
+
+    try:
+        manager = get_manager_for_repo(repo)
+    except ValueError as e:
+        return f"Error resolving repo: {e}"
+    thr = thread.strip() or None
+    msgs = list_unread(manager.issues_root, thread=thr)
+    moniker = moniker_for_store(manager.issues_root) or str(manager.issues_root)
+    if not msgs:
+        scope = f" thread={thr}" if thr else ""
+        return f"No unread inbox messages on {moniker}{scope}."
+    lines = [f"Unread inbox on {moniker} ({len(msgs)}):"]
+    for m in msgs:
+        lines.append(f"  {m.summary_line()}")
+    lines.append("Ack with ack_inbox(id=...) when processed.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def send_inbox_message(
+    to_repo: str,
+    body: str,
+    kind: str = "info",
+    thread: str = "",
+    task: str = "",
+    from_moniker: str = "",
+) -> str:
+    """Send an inbox message to another store's inbox/unread/ (shared filesystem).
+
+    Not real-time across machines — only visible after the target store is on
+    the same data root / synced. For alerts and pointers, not the task queue.
+
+    Args:
+        to_repo: Target moniker/host fragment (fuzzy, e.g. ``task-agent``).
+        body: Message body (Markdown).
+        kind: One of task-created, question, update, comment, ack-request, info.
+        thread: Optional task slug this message is about.
+        task: Optional local task to embed as a snapshot (+ default thread).
+        from_moniker: Override sender moniker (default: current store).
+    """
+    from taskagent.inbox import (
+        resolve_sender_moniker,
+        send_to_repo,
+        snapshot_from_issue,
+    )
+    from taskagent.store_registry import AmbiguousRepoMatchError, RepoNotFoundError
+
+    manager = get_manager()
+    snapshot = None
+    thr = thread.strip() or None
+    if task.strip():
+        slug = _resolve_slug(manager, task.strip())
+        issues = manager.load_mission()
+        issue = next((i for i in issues if i.slug == slug), None)
+        if issue is not None:
+            snapshot = snapshot_from_issue(issue)
+            if not thr:
+                thr = issue.slug
+    sender = from_moniker.strip() or resolve_sender_moniker(
+        store_path=manager.issues_root
+    )
+    try:
+        msg, resolved = send_to_repo(
+            to_repo,
+            from_moniker=sender,
+            body=body,
+            kind=kind,
+            thread=thr,
+            task_snapshot=snapshot,
+        )
+    except (RepoNotFoundError, AmbiguousRepoMatchError, ValueError, FileExistsError) as e:
+        return f"Error sending inbox message: {e}"
+    return (
+        f"Sent inbox message {msg.id} → {resolved.moniker} "
+        f"({resolved.store_path}/.task-agent/inbox/unread/{msg.id}.msg.md)"
+    )
+
+
+@mcp.tool()
+def ack_inbox(message_id: str, repo: Optional[str] = None) -> str:
+    """Acknowledge an unread inbox message (move to read/YYYY/MM/DD/).
+
+    Args:
+        message_id: Message id or unique prefix.
+        repo: Optional moniker fragment (default: current project store).
+    """
+    from taskagent.inbox import ack_message
+
+    try:
+        manager = get_manager_for_repo(repo)
+    except ValueError as e:
+        return f"Error resolving repo: {e}"
+    try:
+        msg = ack_message(manager.issues_root, message_id)
+    except (FileNotFoundError, FileExistsError) as e:
+        return f"Error acking message: {e}"
+    return f"Acked {msg.id} → {msg.path}"
+
+
+@mcp.tool()
 def get_strategy() -> str:
     """Retrieve the current project strategy statement.
 
