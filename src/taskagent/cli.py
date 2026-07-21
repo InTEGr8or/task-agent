@@ -2147,6 +2147,45 @@ def cmd_commit_tasks(
     cmd_commit(console, manager, message=message, should_push=should_push)
 
 
+def is_native_windows() -> bool:
+    """True when running under native Windows Python (not WSL/Linux/macOS).
+
+    WSL uses a Linux Python runtime (``sys.platform`` starts with ``linux``),
+    so this is False under WSL even when the host machine is Windows.
+    """
+    return sys.platform == "win32"
+
+
+_NATIVE_WINDOWS_STORE_OPS_MSG = (
+    "Store migrate and eject are not supported on native Windows yet.\n"
+    "\n"
+    "Reasons:\n"
+    "  1. Data roots diverge: native Windows and WSL use different home "
+    "directories, so without TA_DATA_ROOT they build disconnected registries "
+    "with no error.\n"
+    "  2. Git-tracked symlinks often check out as plain text files on Windows "
+    "(unless core.symlinks=true and Developer Mode), so migration pointers "
+    "break silently.\n"
+    "\n"
+    "Use WSL or Linux for this command until Windows data-root and symlink "
+    "support exists."
+)
+
+
+def refuse_if_native_windows_store_ops(console: Console, command: str) -> None:
+    """Refuse store migrate / eject on native Windows; raise SystemExit(1).
+
+    No-op on WSL, Linux, and macOS. Does not affect any other command paths.
+    """
+    if not is_native_windows():
+        return
+    console.print(
+        f"[red]Refused:[/red] [bold]{command}[/bold] on native Windows.\n"
+    )
+    console.print(_NATIVE_WINDOWS_STORE_OPS_MSG)
+    raise SystemExit(1)
+
+
 def cmd_store_help(console: Console) -> None:
     """Show themed help for the full ``ta store`` command group."""
     console.print(
@@ -2732,6 +2771,7 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "migrate":
+        refuse_if_native_windows_store_ops(console, "ta store migrate")
         host = _store_host_from_args(console, args)
         dry_run = bool(getattr(args, "dry_run", False))
         mig = migrate_store(host, dry_run=dry_run)
@@ -2786,6 +2826,7 @@ def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False
     This command remains for compatibility and still ejects into
     ``.task-agent/tasks`` (then you can migrate).
     """
+    refuse_if_native_windows_store_ops(console, "ta eject-mission")
     console.print(
         "[yellow]Deprecated:[/yellow] [bold]ta eject-mission[/bold] is superseded by "
         "[bold]ta store migrate[/bold] (machine data root).\n"
