@@ -214,6 +214,53 @@ def test_api_complete_issue(manager):
     ).exists()
 
 
+def test_api_complete_issue_with_metrics(manager):
+    from taskagent.models.metric import SubtaskMetric
+
+    manager.create_issue("Metric Task")
+    metrics = SubtaskMetric.from_completion_args(
+        model="grok-4",
+        provider="xai",
+        agent_harness="grok",
+        input_tokens=1000,
+        output_tokens=200,
+        tokens_accuracy="measured",
+        duration_seconds=90,
+        cost_usd=0.01,
+    )
+    issue, _ = manager.complete_issue(
+        "metric-task",
+        should_commit=False,
+        solution_explanation="Used metrics",
+        metrics=metrics,
+    )
+    assert issue.status == "completed"
+
+    now = datetime.now()
+    task_dir = (
+        manager.issues_root
+        / "completed"
+        / str(now.year)
+        / f"{now.month:02d}"
+        / "metric-task"
+    )
+    readme = (task_dir / "README.md").read_text(encoding="utf-8")
+    assert "## Agent Metrics" in readme
+    assert "grok-4" in readme
+    assert "## Solution" in readme
+
+    meta_path = task_dir / "meta.json"
+    assert meta_path.exists()
+    import json
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["status"] == "completed"
+    assert meta["metrics"]["model"] == "grok-4"
+    assert meta["metrics"]["agent_harness"] == "grok"
+    assert meta["metrics"]["input_tokens"] == 1000
+    assert meta["metrics"]["tokens_accuracy"] == "measured"
+
+
 def test_api_complete_issue_with_open_subtasks(manager):
     manager.create_issue("Parent Epic")
     manager.create_issue("Subtask Task", subtask_of="parent-epic")

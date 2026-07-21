@@ -40,6 +40,7 @@ except ImportError:
 from rich.live import Live
 
 from taskagent.models.issue import Issue
+from taskagent.models.metric import SubtaskMetric
 from taskagent.manager import TaskAgent
 from taskagent.discovery import discover, get_task_agent_project_root
 from taskagent import agent
@@ -1885,6 +1886,7 @@ def cmd_done(
     push_mission: bool = False,
     solution: Optional[str] = None,
     no_verify: bool = True,
+    metrics: Optional[SubtaskMetric] = None,
 ):
     """Mark an issue as done."""
     if not slug:
@@ -1914,6 +1916,7 @@ def cmd_done(
             push_mission=push_mission,
             solution_explanation=solution,
             no_verify=no_verify,
+            metrics=metrics,
         )
         console.print(
             f"[bold green]Issue '{issue.slug}' marked as done and "
@@ -5991,6 +5994,38 @@ Usage:
         action="store_false",
         help="Force running git pre-commit hooks",
     )
+    # Optional agent self-report for cost optimization
+    done_parser.add_argument(
+        "--model", help="Primary model id used (e.g. claude-opus-4)"
+    )
+    done_parser.add_argument("--model-version", help="Model version / snapshot id")
+    done_parser.add_argument(
+        "--provider", help="Provider (anthropic, openai, xai, google, …)"
+    )
+    done_parser.add_argument(
+        "--agent-harness",
+        help="Agent harness (claude-code, codex, cursor, grok, antigravity, …)",
+    )
+    done_parser.add_argument(
+        "--input-tokens", type=int, help="Prompt/context tokens consumed"
+    )
+    done_parser.add_argument(
+        "--output-tokens", type=int, help="Completion tokens produced"
+    )
+    done_parser.add_argument(
+        "--tokens-accuracy",
+        choices=["measured", "estimated", "unknown"],
+        help="Whether token counts are measured or estimated",
+    )
+    done_parser.add_argument(
+        "--duration-seconds", type=float, help="Wall-clock seconds spent on the task"
+    )
+    done_parser.add_argument(
+        "--cost-usd", type=float, help="Estimated or billed cost in USD"
+    )
+    done_parser.add_argument("--started-at", help="ISO-8601 start time of agent work")
+    done_parser.add_argument("--ended-at", help="ISO-8601 end time of agent work")
+    done_parser.add_argument("--metrics-notes", help="Free-form cost-relevant notes")
 
     path_parser = subparsers.add_parser("path", help="Get the absolute path to a task")
     path_parser.add_argument("slug", help="Task slug")
@@ -6212,6 +6247,20 @@ Usage:
     elif args.command == "store":
         cmd_store(console, args)
     elif args.command == "done":
+        done_metrics = SubtaskMetric.from_completion_args(
+            model=getattr(args, "model", None),
+            provider=getattr(args, "provider", None),
+            model_version=getattr(args, "model_version", None),
+            agent_harness=getattr(args, "agent_harness", None),
+            input_tokens=getattr(args, "input_tokens", None),
+            output_tokens=getattr(args, "output_tokens", None),
+            tokens_accuracy=getattr(args, "tokens_accuracy", None),
+            duration_seconds=getattr(args, "duration_seconds", None),
+            cost_usd=getattr(args, "cost_usd", None),
+            started_at=getattr(args, "started_at", None),
+            ended_at=getattr(args, "ended_at", None),
+            notes=getattr(args, "metrics_notes", None),
+        )
         cmd_done(
             console,
             manager,
@@ -6221,6 +6270,7 @@ Usage:
             args.push,
             args.solution,
             args.no_verify,
+            metrics=done_metrics,
         )
     elif args.command == "delete":
         cmd_soft_delete(console, manager, args.slug)

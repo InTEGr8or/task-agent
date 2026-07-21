@@ -9,6 +9,7 @@ import stat
 import json
 
 from taskagent.models.issue import Issue, USV_DELIM
+from taskagent.models.metric import SubtaskMetric
 
 
 class TaskAgent:
@@ -1233,8 +1234,14 @@ class TaskAgent:
         push_mission: bool = False,
         solution_explanation: Optional[str] = None,
         no_verify: bool = True,
+        metrics: Optional[SubtaskMetric] = None,
     ) -> Tuple[Issue, str]:
-        """Mark an issue as done. Returns (issue, commit_hash)."""
+        """Mark an issue as done. Returns (issue, commit_hash).
+
+        Optional ``metrics`` captures agent self-reported cost context
+        (model, harness, tokens, duration) written into the task README and
+        ``meta.json`` for later cost analysis via ``ta report``.
+        """
         issues = self.load_mission()
         target_issue = next((i for i in issues if i.slug == slug), None)
         if not target_issue:
@@ -1279,6 +1286,9 @@ class TaskAgent:
         if solution_explanation:
             content += f"\n## Solution\n\n{solution_explanation}\n"
 
+        if metrics is not None:
+            content += "\n" + metrics.to_markdown()
+
         content += "\n---\n**Completed in commit:** `<pending-commit-id>`\n"
 
         # 3. Execute Move and USV update (Mission Repo)
@@ -1289,11 +1299,16 @@ class TaskAgent:
             with (dest_path / "README.md").open("w", encoding="utf-8") as f:
                 f.write(content)
             final_file = dest_path / "README.md"
+            task_dir: Optional[Path] = dest_path
         else:
             with dest_path.open("w", encoding="utf-8") as f:
                 f.write(content)
             issue_file.unlink()
             final_file = dest_path
+            task_dir = None
+
+        if metrics is not None and task_dir is not None:
+            self._write_completion_metrics(task_dir, target_issue.slug, metrics)
 
         new_issues = [i for i in issues if i.slug != target_issue.slug]
         self.save_mission(new_issues)
@@ -1360,6 +1375,30 @@ class TaskAgent:
 
         target_issue.status = "completed"
         return target_issue, code_hash
+
+    def _write_completion_metrics(
+        self, task_dir: Path, slug: str, metrics: SubtaskMetric
+    ) -> None:
+        """Merge agent metrics into the task folder's ``meta.json``."""
+        meta_path = task_dir / "meta.json"
+        meta: dict = {}
+        if meta_path.exists():
+            try:
+                loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    meta = loaded
+            except (json.JSONDecodeError, OSError):
+                meta = {}
+
+        meta.setdefault("slug", slug)
+        meta["status"] = "completed"
+        metric_data = metrics.to_meta_dict()
+        if "start_time" in metric_data:
+            meta["start_time"] = metric_data["start_time"]
+        if "end_time" in metric_data:
+            meta["end_time"] = metric_data["end_time"]
+        meta["metrics"] = metric_data
+        meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     def soft_delete_issue(self, slug: str) -> Issue:
         """Soft-delete an issue: move to deleted/ folder and remove from mission.usv.

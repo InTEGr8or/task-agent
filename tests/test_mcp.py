@@ -138,8 +138,45 @@ def test_mcp_complete_task(mock_manager):
     assert "- **Git Commit SHA**: `abc1234`" in result
     assert "Implemented feature X" in result
     mock_manager.complete_issue.assert_called_once_with(
-        "task-1", commit_message="Done", solution_explanation="Implemented feature X"
+        "task-1",
+        commit_message="Done",
+        solution_explanation="Implemented feature X",
+        metrics=None,
     )
+
+
+def test_mcp_complete_task_with_metrics(mock_manager):
+    from taskagent.models.metric import SubtaskMetric
+
+    mock_manager.slugify.return_value = "task-1"
+    mock_manager.complete_issue.return_value = (
+        Issue(name="Task 1", slug="task-1", status="completed"),
+        "abc1234",
+    )
+
+    result = mcp.complete_task(
+        "Task 1",
+        solution="Shipped it",
+        model="claude-opus-4",
+        provider="anthropic",
+        agent_harness="claude-code",
+        input_tokens=50_000,
+        output_tokens=4_000,
+        tokens_accuracy="estimated",
+        duration_seconds=1800,
+        cost_usd=0.75,
+    )
+    assert "Task Completed Successfully" in result
+    assert "Agent Metrics" in result
+    assert "claude-opus-4" in result
+    call_kwargs = mock_manager.complete_issue.call_args.kwargs
+    assert call_kwargs["solution_explanation"] == "Shipped it"
+    metrics = call_kwargs["metrics"]
+    assert isinstance(metrics, SubtaskMetric)
+    assert metrics.model == "claude-opus-4"
+    assert metrics.agent_harness == "claude-code"
+    assert metrics.input_tokens == 50_000
+    assert metrics.tokens_accuracy == "estimated"
 
 
 def test_mcp_search_task(mock_manager, tmp_path):

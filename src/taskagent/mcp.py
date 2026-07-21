@@ -509,29 +509,85 @@ def mark_task_active(name: str) -> str:
 
 
 @mcp.tool()
-def complete_task(name: str, solution: str, message: Optional[str] = None) -> str:
+def complete_task(
+    name: str,
+    solution: str,
+    message: Optional[str] = None,
+    model: Optional[str] = None,
+    model_version: Optional[str] = None,
+    provider: Optional[str] = None,
+    agent_harness: Optional[str] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    tokens_accuracy: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
+    cost_usd: Optional[float] = None,
+    started_at: Optional[str] = None,
+    ended_at: Optional[str] = None,
+    metrics_notes: Optional[str] = None,
+) -> str:
     """Mark a task as completed and commit the changes.
+
+    Self-report agent cost context when available so the station can optimize
+    spend later (model, harness, tokens, duration). Partial reports are fine.
 
     Args:
         name: The title or partial name of the task to complete.
         solution: Clear explanation of what was implemented or fixed.
         message: Optional git commit message.
+        model: Primary model id used for most of the work (e.g. 'claude-opus-4', 'grok-4').
+        model_version: Model version / snapshot when known.
+        provider: Provider name (e.g. 'anthropic', 'openai', 'xai', 'google').
+        agent_harness: Product/harness that drove the work
+            (e.g. 'claude-code', 'codex', 'cursor', 'grok', 'antigravity', 'adk-worker').
+        input_tokens: Prompt/context tokens consumed (up).
+        output_tokens: Completion tokens produced (down).
+        tokens_accuracy: 'measured', 'estimated', or 'unknown' (default unknown).
+        duration_seconds: Wall-clock seconds spent on the task.
+        cost_usd: Estimated or billed cost in USD when known.
+        started_at: ISO-8601 start time (optional; derived from duration when omitted).
+        ended_at: ISO-8601 end time (defaults to now when metrics are provided).
+        metrics_notes: Free-form cost notes (retries, cache hits, tool-loop count, …).
     """
+    from taskagent.models.metric import SubtaskMetric
+
     manager = get_manager()
     slug = _resolve_slug(manager, name)
     try:
+        metrics = SubtaskMetric.from_completion_args(
+            model=model,
+            provider=provider,
+            model_version=model_version,
+            agent_harness=agent_harness,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            tokens_accuracy=tokens_accuracy,
+            duration_seconds=duration_seconds,
+            cost_usd=cost_usd,
+            started_at=started_at,
+            ended_at=ended_at,
+            notes=metrics_notes,
+        )
         issue, commit_hash = manager.complete_issue(
-            slug, commit_message=message, solution_explanation=solution
+            slug,
+            commit_message=message,
+            solution_explanation=solution,
+            metrics=metrics,
         )
-        return (
-            f"### Task Completed Successfully\n\n"
-            f"- **Slug**: `{slug}`\n"
-            f"- **Title**: {issue.name}\n"
-            f"- **Status**: `completed`\n"
-            f"- **Git Commit SHA**: `{commit_hash}`\n\n"
-            f"#### Solution Explanation\n"
-            f"{solution}\n"
-        )
+        lines = [
+            "### Task Completed Successfully",
+            "",
+            f"- **Slug**: `{slug}`",
+            f"- **Title**: {issue.name}",
+            "- **Status**: `completed`",
+            f"- **Git Commit SHA**: `{commit_hash}`",
+            "",
+            "#### Solution Explanation",
+            solution,
+        ]
+        if metrics is not None:
+            lines.extend(["", metrics.to_markdown().rstrip()])
+        return "\n".join(lines) + "\n"
     except Exception as e:
         return f"Error completing task: {e}"
 
