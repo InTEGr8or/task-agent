@@ -1643,9 +1643,11 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
         elif not body and not sys.stdin.isatty():
             body = sys.stdin.read()
         thread = args.thread
+        task_slug = None
         snapshot = None
         if args.task:
             slug = manager.resolve_issue_slug(args.task) or manager.slugify(args.task)
+            task_slug = slug
             issues = manager.load_mission()
             issue = next((i for i in issues if i.slug == slug), None)
             if issue is None:
@@ -1662,12 +1664,16 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
                     )
             if issue is not None:
                 snapshot = snapshot_from_issue(issue)
+                task_slug = issue.slug
                 if not thread:
                     thread = issue.slug
             else:
                 console.print(
-                    f"[yellow]Task {args.task!r} not found; sending without snapshot.[/yellow]"
+                    f"[yellow]Task {args.task!r} not in this store; "
+                    f"sending slug pointer {slug!r} without local snapshot.[/yellow]"
                 )
+                if not thread:
+                    thread = slug
 
         from_moniker = args.sender or resolve_sender_moniker(
             store_path=store, host_path=Path.cwd()
@@ -1679,6 +1685,7 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
                 body=body,
                 kind=kind,
                 thread=thread,
+                task=task_slug,
                 task_snapshot=snapshot,
             )
         except (
@@ -1706,6 +1713,24 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
             f"[bold green]Acked[/bold green] [cyan]{msg.id}[/cyan] → "
             f"[dim]{msg.path}[/dim]"
         )
+        if getattr(args, "start", False):
+            start_slug = msg.linked_slug
+            if not start_slug:
+                console.print(
+                    "[yellow]--start ignored: message has no task/thread slug. "
+                    "Senders must pass --task or --thread for task-created.[/yellow]"
+                )
+                return
+            try:
+                manager.move_to_active(start_slug)
+                console.print(
+                    f"[bold green]Started[/bold green] task "
+                    f"[cyan]{start_slug}[/cyan] (status → active)"
+                )
+            except Exception as e:
+                console.print(
+                    f"[red]Acked, but could not start task {start_slug!r}: {e}[/red]"
+                )
         return
 
     if action == "gc":
@@ -5372,9 +5397,18 @@ def main():
         help="Override sender moniker (default: current store/host moniker)",
     )
     inbox_ack = inbox_sub.add_parser(
-        "ack", help="Mark a message read (move to read/YYYY/MM/DD/)"
+        "ack",
+        help="Mark a message read (move to read/YYYY/MM/DD/); optional --start",
     )
     inbox_ack.add_argument("id", help="Message id (or unique prefix)")
+    inbox_ack.add_argument(
+        "--start",
+        action="store_true",
+        help=(
+            "After ack, mark the linked task (task/thread frontmatter) active "
+            "in this store"
+        ),
+    )
     inbox_gc = inbox_sub.add_parser(
         "gc",
         help="Delete read/ day dirs older than retention (name-only, no file opens)",

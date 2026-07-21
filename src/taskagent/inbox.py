@@ -42,17 +42,29 @@ class InboxMessage:
     path: Path
     from_moniker: str = ""
     thread: Optional[str] = None
+    task: Optional[str] = None  # linked task slug (preferred pointer)
     kind: str = "info"
     created_at: str = ""
     body: str = ""
     status: str = "unread"  # unread | read
     meta: Dict[str, str] = field(default_factory=dict)
 
+    @property
+    def linked_slug(self) -> Optional[str]:
+        """Best task slug pointer: explicit task field, then thread."""
+        for candidate in (self.task, self.thread):
+            if candidate and str(candidate).strip():
+                return str(candidate).strip()
+        return None
+
     def summary_line(self) -> str:
-        thread = f" thread={self.thread}" if self.thread else ""
         kind = self.kind or "info"
-        preview = " ".join(self.body.strip().split())[:80]
-        return f"[{self.id}] {kind} from {self.from_moniker or '?'}{thread}: {preview}"
+        slug = self.linked_slug
+        slug_bit = f" task={slug}" if slug else " task=?"
+        preview = " ".join(self.body.strip().split())[:72]
+        return (
+            f"[{self.id}] {kind} from {self.from_moniker or '?'}{slug_bit}: {preview}"
+        )
 
 
 def inbox_root(store_path: Path) -> Path:
@@ -93,6 +105,21 @@ def _parse_frontmatter(text: str) -> tuple[Dict[str, str], str]:
     return meta, m.group(2).lstrip("\n")
 
 
+def _resolve_linked_slug(
+    thread: Optional[str],
+    task: Optional[str],
+    task_snapshot: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    for candidate in (
+        task,
+        thread,
+        (task_snapshot or {}).get("slug") if task_snapshot else None,
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip()
+    return None
+
+
 def _format_message_file(
     *,
     from_moniker: str,
@@ -100,16 +127,24 @@ def _format_message_file(
     created_at: str,
     thread: Optional[str],
     body: str,
+    task: Optional[str] = None,
     task_snapshot: Optional[Dict[str, Any]] = None,
 ) -> str:
+    linked = _resolve_linked_slug(thread, task, task_snapshot)
     lines = [
         "---",
         f"from: {from_moniker}",
         f"kind: {kind}",
         f"created_at: {created_at}",
     ]
+    # Always emit an explicit task= pointer when we have one (receivers need this).
+    if linked:
+        lines.append(f"task: {linked}")
     if thread:
         lines.append(f"thread: {thread}")
+    elif linked:
+        # Default thread to the task slug so thread filters work without extra args.
+        lines.append(f"thread: {linked}")
     lines.append("---")
     lines.append("")
     if task_snapshot:
@@ -122,6 +157,9 @@ def _format_message_file(
         if task_snapshot.get("slug"):
             lines.append("")
             lines.append(f"_Live slug: `{task_snapshot['slug']}`_")
+        lines.append("")
+    elif linked:
+        lines.append(f"_Linked task slug: `{linked}`_")
         lines.append("")
     body = body.rstrip() + "\n" if body else ""
     lines.append(body if body else "")
@@ -139,6 +177,7 @@ def parse_message_file(path: Path, status: str = "unread") -> InboxMessage:
         path=path,
         from_moniker=meta.get("from", ""),
         thread=meta.get("thread") or None,
+        task=meta.get("task") or None,
         kind=meta.get("kind", "info"),
         created_at=meta.get("created_at", ""),
         body=body,
@@ -205,6 +244,7 @@ def send_message(
     body: str = "",
     kind: str = "info",
     thread: Optional[str] = None,
+    task: Optional[str] = None,
     task_snapshot: Optional[Dict[str, Any]] = None,
     message_id: Optional[str] = None,
     created_at: Optional[datetime] = None,
@@ -213,11 +253,24 @@ def send_message(
 
     Does not scan any other store's inbox. Target path must already be resolved
     (e.g. via store_registry moniker resolution).
+
+    For ``kind=task-created``, a linked slug is required (``task=``, ``thread=``,
+    or ``task_snapshot['slug']``) so the receiver can open the work item.
     """
     if kind not in KINDS:
         raise ValueError(f"Invalid kind {kind!r}; expected one of {sorted(KINDS)}")
     if not from_moniker or not str(from_moniker).strip():
         raise ValueError("from_moniker is required")
+
+    thr = thread.strip() if thread else None
+    task_slug = task.strip() if task else None
+    linked = _resolve_linked_slug(thr, task_slug, task_snapshot)
+    # task-created without a slug is useless to the receiver — require a pointer.
+    if kind == "task-created" and not linked:
+        raise ValueError(
+            "kind=task-created requires a linked task slug: pass task=… / "
+            "thread=… or task_snapshot with slug (CLI/MCP: --task / task=)."
+        )
 
     ensure_inbox_dirs(target_store)
     when = created_at or datetime.now(timezone.utc)
@@ -237,12 +290,18 @@ def send_message(
         from_moniker=from_moniker.strip(),
         kind=kind,
         created_at=when.isoformat(),
-        thread=thread.strip() if thread else None,
+        thread=thr or linked,
+        task=linked,
         body=body or "",
         task_snapshot=task_snapshot,
     )
     path.write_text(content, encoding="utf-8")
     return parse_message_file(path, status="unread")
+
+
+def linked_slug_from_message(msg: InboxMessage) -> Optional[str]:
+    """Public helper for ack --start."""
+    return msg.linked_slug
 
 
 def find_unread_message(store_path: Path, message_id: str) -> Optional[Path]:
@@ -414,6 +473,7 @@ def send_to_repo(
     body: str = "",
     kind: str = "info",
     thread: Optional[str] = None,
+    task: Optional[str] = None,
     task_snapshot: Optional[Dict[str, Any]] = None,
 ) -> tuple[InboxMessage, Any]:
     """Resolve ``repo_query`` via registry and deliver a message.
@@ -429,6 +489,7 @@ def send_to_repo(
         body=body,
         kind=kind,
         thread=thread,
+        task=task,
         task_snapshot=task_snapshot,
     )
     return msg, resolved

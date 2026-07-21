@@ -218,7 +218,9 @@ def send_inbox_message(
         body: Message body (Markdown).
         kind: One of task-created, question, update, comment, ack-request, info.
         thread: Optional task slug this message is about.
-        task: Optional local task to embed as a snapshot (+ default thread).
+        task: Task slug to link (required for kind=task-created). Embeds a local
+            snapshot when the task exists in the sender store; still sets the
+            ``task``/``thread`` pointer when it only exists on the target.
         from_moniker: Override sender moniker (default: current store).
     """
     from taskagent.inbox import (
@@ -231,14 +233,21 @@ def send_inbox_message(
     manager = get_manager()
     snapshot = None
     thr = thread.strip() or None
-    if task.strip():
-        slug = _resolve_slug(manager, task.strip())
+    task_slug = task.strip() or None
+    if task_slug:
+        slug = _resolve_slug(manager, task_slug)
         issues = manager.load_mission()
         issue = next((i for i in issues if i.slug == slug), None)
         if issue is not None:
             snapshot = snapshot_from_issue(issue)
+            task_slug = issue.slug
             if not thr:
                 thr = issue.slug
+        else:
+            # Task may live only on the target store (cross-repo create).
+            task_slug = slug
+            if not thr:
+                thr = slug
     sender = from_moniker.strip() or resolve_sender_moniker(
         store_path=manager.issues_root
     )
@@ -249,6 +258,7 @@ def send_inbox_message(
             body=body,
             kind=kind,
             thread=thr,
+            task=task_slug,
             task_snapshot=snapshot,
         )
     except (
@@ -265,12 +275,18 @@ def send_inbox_message(
 
 
 @mcp.tool()
-def ack_inbox(message_id: str, repo: Optional[str] = None) -> str:
+def ack_inbox(
+    message_id: str,
+    repo: Optional[str] = None,
+    start: bool = False,
+) -> str:
     """Acknowledge an unread inbox message (move to read/YYYY/MM/DD/).
 
     Args:
         message_id: Message id or unique prefix.
         repo: Optional moniker fragment (default: current project store).
+        start: If True, also mark the linked task (task/thread frontmatter)
+            as active in that store — ack + start in one step.
     """
     from taskagent.inbox import ack_message
 
@@ -282,7 +298,21 @@ def ack_inbox(message_id: str, repo: Optional[str] = None) -> str:
         msg = ack_message(manager.issues_root, message_id)
     except (FileNotFoundError, FileExistsError) as e:
         return f"Error acking message: {e}"
-    return f"Acked {msg.id} → {msg.path}"
+    parts = [f"Acked {msg.id} → {msg.path}"]
+    if start:
+        slug = msg.linked_slug
+        if not slug:
+            parts.append(
+                "start=true ignored: message has no task/thread slug "
+                "(senders must pass task= or thread= for task-created)."
+            )
+        else:
+            try:
+                manager.move_to_active(slug)
+                parts.append(f"Started task {slug} (status → active).")
+            except Exception as e:
+                parts.append(f"Could not start task {slug!r}: {e}")
+    return " ".join(parts)
 
 
 @mcp.tool()

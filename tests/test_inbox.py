@@ -145,6 +145,34 @@ def test_invalid_kind_rejected(tmp_path):
         send_message(store, from_moniker="a", kind="nope", body="")
 
 
+def test_task_created_requires_slug(tmp_path):
+    store = _store(tmp_path)
+    with pytest.raises(ValueError, match="task-created requires"):
+        send_message(
+            store,
+            from_moniker="bizkite-co/cocli",
+            kind="task-created",
+            body="Filed a bug somewhere",
+        )
+
+
+def test_task_created_writes_task_frontmatter(tmp_path):
+    store = _store(tmp_path)
+    msg = send_message(
+        store,
+        from_moniker="bizkite-co/cocli",
+        kind="task-created",
+        body="Filed migrate bug",
+        task="fix-migrate-stores-already-migrated-path",
+    )
+    assert msg.task == "fix-migrate-stores-already-migrated-path"
+    assert msg.thread == "fix-migrate-stores-already-migrated-path"
+    assert msg.linked_slug == "fix-migrate-stores-already-migrated-path"
+    text = msg.path.read_text(encoding="utf-8")
+    assert "task: fix-migrate-stores-already-migrated-path" in text
+    assert "task=fix-migrate" in msg.summary_line()
+
+
 def test_send_to_repo_fuzzy(tmp_path, monkeypatch):
     from taskagent.inbox import send_to_repo
 
