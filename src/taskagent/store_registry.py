@@ -1258,6 +1258,241 @@ def _update_host_pointers(host: Path, dest: Path) -> List[str]:
     return applied
 
 
+def _remote_default_branch(store: Path, remote_name: str = "origin") -> Optional[str]:
+    """Best-effort remote HEAD branch name (requires fetch or network ls-remote)."""
+    res = _git_out(
+        store, "symbolic-ref", f"refs/remotes/{remote_name}/HEAD", check=False
+    )
+    if res.returncode == 0:
+        ref = (res.stdout or "").strip()
+        prefix = f"refs/remotes/{remote_name}/"
+        if ref.startswith(prefix):
+            return ref[len(prefix) :]
+
+    res = _git_out(store, "ls-remote", "--symref", remote_name, "HEAD", check=False)
+    if res.returncode == 0:
+        for line in (res.stdout or "").splitlines():
+            # ref: refs/heads/main\tHEAD
+            if line.startswith("ref:") and "HEAD" in line:
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].startswith("refs/heads/"):
+                    return parts[1][len("refs/heads/") :]
+
+    heads = _remote_heads(store, remote_name)
+    for preferred in ("main", "master"):
+        if preferred in heads:
+            return preferred
+    if heads:
+        return sorted(heads.keys())[0]
+    return None
+
+
+def _git_is_ancestor(store: Path, maybe_ancestor: str, maybe_descendant: str) -> bool:
+    res = _git_out(
+        store,
+        "merge-base",
+        "--is-ancestor",
+        maybe_ancestor,
+        maybe_descendant,
+        check=False,
+    )
+    return res.returncode == 0
+
+
+def _working_tree_clean(store: Path) -> bool:
+    res = _git_out(store, "status", "--porcelain", check=False)
+    return res.returncode == 0 and not (res.stdout or "").strip()
+
+
+def _only_untracked_changes(store: Path) -> bool:
+    """True when porcelain status has only untracked (``??``) lines — safe for branch switch."""
+    res = _git_out(store, "status", "--porcelain", check=False)
+    if res.returncode != 0:
+        return False
+    lines = [ln for ln in (res.stdout or "").splitlines() if ln.strip()]
+    if not lines:
+        return True
+    return all(ln.startswith("??") for ln in lines)
+
+
+def reconcile_adopted_store_git(
+    store: Path,
+    *,
+    remote_name: str = "origin",
+    auto_fix: bool = True,
+) -> Dict[str, Any]:
+    """Fetch + verify branch/upstream for a pre-existing store being adopted.
+
+    Used on the ``already_migrated`` path so we never silently certify a clone
+    stuck on a stale/renamed branch (e.g. local ``master`` while remote HEAD is
+    ``main``).
+
+    Safe auto-fix (when ``auto_fix`` and the worktree is clean): switch to the
+    remote's default branch when the local tip has no unpushed unique commits
+    relative to the remote tip. Otherwise fail loudly — do not rewrite
+    intentional local-only history.
+
+    Returns a dict with keys: ``ok``, ``applied``, ``problems``, ``skipped``,
+    ``local_branch``, ``remote_head``.
+    """
+    applied: List[str] = []
+    problems: List[str] = []
+    result: Dict[str, Any] = {
+        "ok": True,
+        "applied": applied,
+        "problems": problems,
+        "skipped": False,
+        "local_branch": None,
+        "remote_head": None,
+    }
+
+    store = store.expanduser().resolve()
+    if not (store / ".git").exists() and not (store / ".git").is_file():
+        # Bare host_tree without git — nothing to reconcile
+        result["skipped"] = True
+        return result
+
+    remotes = _list_git_remotes(store)
+    if remote_name not in remotes:
+        result["skipped"] = True
+        applied.append(f"no remote {remote_name!r}; skip branch reconcile")
+        return result
+
+    fetch = _git_out(store, "fetch", remote_name, "--prune", check=False)
+    if fetch.returncode != 0:
+        err = ((fetch.stderr or "") + (fetch.stdout or "")).strip()
+        problems.append(
+            f"git fetch {remote_name} failed: {err or 'unknown error'}. "
+            "Cannot verify branch/upstream for the adopted store."
+        )
+        result["ok"] = False
+        return result
+    applied.append(f"fetched {remote_name}")
+
+    local = _local_branch(store)
+    result["local_branch"] = local
+    remote_head = _remote_default_branch(store, remote_name)
+    result["remote_head"] = remote_head
+    heads = _remote_heads(store, remote_name)
+
+    if not remote_head:
+        problems.append(
+            f"Could not determine {remote_name}'s default branch after fetch. "
+            "Refusing to silently certify the adopted store."
+        )
+        result["ok"] = False
+        return result
+
+    origin_local = f"{remote_name}/{local}"
+    origin_head = f"{remote_name}/{remote_head}"
+    has_origin_local = local in heads
+    has_origin_head = remote_head in heads
+
+    if not has_origin_head:
+        problems.append(
+            f"Remote default branch {remote_head!r} missing from "
+            f"{remote_name} heads after fetch."
+        )
+        result["ok"] = False
+        return result
+
+    # Healthy: on remote default and upstream exists
+    if local == remote_head and has_origin_local:
+        applied.append(
+            f"branch OK: on {local} (matches {remote_name} HEAD), "
+            f"{origin_local} present"
+        )
+        return result
+
+    # Diagnose mismatch
+    mismatch_bits = []
+    if local != remote_head:
+        mismatch_bits.append(
+            f"local branch is {local!r} but {remote_name} HEAD is {remote_head!r}"
+        )
+    if not has_origin_local:
+        mismatch_bits.append(
+            f"upstream {origin_local} does not exist on the remote "
+            f"(stale/renamed branch?)"
+        )
+    detail = "; ".join(mismatch_bits)
+
+    # Unpushed / unique local commits → never auto-rewrite
+    local_tip = _git_out(store, "rev-parse", "HEAD", check=False)
+    local_sha = (local_tip.stdout or "").strip()
+    remote_sha = heads.get(remote_head, "")
+    unpushed_unique = False
+    if local_sha and remote_sha:
+        if not _git_is_ancestor(store, local_sha, remote_sha):
+            # Local has commits not contained in remote HEAD
+            unpushed_unique = True
+
+    if unpushed_unique:
+        problems.append(
+            f"Adopted store branch mismatch: {detail}. "
+            f"Local HEAD has commits not on {origin_head}; refusing automatic "
+            f"checkout (would rewrite local work). Fix manually in {store}: "
+            f"`git fetch {remote_name} && git checkout {remote_head}` "
+            f"(or merge/rebase), then re-run migrate."
+        )
+        result["ok"] = False
+        return result
+
+    if not auto_fix:
+        problems.append(
+            f"Adopted store branch mismatch: {detail}. "
+            f"Re-run without dry-run / with auto-fix to switch to {remote_head}."
+        )
+        result["ok"] = False
+        return result
+
+    # Allow untracked-only dirt (common for pre-existing store content not in
+    # the clone's first commit). Block modified/staged tracked files.
+    if not _working_tree_clean(store) and not _only_untracked_changes(store):
+        problems.append(
+            f"Adopted store branch mismatch: {detail}. "
+            "Working tree has local modifications to tracked files; clean or "
+            f"commit, then re-run migrate to switch to {remote_head}."
+        )
+        result["ok"] = False
+        return result
+
+    # Safe switch: track remote default branch
+    # Prefer existing local branch of that name, else create from origin
+    co = _git_out(
+        store,
+        "checkout",
+        "-B",
+        remote_head,
+        origin_head,
+        check=False,
+    )
+    if co.returncode != 0:
+        err = ((co.stderr or "") + (co.stdout or "")).strip()
+        problems.append(
+            f"Adopted store branch mismatch: {detail}. "
+            f"Automatic checkout of {remote_head} failed: {err}"
+        )
+        result["ok"] = False
+        return result
+    applied.append(
+        f"reconciled branch: checkout -B {remote_head} {origin_head} "
+        f"(was {local}; {detail})"
+    )
+
+    # Set upstream tracking
+    _git_out(
+        store,
+        "branch",
+        f"--set-upstream-to={origin_head}",
+        remote_head,
+        check=False,
+    )
+    applied.append(f"set upstream {remote_head} → {origin_head}")
+    result["local_branch"] = remote_head
+    return result
+
+
 def migrate_store(
     host_path: Path,
     *,
@@ -1272,6 +1507,8 @@ def migrate_store(
     - Does **not** invent a git remote for host_tree stores
     - Removes host ``.task-agent/tasks`` eject path; optional docs/tasks symlink
       when store_symlink is on; .env points at the data-root store
+    - On already_migrated: fetch + verify/reconcile branch vs remote HEAD
+      (never silently certify a stale tracking branch)
 
     Args:
         host_path: Project root (or any path inside it).
@@ -1289,18 +1526,51 @@ def migrate_store(
         )
 
     if plan.already_migrated:
-        # Still repair pointers if needed (non-dry-run)
-        if dry_run:
-            return MigrationResult(
-                plan=plan,
-                dry_run=True,
-                success=True,
-                message="Already migrated (dry-run)",
-            )
         host = Path(plan.host_path)
         dest = Path(plan.destination)
         applied: List[str] = []
+
+        # Always inspect git health of the pre-existing store (dry-run too).
         if dest.is_dir() and looks_like_store(dest):
+            git_status = reconcile_adopted_store_git(
+                dest,
+                auto_fix=not dry_run,
+            )
+            # In dry-run, auto_fix is off: mismatch → fail with guidance
+            if dry_run and not git_status["ok"]:
+                # Re-run detection-only wording is already in problems
+                return MigrationResult(
+                    plan=plan,
+                    dry_run=True,
+                    success=False,
+                    message=(
+                        "Already migrated, but adopted store git state is bad: "
+                        + "; ".join(git_status["problems"])
+                    ),
+                    applied_steps=list(git_status["applied"]),
+                )
+            if dry_run:
+                return MigrationResult(
+                    plan=plan,
+                    dry_run=True,
+                    success=True,
+                    message="Already migrated (dry-run); store git OK",
+                    applied_steps=list(git_status["applied"]),
+                )
+
+            if not git_status["ok"]:
+                return MigrationResult(
+                    plan=plan,
+                    dry_run=False,
+                    success=False,
+                    message=(
+                        "Already migrated, but refused to certify store: "
+                        + "; ".join(git_status["problems"])
+                    ),
+                    applied_steps=list(git_status["applied"]),
+                )
+            applied.extend(git_status["applied"])
+
             applied.extend(_update_host_pointers(host, dest))
             write_host_store_config(host, plan.moniker)
             applied.append(f"wrote {host / '.ta-config.json'} store_moniker")
@@ -1324,11 +1594,19 @@ def migrate_store(
                 )
             )
             applied.append("registry upsert")
+        elif dry_run:
+            return MigrationResult(
+                plan=plan,
+                dry_run=True,
+                success=True,
+                message="Already migrated (dry-run)",
+            )
+
         return MigrationResult(
             plan=plan,
             dry_run=False,
             success=True,
-            message="Already migrated; host pointers refreshed",
+            message="Already migrated; host pointers refreshed; store git OK",
             applied_steps=applied,
         )
 

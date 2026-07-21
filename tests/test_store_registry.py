@@ -442,6 +442,292 @@ def test_migrate_nested_git_preserves_remote(tmp_path):
     assert url == remote
 
 
+def test_already_migrated_reconciles_stale_branch(tmp_path):
+    """Pre-existing canonical store on stale master is not silently certified.
+
+    Remote HEAD is main; local is master tracking gone origin/master.
+    migrate_store already_migrated path must switch to main (or fail loudly).
+    """
+    from taskagent.store_registry import (
+        MachineRegistry,
+        StoreEntry,
+        migrate_store,
+        moniker_to_dir_name,
+        write_store_meta,
+    )
+
+    data = tmp_path / "data"
+    host = tmp_path / "cocli-host"
+    host.mkdir()
+    subprocess.run(["git", "init"], cwd=host, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    (host / "README").write_text("host\n")
+    subprocess.run(["git", "add", "README"], cwd=host, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "host"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    # Subject origin drives moniker
+    subprocess.run(
+        [
+            "git",
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:bizkite-co/cocli.git",
+        ],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+
+    moniker = "bizkite-co/cocli"
+    dest = data / "stores" / moniker_to_dir_name(moniker)
+
+    # Bare remote whose HEAD is main
+    bare = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+    )
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    subprocess.run(["git", "init"], cwd=seed, check=True, capture_output=True)
+    for cfg in (
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "t"],
+    ):
+        subprocess.run(cfg, cwd=seed, check=True, capture_output=True)
+    (seed / "pending").mkdir()
+    (seed / ".task-agent").mkdir()
+    (seed / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\n", encoding="utf-8"
+    )
+    write_store_meta(seed, moniker=moniker)
+    subprocess.run(["git", "add", "-A"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "seed main"],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "branch", "-M", "main"], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", "main"],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+
+    # Clone into dest as the pre-existing data-root store
+    subprocess.run(
+        ["git", "clone", str(bare), str(dest)],
+        check=True,
+        capture_output=True,
+    )
+    for cfg in (
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "t"],
+    ):
+        subprocess.run(cfg, cwd=dest, check=True, capture_output=True)
+    # Stale local branch master (same tip), push then delete remote master
+    subprocess.run(
+        ["git", "-C", str(dest), "checkout", "-b", "master"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(dest), "push", "origin", "master"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(bare), "branch", "-D", "master"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(bare), "symbolic-ref", "HEAD", "refs/heads/main"],
+        check=True,
+        capture_output=True,
+    )
+    branch = subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert branch == "master"
+
+    MachineRegistry(data).upsert(
+        StoreEntry(moniker=moniker, store_path=str(dest), host_paths=[str(host)])
+    )
+    docs = host / "docs" / "tasks"
+    docs.parent.mkdir(parents=True, exist_ok=True)
+    docs.symlink_to(dest)
+
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert result.success, result.message
+    assert result.plan.already_migrated
+    after = subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert after == "main"
+    assert any("reconciled branch" in s for s in result.applied_steps)
+
+
+def test_already_migrated_refuses_unpushed_unique_commits(tmp_path):
+    """Local-only commits on stale branch → loud failure, no silent certify."""
+    from taskagent.store_registry import (
+        MachineRegistry,
+        StoreEntry,
+        migrate_store,
+        moniker_to_dir_name,
+        write_store_meta,
+    )
+
+    data = tmp_path / "data"
+    host = tmp_path / "host"
+    host.mkdir()
+    subprocess.run(["git", "init"], cwd=host, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.com"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "t"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+    (host / "h").write_text("h\n")
+    subprocess.run(["git", "add", "h"], cwd=host, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "h"], cwd=host, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:bizkite-co/cocli.git"],
+        cwd=host,
+        check=True,
+        capture_output=True,
+    )
+
+    moniker = "bizkite-co/cocli"
+    dest = data / "stores" / moniker_to_dir_name(moniker)
+    dest.mkdir(parents=True)
+    (dest / "pending").mkdir()
+    (dest / ".task-agent").mkdir()
+    (dest / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\n", encoding="utf-8"
+    )
+    write_store_meta(dest, moniker=moniker)
+
+    bare = tmp_path / "remote.git"
+    subprocess.run(
+        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+    )
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    subprocess.run(["git", "init"], cwd=seed, check=True, capture_output=True)
+    for cfg in (
+        ["git", "config", "user.email", "t@example.com"],
+        ["git", "config", "user.name", "t"],
+    ):
+        subprocess.run(cfg, cwd=seed, check=True, capture_output=True)
+    (seed / "s").write_text("s\n")
+    subprocess.run(["git", "add", "s"], cwd=seed, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "main"], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "branch", "-M", "main"], cwd=seed, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", "main"],
+        cwd=seed,
+        check=True,
+        capture_output=True,
+    )
+
+    import shutil
+
+    subprocess.run(
+        ["git", "clone", str(bare), str(dest / "_c")],
+        check=True,
+        capture_output=True,
+    )
+    shutil.move(str(dest / "_c" / ".git"), str(dest / ".git"))
+    shutil.rmtree(dest / "_c")
+    # Local-only commit on master not on remote
+    subprocess.run(
+        ["git", "-C", str(dest), "checkout", "-b", "master"],
+        check=True,
+        capture_output=True,
+    )
+    (dest / "local-only.txt").write_text("mine\n")
+    subprocess.run(
+        ["git", "-C", str(dest), "add", "local-only.txt"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(dest), "commit", "-m", "local only"],
+        check=True,
+        capture_output=True,
+    )
+
+    MachineRegistry(data).upsert(
+        StoreEntry(moniker=moniker, store_path=str(dest), host_paths=[str(host)])
+    )
+    docs = host / "docs" / "tasks"
+    docs.parent.mkdir(parents=True)
+    docs.symlink_to(dest)
+
+    result = migrate_store(host, dry_run=False, data_root=data)
+    assert not result.success, result.message
+    assert "refusing automatic" in result.message.lower() or "not on" in result.message
+    # Still on master — not force-switched
+    branch = subprocess.run(
+        ["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert branch == "master"
+
+
 def test_mission_remote_status_states(tmp_path):
     from taskagent.store_registry import (
         format_remote_status_line,
