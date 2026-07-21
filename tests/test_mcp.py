@@ -120,13 +120,63 @@ def test_mcp_restore_task(mock_manager):
 
 def test_mcp_get_task_details(mock_manager, tmp_path):
     mock_manager.slugify.return_value = "task-1"
-    issue_file = tmp_path / "task-1.md"
-    issue_file.write_text("# Task 1\nContent")
-    mock_manager.find_issue_file.return_value = issue_file
+    mock_manager.resolve_issue_slug.return_value = None
+    mock_manager.format_task_details.return_value = (
+        "# Task 1\nContent\n\n---\n\n## Secondary documents\n\n"
+        "### findings.md\n\nNotes\n"
+    )
 
     result = mcp.get_task_details("Task 1")
     assert "# Task 1" in result
     assert "Content" in result
+    assert "Secondary documents" in result
+    assert "findings.md" in result
+    mock_manager.format_task_details.assert_called_once_with(
+        "task-1", include_completed=True
+    )
+
+
+def test_mcp_get_task_details_missing(mock_manager):
+    mock_manager.slugify.return_value = "missing"
+    mock_manager.resolve_issue_slug.return_value = None
+    mock_manager.format_task_details.side_effect = FileNotFoundError("gone")
+    result = mcp.get_task_details("Missing")
+    assert "not found" in result
+
+
+def test_mcp_list_task_documents(mock_manager, tmp_path):
+    mock_manager.slugify.return_value = "task-1"
+    mock_manager.resolve_issue_slug.return_value = None
+    d1 = tmp_path / "findings.md"
+    d1.write_text("x")
+    mock_manager.list_secondary_documents.return_value = [d1]
+
+    result = mcp.list_task_documents("Task 1")
+    assert "findings.md" in result
+    assert "task-1" in result
+
+
+def test_mcp_add_task_document(mock_manager, tmp_path):
+    mock_manager.slugify.return_value = "task-1"
+    mock_manager.resolve_issue_slug.return_value = None
+    dest = tmp_path / "findings.md"
+    mock_manager.add_task_document.return_value = dest
+
+    result = mcp.add_task_document("Task 1", "findings.md", "# Hi")
+    assert "Added document" in result
+    assert "findings.md" in result
+    mock_manager.add_task_document.assert_called_once_with(
+        "task-1", "findings.md", "# Hi", overwrite=False
+    )
+
+
+def test_mcp_add_task_document_error(mock_manager):
+    mock_manager.slugify.return_value = "task-1"
+    mock_manager.resolve_issue_slug.return_value = None
+    mock_manager.add_task_document.side_effect = ValueError("bad name")
+    result = mcp.add_task_document("Task 1", "README.md", "x")
+    assert "Error adding document" in result
+    assert "bad name" in result
 
 
 def test_mcp_commit_repo_no_tasks_dir(mock_manager):
@@ -397,6 +447,8 @@ EXPECTED_TOOLS = {
     "search_task",
     "restore_task",
     "get_task_details",
+    "list_task_documents",
+    "add_task_document",
     "update_task",
     "update_task_dependencies",
     "set_task_blocked_by",

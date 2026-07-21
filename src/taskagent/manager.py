@@ -1728,6 +1728,143 @@ class TaskAgent:
             status="completed",
         )
 
+    # --- Secondary task documents (siblings of README.md) ---
+
+    _PRIMARY_DOC_NAMES = frozenset({"readme.md"})
+    _DOC_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+    @staticmethod
+    def _is_primary_doc(name: str) -> bool:
+        return name.lower() in TaskAgent._PRIMARY_DOC_NAMES
+
+    @classmethod
+    def sanitize_document_filename(cls, filename: str) -> str:
+        """Normalize a secondary document name to a safe ``*.md`` basename.
+
+        Rejects path separators, ``README.md``, and empty names.
+        Appends ``.md`` when the extension is missing.
+        """
+        raw = (filename or "").strip()
+        if not raw:
+            raise ValueError("Document filename must not be empty.")
+        if "/" in raw or "\\" in raw or raw in (".", ".."):
+            raise ValueError(
+                f"Document filename must be a plain basename, not a path: {filename!r}"
+            )
+        name = raw
+        if cls._is_primary_doc(name):
+            raise ValueError(
+                "Cannot use README.md as a secondary document name "
+                "(it is the primary task body)."
+            )
+        if not name.lower().endswith(".md"):
+            name = f"{name}.md"
+        if cls._is_primary_doc(name):
+            raise ValueError(
+                "Cannot use README.md as a secondary document name "
+                "(it is the primary task body)."
+            )
+        if not cls._DOC_NAME_RE.match(name):
+            raise ValueError(
+                f"Document filename must be alphanumeric with ._- only: {filename!r}"
+            )
+        return name
+
+    def list_secondary_documents(
+        self, slug: str, include_completed: bool = True
+    ) -> List[Path]:
+        """List top-level secondary ``*.md`` files next to a task's README.md.
+
+        File-based tasks (``slug.md`` only) have no secondary documents until
+        migrated to a folder. Does not recurse into subdirectories (e.g. logs/).
+        """
+        issue_file = self.find_issue_file(slug, include_completed=include_completed)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+        if issue_file.name != "README.md":
+            return []
+        task_dir = issue_file.parent
+        docs: List[Path] = []
+        for entry in sorted(task_dir.iterdir(), key=lambda p: p.name.lower()):
+            if (
+                entry.is_file()
+                and entry.suffix.lower() == ".md"
+                and not self._is_primary_doc(entry.name)
+            ):
+                docs.append(entry)
+        return docs
+
+    def format_task_details(
+        self, slug: str, include_completed: bool = True
+    ) -> str:
+        """Primary README content plus secondary Markdown documents.
+
+        Secondary docs are appended after a separator so viewers and MCP
+        clients see investigation notes, designs, etc. alongside the body.
+        """
+        issue_file = self.find_issue_file(slug, include_completed=include_completed)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+
+        primary = issue_file.read_text(encoding="utf-8")
+        secondary = self.list_secondary_documents(
+            slug, include_completed=include_completed
+        )
+        if not secondary:
+            return primary
+
+        parts = [
+            primary.rstrip(),
+            "",
+            "---",
+            "",
+            "## Secondary documents",
+            "",
+        ]
+        for doc in secondary:
+            parts.append(f"### {doc.name}")
+            parts.append("")
+            parts.append(doc.read_text(encoding="utf-8").rstrip())
+            parts.append("")
+        return "\n".join(parts).rstrip() + "\n"
+
+    def add_task_document(
+        self,
+        slug: str,
+        filename: str,
+        content: str,
+        *,
+        overwrite: bool = False,
+    ) -> Path:
+        """Add a secondary Markdown document to a task folder.
+
+        Migrates file-based tasks to ``slug/README.md`` when needed.
+        Returns the path of the written document.
+        """
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Issue '{slug}' not found.")
+
+        safe_name = self.sanitize_document_filename(filename)
+
+        # Ensure folder layout
+        if issue_file.name != "README.md":
+            migrated = self.migrate_to_folder(slug)
+            if not migrated:
+                raise RuntimeError(f"Could not migrate task '{slug}' to folder layout.")
+            issue_file = migrated
+
+        dest = issue_file.parent / safe_name
+        if dest.exists() and not overwrite:
+            raise FileExistsError(
+                f"Document '{safe_name}' already exists on task '{slug}'. "
+                "Pass overwrite=True to replace it."
+            )
+
+        dest.write_text(content if content is not None else "", encoding="utf-8")
+        self._commit_task_store(f"task: add document {safe_name} on {slug}")
+        return dest
+
     def bulk_update_dependencies(self, slugs: List[str], blocked_by: str) -> List[dict]:
         """Set blocked_by on many tasks. Returns per-slug result dicts.
 

@@ -371,16 +371,72 @@ def restore_task(name: str, status: str = "pending") -> str:
 def get_task_details(name: str) -> str:
     """Get the full description and content of a specific task.
 
+    Returns the primary README body plus any secondary Markdown documents
+    in the task directory (investigation notes, designs, diffs, etc.).
+
     Args:
         name: The title or partial name of the task.
     """
     manager = get_manager()
     slug = _resolve_slug(manager, name)
-    issue_file = manager.find_issue_file(slug)
-    if not issue_file:
+    try:
+        return manager.format_task_details(slug, include_completed=True)
+    except FileNotFoundError:
         return f"Task matching '{name}' ({slug}) not found."
 
-    return issue_file.read_text(encoding="utf-8")
+
+@mcp.tool()
+def list_task_documents(name: str) -> str:
+    """List secondary Markdown documents attached to a task (not README.md).
+
+    Args:
+        name: The title or partial name of the task.
+    """
+    manager = get_manager()
+    slug = _resolve_slug(manager, name)
+    try:
+        docs = manager.list_secondary_documents(slug, include_completed=True)
+    except FileNotFoundError:
+        return f"Task matching '{name}' ({slug}) not found."
+    if not docs:
+        return f"Task '{slug}' has no secondary documents."
+    lines = [f"Secondary documents on '{slug}' ({len(docs)}):"]
+    for d in docs:
+        lines.append(f"  - {d.name}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def add_task_document(
+    name: str,
+    filename: str,
+    content: str,
+    overwrite: bool = False,
+) -> str:
+    """Add a secondary Markdown document to a task directory.
+
+    Use this for investigation findings, design notes, diffs, or other
+    artifacts that should live next to the primary README without replacing it.
+    File-based tasks are migrated to a folder layout automatically.
+
+    Args:
+        name: The title or partial name of the task.
+        filename: Basename for the document (e.g. ``findings.md``).
+            ``.md`` is appended if missing. Cannot be README.md.
+        content: Full Markdown content to write.
+        overwrite: If True, replace an existing document with the same name.
+    """
+    manager = get_manager()
+    slug = _resolve_slug(manager, name)
+    try:
+        path = manager.add_task_document(
+            slug, filename, content, overwrite=overwrite
+        )
+        return f"Added document '{path.name}' to task '{slug}' at {path}."
+    except FileNotFoundError:
+        return f"Task matching '{name}' ({slug}) not found."
+    except (ValueError, FileExistsError, RuntimeError) as e:
+        return f"Error adding document: {e}"
 
 
 @mcp.tool()

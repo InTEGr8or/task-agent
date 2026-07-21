@@ -23,6 +23,79 @@ def test_api_create_issue(manager):
     assert "Body from API" in file.read_text()
 
 
+def test_sanitize_document_filename(manager):
+    assert manager.sanitize_document_filename("findings") == "findings.md"
+    assert manager.sanitize_document_filename("findings.md") == "findings.md"
+    assert manager.sanitize_document_filename("a_b-2.notes.md") == "a_b-2.notes.md"
+    with pytest.raises(ValueError):
+        manager.sanitize_document_filename("README.md")
+    with pytest.raises(ValueError):
+        manager.sanitize_document_filename("../escape.md")
+    with pytest.raises(ValueError):
+        manager.sanitize_document_filename("path/to/x.md")
+    with pytest.raises(ValueError):
+        manager.sanitize_document_filename("")
+
+
+def test_secondary_documents_list_format_add(manager):
+    issue = manager.create_issue("Doc Task", body="Primary body", as_dir=True)
+    assert manager.list_secondary_documents(issue.slug) == []
+
+    primary_only = manager.format_task_details(issue.slug)
+    assert "Primary body" in primary_only
+    assert "Secondary documents" not in primary_only
+
+    path = manager.add_task_document(
+        issue.slug, "findings.md", "# Findings\n\nPlugin plan.\n"
+    )
+    assert path.name == "findings.md"
+    assert path.exists()
+    assert "Plugin plan" in path.read_text()
+
+    docs = manager.list_secondary_documents(issue.slug)
+    assert [d.name for d in docs] == ["findings.md"]
+
+    full = manager.format_task_details(issue.slug)
+    assert "Primary body" in full
+    assert "## Secondary documents" in full
+    assert "### findings.md" in full
+    assert "Plugin plan" in full
+
+    with pytest.raises(FileExistsError):
+        manager.add_task_document(issue.slug, "findings.md", "again")
+
+    manager.add_task_document(
+        issue.slug, "findings.md", "# Overwritten\n", overwrite=True
+    )
+    assert "Overwritten" in path.read_text()
+
+
+def test_add_task_document_migrates_file_based(manager, monkeypatch):
+    """File-based tasks are migrated to folders when a document is added."""
+    # Bypass init_project's migrate_all_to_folders during create
+    monkeypatch.setattr(manager, "init_project", lambda: (0, 0))
+    monkeypatch.setattr(manager, "_commit_task_store", lambda *a, **k: "no_changes")
+
+    status_dir = manager.issues_root / "pending"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    flat = status_dir / "flat-task.md"
+    flat.write_text("---\ncreated_at: 2026-01-01T00:00:00\n---\n\n# Flat Task\n\nBody\n")
+    # Manually register in mission
+    from taskagent.models.issue import Issue
+
+    manager.save_mission(
+        [Issue(name="Flat Task", slug="flat-task", status="pending", priority=1)]
+    )
+
+    dest = manager.add_task_document("flat-task", "notes.md", "Note body")
+    assert not flat.exists()
+    assert dest == manager.issues_root / "pending" / "flat-task" / "notes.md"
+    assert dest.exists()
+    readme = manager.issues_root / "pending" / "flat-task" / "README.md"
+    assert readme.exists()
+    assert "Body" in readme.read_text()
+
+
 def test_slugify_hashes(manager):
     assert manager.slugify("# My Title") == "my-title"
     assert manager.slugify("Issue #123: Fix") == "issue-123-fix"

@@ -5,9 +5,12 @@ from taskagent.cli import (
     cmd_done,
     cmd_ingest,
     cmd_promote,
+    cmd_show,
+    cmd_document,
     get_project_version,
     main,
 )
+from types import SimpleNamespace
 from taskagent.manager import TaskAgent
 from rich.console import Console
 from datetime import datetime
@@ -126,6 +129,50 @@ def test_cmd_done(manager, temp_issues_dir):
     # Should be removed from mission
     issues = manager.load_mission()
     assert len(issues) == 0
+
+
+def test_cmd_show_includes_secondary_docs(manager, temp_issues_dir, capsys):
+    console = Console(force_terminal=False)
+    cmd_new(console, manager, "Show Task", "Primary body", draft=False, as_dir=True)
+    manager.add_task_document(
+        "show-task", "notes.md", "# Extra notes\n\nInvestigation text."
+    )
+
+    cmd_show(console, manager, "show-task")
+    # Rich may write to console file; also verify via manager path
+    full = manager.format_task_details("show-task")
+    assert "Primary body" in full
+    assert "Investigation text" in full
+    assert "### notes.md" in full
+
+
+def test_cmd_document_add_and_list(manager, temp_issues_dir):
+    console = Console(force_terminal=False)
+    cmd_new(console, manager, "Doc CLI", "Body", draft=False, as_dir=True)
+
+    cmd_document(
+        console,
+        manager,
+        SimpleNamespace(
+            document_command="add",
+            slug="doc-cli",
+            filename="findings",
+            body="# Findings\n\nDone.",
+            file=None,
+            overwrite=False,
+        ),
+    )
+    path = temp_issues_dir / "pending" / "doc-cli" / "findings.md"
+    assert path.exists()
+    assert "Done." in path.read_text()
+
+    cmd_document(
+        console,
+        manager,
+        SimpleNamespace(document_command="list", slug="doc-cli"),
+    )
+    docs = manager.list_secondary_documents("doc-cli")
+    assert [d.name for d in docs] == ["findings.md"]
 
 
 def test_cmd_ingest(manager, temp_issues_dir):

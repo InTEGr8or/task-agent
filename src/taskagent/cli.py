@@ -323,10 +323,28 @@ def render_issue(
     issue: Issue,
     issue_file: Path,
     issues: Optional[List[Issue]] = None,
+    manager: Optional[TaskAgent] = None,
 ):
-    """Render an issue's details to the console, using a pager if necessary."""
-    with issue_file.open("r", encoding="utf-8") as f:
-        content = f.read()
+    """Render an issue's details to the console, using a pager if necessary.
+
+    When ``manager`` is provided, secondary Markdown documents in the task
+    directory are included after the primary README.
+    """
+    secondary_paths: List[Path] = []
+    if manager is not None:
+        try:
+            content = manager.format_task_details(
+                issue.slug, include_completed=True
+            )
+            secondary_paths = manager.list_secondary_documents(
+                issue.slug, include_completed=True
+            )
+        except FileNotFoundError:
+            with issue_file.open("r", encoding="utf-8") as f:
+                content = f.read()
+    else:
+        with issue_file.open("r", encoding="utf-8") as f:
+            content = f.read()
 
     deps_info = ""
     if issue.subtask_of:
@@ -347,12 +365,21 @@ def render_issue(
     if blockers:
         deps_info += f"[bold blue]BLOCKED BY:[/bold blue] [yellow]{', '.join(blockers)}[/yellow]\n"
 
+    docs_info = ""
+    if secondary_paths:
+        names = ", ".join(p.name for p in secondary_paths)
+        docs_info = (
+            f"[bold blue]DOCUMENTS:[/bold blue] [cyan]{len(secondary_paths)}[/cyan] "
+            f"([dim]{names}[/dim])\n"
+        )
+
     panel = Panel(
         f"[bold blue]ISSUE:[/bold blue] [cyan]{issue.name}[/cyan]\n"
         f"[bold blue]SLUG:[/bold blue] {issue.slug} | "
         f"[bold blue]PRIORITY:[/bold blue] {issue.priority} | "
         f"[bold blue]STATUS:[/bold blue] {issue.status}\n"
         f"[bold blue]FILE:[/bold blue]\n{issue_file}\n"
+        f"{docs_info}"
         f"{deps_info}",
         box=theme.panel_box,
     )
@@ -590,7 +617,7 @@ def cmd_next(console: Console, manager: TaskAgent):
         sys.exit(1)
 
     issues = manager.load_mission()
-    render_issue(console, next_issue, issue_file, issues)
+    render_issue(console, next_issue, issue_file, issues, manager=manager)
 
 
 def cmd_search(console: Console, manager: TaskAgent, pattern: str):
@@ -638,7 +665,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
             console.print(f"[red]Issue file not found for {issue.slug}[/red]")
             return
 
-        render_issue(console, issue, issue_file, issues)
+        render_issue(console, issue, issue_file, issues, manager=manager)
         console.print("[dim]Press 'e' to edit, 'q' to exit.[/dim]")
         try:
             key = get_key()
@@ -704,7 +731,9 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                     issue.slug, include_completed=(issue.status == "completed")
                 )
                 if issue_file:
-                    render_issue(console, issue, issue_file, issues)
+                    render_issue(
+                        console, issue, issue_file, issues, manager=manager
+                    )
                     console.print(
                         "[dim]Press 'e' to edit, 'q' to return to list.[/dim]"
                     )
@@ -853,7 +882,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 live.stop()
                 file, slug = all_completed[cursor]
                 issue = Issue(name=slug, slug=slug, status="completed", priority=0)
-                render_issue(console, issue, file)
+                render_issue(console, issue, file, manager=manager)
                 try:
                     get_key()
                 except Exception:
@@ -1081,6 +1110,84 @@ def cmd_recover_history(console: Console, manager: TaskAgent):
 
     # Run project initialization to sync the restored files with mission.usv
     manager.init_project()
+
+
+def cmd_show(console: Console, manager: TaskAgent, slug_part: str):
+    """Show a task's primary README and secondary Markdown documents."""
+    resolved = manager.resolve_issue_slug(slug_part, include_completed=True)
+    slug = resolved or manager.slugify(slug_part)
+    issue_file = manager.find_issue_file(slug, include_completed=True)
+    if not issue_file:
+        console.print(f"[red]Issue not found: {slug_part}[/red]")
+        return
+
+    issues = manager.load_mission()
+    issue = next((i for i in issues if i.slug == slug), None)
+    if issue is None:
+        # Completed or otherwise off-mission: synthesize a minimal Issue
+        name = manager.extract_title(issue_file)
+        issue = Issue(name=name, slug=slug, status="completed", priority=0)
+
+    render_issue(console, issue, issue_file, issues, manager=manager)
+
+
+def cmd_document(console: Console, manager: TaskAgent, args) -> None:
+    """Manage secondary documents on a task (add / list)."""
+    action = getattr(args, "document_command", None) or getattr(args, "action", None)
+    if action == "list":
+        resolved = manager.resolve_issue_slug(args.slug, include_completed=True)
+        slug = resolved or manager.slugify(args.slug)
+        try:
+            docs = manager.list_secondary_documents(slug, include_completed=True)
+        except FileNotFoundError:
+            console.print(f"[red]Issue not found: {args.slug}[/red]")
+            return
+        if not docs:
+            console.print(f"[yellow]No secondary documents on '{slug}'.[/yellow]")
+            return
+        console.print(
+            f"[bold blue]Secondary documents on [cyan]{slug}[/cyan] "
+            f"({len(docs)}):[/bold blue]"
+        )
+        for d in docs:
+            console.print(f"  • [cyan]{d.name}[/cyan]  [dim]{d}[/dim]")
+        return
+
+    if action == "add":
+        resolved = manager.resolve_issue_slug(args.slug, include_completed=True)
+        slug = resolved or manager.slugify(args.slug)
+        content = args.body or ""
+        if args.file:
+            content = Path(args.file).read_text(encoding="utf-8")
+        elif not content and not sys.stdin.isatty():
+            content = sys.stdin.read()
+        if not content and not args.file:
+            console.print(
+                "[yellow]No content provided. Use -b/--body, -f/--file, or stdin.[/yellow]"
+            )
+            return
+        try:
+            path = manager.add_task_document(
+                slug,
+                args.filename,
+                content,
+                overwrite=bool(args.overwrite),
+            )
+        except FileNotFoundError:
+            console.print(f"[red]Issue not found: {args.slug}[/red]")
+            return
+        except (ValueError, FileExistsError, RuntimeError) as e:
+            console.print(f"[red]{e}[/red]")
+            return
+        console.print(
+            f"[bold green]Added document [cyan]{path.name}[/cyan] to "
+            f"[cyan]{slug}[/cyan][/bold green]\n[dim]{path}[/dim]"
+        )
+        return
+
+    console.print(
+        "[yellow]Usage: ta document {add|list} …  (see ta document --help)[/yellow]"
+    )
 
 
 def cmd_report(console: Console, manager: TaskAgent, slug: str):
@@ -4369,7 +4476,9 @@ def cmd_triage(
                     issue.slug, include_completed=show_completed
                 )
                 if issue_file:
-                    render_issue(console, issue, issue_file, issues)
+                    render_issue(
+                        console, issue, issue_file, issues, manager=manager
+                    )
                 else:
                     console.print(f"[red]Issue file not found for {issue.slug}[/red]")
                 questionary.press_any_key_to_continue().ask()
@@ -4685,6 +4794,8 @@ def display_overview(console: Console, manager: TaskAgent):
         ("promote", "Promote a draft task to pending"),
         ("demote", "Demote a pending task back to draft"),
         ("up/down", "Adjust task priority"),
+        ("show", "View a task (README + secondary Markdown docs)"),
+        ("document", "Add or list secondary documents on a task"),
         ("ingest", "Scan disk for new markdown tasks"),
         ("triage", "(alias for prior)"),
         ("", ""),  # Spacer
@@ -4747,6 +4858,47 @@ def main():
         "report", help="View metadata/logs for a task"
     )
     report_parser.add_argument("slug", help="Slug of the issue")
+
+    show_parser = subparsers.add_parser(
+        "show",
+        help="View a task's README and secondary Markdown documents",
+    )
+    show_parser.add_argument("slug", help="Slug or title of the issue")
+
+    document_parser = subparsers.add_parser(
+        "document",
+        aliases=["doc"],
+        help="Add or list secondary Markdown documents on a task",
+    )
+    document_sub = document_parser.add_subparsers(dest="document_command")
+    doc_add = document_sub.add_parser(
+        "add", help="Add a secondary Markdown document to a task folder"
+    )
+    doc_add.add_argument("slug", help="Slug or title of the issue")
+    doc_add.add_argument(
+        "filename",
+        help="Document basename (e.g. findings.md); .md appended if omitted",
+    )
+    doc_add.add_argument(
+        "-b",
+        "--body",
+        default="",
+        help="Document content (Markdown)",
+    )
+    doc_add.add_argument(
+        "-f",
+        "--file",
+        help="Read document content from a file path",
+    )
+    doc_add.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Replace an existing document with the same name",
+    )
+    doc_list = document_sub.add_parser(
+        "list", help="List secondary Markdown documents on a task"
+    )
+    doc_list.add_argument("slug", help="Slug or title of the issue")
 
     subparsers.add_parser(
         "dashboard", help="Show a live dashboard of all task stations"
@@ -5421,6 +5573,10 @@ Usage:
         cmd_recover_history(console, manager)
     elif args.command == "ingest":
         cmd_ingest(console, manager)
+    elif args.command == "show":
+        cmd_show(console, manager, args.slug)
+    elif args.command in ("document", "doc"):
+        cmd_document(console, manager, args)
     elif args.command == "mcp-api":
         cmd_mcp_api(console)
     elif args.command == "self-up":
