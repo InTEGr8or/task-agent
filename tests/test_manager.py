@@ -711,6 +711,79 @@ def test_init_strategy_creates_files(manager):
     assert "# Strategy" in content
 
 
+# ── Show / children expansion ───────────────────────────────────────
+
+
+def test_collect_dependent_slugs_subtask_and_blocked_by(manager):
+    parent = manager.create_issue("Parent", body="root")
+    child = manager.create_issue(
+        "Child Sub", body="sub", subtask_of=parent.slug
+    )
+    blocked = manager.create_issue(
+        "Child Blocked", body="blocked", blocked_by=parent.slug
+    )
+    grand = manager.create_issue(
+        "Grandchild", body="grand", subtask_of=child.slug
+    )
+
+    deps = manager.collect_dependent_slugs([parent.slug])
+    assert child.slug in deps
+    assert blocked.slug in deps
+    assert grand.slug in deps
+    # Roots themselves are not returned
+    assert parent.slug not in deps
+    # Parent first generation before grandchild (BFS)
+    assert deps.index(child.slug) < deps.index(grand.slug)
+
+
+def test_collect_dependent_slugs_excludes_completed_by_default(manager):
+    parent = manager.create_issue("Done Parent", body="root")
+    open_child = manager.create_issue(
+        "Open Child", body="open", subtask_of=parent.slug
+    )
+    done_child = manager.create_issue(
+        "Done Child", body="done", subtask_of=parent.slug
+    )
+    manager.complete_issue(done_child.slug, should_commit=False)
+
+    open_only = manager.collect_dependent_slugs([parent.slug], include_completed=False)
+    assert open_child.slug in open_only
+    assert done_child.slug not in open_only
+
+    with_done = manager.collect_dependent_slugs([parent.slug], include_completed=True)
+    assert open_child.slug in with_done
+    assert done_child.slug in with_done
+
+
+def test_expand_show_slugs_multi_and_children(manager):
+    a = manager.create_issue("Alpha", body="a")
+    b = manager.create_issue("Beta", body="b")
+    child = manager.create_issue("Alpha Child", body="c", subtask_of=a.slug)
+
+    slugs, missing = manager.expand_show_slugs([a.slug, b.slug])
+    assert slugs == [a.slug, b.slug]
+    assert missing == []
+
+    slugs, missing = manager.expand_show_slugs([a.slug], children=True)
+    assert slugs[0] == a.slug
+    assert child.slug in slugs
+    assert b.slug not in slugs
+
+    slugs, missing = manager.expand_show_slugs(["no-such-task"], children=True)
+    assert slugs == []
+    assert missing == ["no-such-task"]
+
+
+def test_format_tasks_details_batch(manager):
+    a = manager.create_issue("Batch A", body="body-a")
+    b = manager.create_issue("Batch B", body="body-b")
+    text = manager.format_tasks_details([a.slug, b.slug])
+    assert "======== batch-a ========" in text
+    assert "======== batch-b ========" in text
+    assert "body-a" in text
+    assert "body-b" in text
+
+
 # ── Station conformance tests ───────────────────────────────────────
 
 

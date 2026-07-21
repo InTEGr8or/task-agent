@@ -207,6 +207,7 @@ def test_mcp_restore_task(mock_manager):
 def test_mcp_get_task_details(mock_manager, tmp_path):
     mock_manager.slugify.return_value = "task-1"
     mock_manager.resolve_issue_slug.return_value = None
+    mock_manager.expand_show_slugs.return_value = (["task-1"], [])
     mock_manager.format_task_details.return_value = (
         "# Task 1\nContent\n\n---\n\n## Secondary documents\n\n"
         "### findings.md\n\nNotes\n"
@@ -217,6 +218,9 @@ def test_mcp_get_task_details(mock_manager, tmp_path):
     assert "Content" in result
     assert "Secondary documents" in result
     assert "findings.md" in result
+    mock_manager.expand_show_slugs.assert_called_once_with(
+        ["Task 1"], children=False, include_completed=False
+    )
     mock_manager.format_task_details.assert_called_once_with(
         "task-1", include_completed=True
     )
@@ -225,9 +229,40 @@ def test_mcp_get_task_details(mock_manager, tmp_path):
 def test_mcp_get_task_details_missing(mock_manager):
     mock_manager.slugify.return_value = "missing"
     mock_manager.resolve_issue_slug.return_value = None
-    mock_manager.format_task_details.side_effect = FileNotFoundError("gone")
+    mock_manager.expand_show_slugs.return_value = ([], ["Missing"])
     result = mcp.get_task_details("Missing")
     assert "not found" in result
+
+
+def test_mcp_get_task_details_children_and_multi(mock_manager):
+    mock_manager.expand_show_slugs.return_value = (
+        ["parent", "child-a", "child-b"],
+        [],
+    )
+    mock_manager.format_tasks_details.return_value = (
+        "======== parent ========\n\nParent\n\n"
+        "======== child-a ========\n\nA\n\n"
+        "======== child-b ========\n\nB\n"
+    )
+    result = mcp.get_task_details("parent", children=True, completed=True)
+    assert "parent" in result
+    assert "child-a" in result
+    mock_manager.expand_show_slugs.assert_called_once_with(
+        ["parent"], children=True, include_completed=True
+    )
+    mock_manager.format_tasks_details.assert_called_once_with(
+        ["parent", "child-a", "child-b"], include_completed=True
+    )
+
+    mock_manager.expand_show_slugs.reset_mock()
+    mock_manager.format_tasks_details.reset_mock()
+    mock_manager.expand_show_slugs.return_value = (["a", "b"], [])
+    mock_manager.format_tasks_details.return_value = "batch"
+    result = mcp.get_task_details("a, b")
+    assert result == "batch"
+    mock_manager.expand_show_slugs.assert_called_once_with(
+        ["a", "b"], children=False, include_completed=False
+    )
 
 
 def test_mcp_list_task_documents(mock_manager, tmp_path):

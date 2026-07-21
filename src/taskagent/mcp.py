@@ -635,21 +635,51 @@ def restore_task(name: str, status: str = "pending") -> str:
 
 
 @mcp.tool()
-def get_task_details(name: str) -> str:
-    """Get the full description and content of a specific task.
+def get_task_details(
+    name: str,
+    children: bool = False,
+    completed: bool = False,
+) -> str:
+    """Get the full description and content of one or more tasks.
 
     Returns the primary README body plus any secondary Markdown documents
     in the task directory (investigation notes, designs, diffs, etc.).
 
+    Pass a comma-separated list in *name* to batch-fetch multiple tasks.
+    With *children*, include all transitive dependents (subtasks and tasks
+    blocked by the given task(s)). Completed dependents are omitted unless
+    *completed* is True.
+
     Args:
-        name: The title or partial name of the task.
+        name: Title/slug of the task, or a comma-separated list of them.
+        children: If True, expand to include all dependent children.
+        completed: If True (with children), include completed dependents.
     """
     manager = get_manager()
-    slug = _resolve_slug(manager, name)
-    try:
-        return manager.format_task_details(slug, include_completed=True)
-    except FileNotFoundError:
-        return f"Task matching '{name}' ({slug}) not found."
+    queries = _parse_name_list(name) if "," in name else [name.strip()] if name.strip() else []
+    if not queries:
+        return "No task name provided."
+
+    slugs, missing = manager.expand_show_slugs(
+        queries, children=children, include_completed=completed
+    )
+    lines: list[str] = []
+    for q in missing:
+        lines.append(f"Task matching '{q}' not found.")
+    if not slugs:
+        return "\n".join(lines) if lines else "No matching tasks found."
+
+    # Single-task path keeps the legacy plain-body format for simple callers
+    if len(slugs) == 1 and not children and not missing:
+        try:
+            return manager.format_task_details(slugs[0], include_completed=True)
+        except FileNotFoundError:
+            return f"Task matching '{name}' ({slugs[0]}) not found."
+
+    body = manager.format_tasks_details(slugs, include_completed=True)
+    if lines:
+        return "\n".join(lines) + "\n\n" + body
+    return body
 
 
 @mcp.tool()

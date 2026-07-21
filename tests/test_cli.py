@@ -146,6 +146,57 @@ def test_cmd_show_includes_secondary_docs(manager, temp_issues_dir, capsys):
     assert "### notes.md" in full
 
 
+def test_cmd_show_multi_and_children(manager, temp_issues_dir, capsys):
+    console = Console(force_terminal=False, record=True)
+    cmd_new(console, manager, "Root Task", "Root body", draft=False)
+    cmd_new(console, manager, "Other Task", "Other body", draft=False)
+    manager.create_issue("Root Child", body="Child body", subtask_of="root-task")
+    manager.create_issue(
+        "Blocked Child", body="Blocked body", blocked_by="root-task"
+    )
+
+    # Multi-slug list
+    cmd_show(console, manager, ["root-task", "other-task"])
+    multi_out = console.export_text()
+    assert "Root body" in multi_out
+    assert "Other body" in multi_out
+
+    # Children expansion includes subtask and blocked_by dependents
+    console2 = Console(force_terminal=False, record=True)
+    cmd_show(console2, manager, "root-task", children=True)
+    child_out = console2.export_text()
+    assert "Root body" in child_out
+    assert "Child body" in child_out
+    assert "Blocked body" in child_out
+    assert "Other body" not in child_out
+
+
+def test_cmd_show_children_completed_flag(manager, temp_issues_dir):
+    console = Console(force_terminal=False, record=True)
+    parent = manager.create_issue("Done Parent", body="Parent body")
+    open_child = manager.create_issue(
+        "Open Kid", body="Open body", subtask_of=parent.slug
+    )
+    done_child = manager.create_issue(
+        "Done Kid", body="Done body", subtask_of=parent.slug
+    )
+    manager.complete_issue(done_child.slug, should_commit=False)
+
+    cmd_show(console, manager, parent.slug, children=True, include_completed=False)
+    out = console.export_text()
+    assert "Open body" in out
+    assert "Done body" not in out
+
+    console2 = Console(force_terminal=False, record=True)
+    cmd_show(
+        console2, manager, parent.slug, children=True, include_completed=True
+    )
+    out2 = console2.export_text()
+    assert "Open body" in out2
+    assert "Done body" in out2
+    assert open_child.slug in out2 or "Open Kid" in out2
+
+
 def test_cmd_document_add_and_list(manager, temp_issues_dir):
     console = Console(force_terminal=False)
     cmd_new(console, manager, "Doc CLI", "Body", draft=False, as_dir=True)

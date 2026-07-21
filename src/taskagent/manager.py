@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 from pathlib import Path
 from datetime import datetime
 import re
@@ -1864,6 +1864,132 @@ class TaskAgent:
             parts.append(doc.read_text(encoding="utf-8").rstrip())
             parts.append("")
         return "\n".join(parts).rstrip() + "\n"
+
+    def load_completed_issues(self) -> List[Issue]:
+        """Load completed tasks from disk with relations extracted from frontmatter."""
+        issues: List[Issue] = []
+        for path, slug in self.walk_completed():
+            name = self.extract_title(path)
+            blocked_by, subtask_of = self.extract_relations(path)
+            issues.append(
+                Issue(
+                    name=name,
+                    slug=slug,
+                    blocked_by=blocked_by,
+                    subtask_of=subtask_of,
+                    status="completed",
+                    priority=0,
+                )
+            )
+        return issues
+
+    def load_issues_for_relations(
+        self, include_completed: bool = False
+    ) -> List[Issue]:
+        """Mission issues plus optional completed tasks for dependency graphs."""
+        issues = list(self.load_mission())
+        if include_completed:
+            seen = {i.slug for i in issues}
+            for completed in self.load_completed_issues():
+                if completed.slug not in seen:
+                    issues.append(completed)
+                    seen.add(completed.slug)
+        return issues
+
+    def collect_dependent_slugs(
+        self,
+        root_slugs: Sequence[str],
+        *,
+        include_completed: bool = False,
+    ) -> List[str]:
+        """Return transitive dependents of *root_slugs* (excluding the roots).
+
+        A dependent is any task that lists a root (or intermediate) as
+        ``subtask_of`` parent **or** in ``blocked_by`` — i.e. any dependency
+        edge. Traversal is BFS; siblings keep mission/load order.
+        """
+        pool = self.load_issues_for_relations(include_completed=include_completed)
+        pool_order = {i.slug: idx for idx, i in enumerate(pool)}
+        children_map: dict[str, List[str]] = {}
+        for issue in pool:
+            for dep in issue.dependencies:
+                children_map.setdefault(dep, []).append(issue.slug)
+        for parent in children_map:
+            children_map[parent].sort(key=lambda s: pool_order.get(s, 10**9))
+
+        roots = list(dict.fromkeys(root_slugs))  # preserve order, de-dupe
+        seen = set(roots)
+        ordered: List[str] = []
+        queue = list(roots)
+        while queue:
+            current = queue.pop(0)
+            for child in children_map.get(current, []):
+                if child in seen:
+                    continue
+                seen.add(child)
+                ordered.append(child)
+                queue.append(child)
+        return ordered
+
+    def expand_show_slugs(
+        self,
+        queries: Sequence[str],
+        *,
+        children: bool = False,
+        include_completed: bool = False,
+    ) -> Tuple[List[str], List[str]]:
+        """Resolve show queries and optionally expand to all descendants.
+
+        Returns ``(slugs_in_display_order, missing_queries)``. Explicit roots
+        are always included when found (even if completed). Descendants are
+        filtered by *include_completed* when *children* is True.
+        """
+        resolved: List[str] = []
+        missing: List[str] = []
+        seen: set[str] = set()
+        for q in queries:
+            q = (q or "").strip()
+            if not q:
+                continue
+            slug = self.resolve_issue_slug(q, include_completed=True)
+            if not slug:
+                candidate = self.slugify(q)
+                if self.find_issue_file(candidate, include_completed=True):
+                    slug = candidate
+                else:
+                    missing.append(q)
+                    continue
+            if slug not in seen:
+                resolved.append(slug)
+                seen.add(slug)
+
+        if children and resolved:
+            for dep in self.collect_dependent_slugs(
+                resolved, include_completed=include_completed
+            ):
+                if dep not in seen:
+                    resolved.append(dep)
+                    seen.add(dep)
+        return resolved, missing
+
+    def format_tasks_details(
+        self,
+        slugs: Sequence[str],
+        *,
+        include_completed: bool = True,
+    ) -> str:
+        """Format one or more tasks' details, separated for batch viewing."""
+        sections: List[str] = []
+        for slug in slugs:
+            try:
+                body = self.format_task_details(
+                    slug, include_completed=include_completed
+                )
+            except FileNotFoundError:
+                sections.append(f"======== {slug} ========\n\nTask not found.\n")
+                continue
+            sections.append(f"======== {slug} ========\n\n{body.rstrip()}\n")
+        return "\n".join(sections).rstrip() + ("\n" if sections else "")
 
     def add_task_document(
         self,

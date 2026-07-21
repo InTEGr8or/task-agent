@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Dict, Set
+from typing import List, Optional, Tuple, Dict, Set, Union
 from pathlib import Path
 from datetime import datetime
 from rich.console import Console
@@ -696,11 +696,15 @@ def render_issue(
     issue_file: Path,
     issues: Optional[List[Issue]] = None,
     manager: Optional[TaskAgent] = None,
+    use_pager: bool = True,
 ):
     """Render an issue's details to the console, using a pager if necessary.
 
     When ``manager`` is provided, secondary Markdown documents in the task
     directory are included after the primary README.
+
+    Set ``use_pager=False`` for batch/multi-task output so the full stream
+    is printed without interactive paging between items.
     """
     secondary_paths: List[Path] = []
     if manager is not None:
@@ -760,7 +764,7 @@ def render_issue(
     total_lines = 8 + content.count("\n")
     terminal_height = console.size.height
 
-    if total_lines > terminal_height:
+    if use_pager and total_lines > terminal_height:
         with console.pager(styles=True):
             console.print(panel)
             console.print(md)
@@ -1480,23 +1484,72 @@ def cmd_recover_history(console: Console, manager: TaskAgent):
     manager.init_project()
 
 
-def cmd_show(console: Console, manager: TaskAgent, slug_part: str):
-    """Show a task's primary README and secondary Markdown documents."""
-    resolved = manager.resolve_issue_slug(slug_part, include_completed=True)
-    slug = resolved or manager.slugify(slug_part)
-    issue_file = manager.find_issue_file(slug, include_completed=True)
-    if not issue_file:
-        console.print(f"[red]Issue not found: {slug_part}[/red]")
+def cmd_show(
+    console: Console,
+    manager: TaskAgent,
+    slug_part: Union[str, List[str]],
+    children: bool = False,
+    include_completed: bool = False,
+):
+    """Show one or more tasks' README and secondary Markdown documents.
+
+    *slug_part* may be a single slug/title or a list of them.
+    With *children*, expand each root to include all transitive dependents
+    (``subtask_of`` children and tasks blocked by the root). Completed
+    dependents are omitted unless *include_completed* is True.
+    """
+    if isinstance(slug_part, str):
+        queries: List[str] = [slug_part]
+    else:
+        queries = list(slug_part)
+
+    if not queries:
+        console.print("[yellow]No task slugs provided.[/yellow]")
         return
 
-    issues = manager.load_mission()
-    issue = next((i for i in issues if i.slug == slug), None)
-    if issue is None:
-        # Completed or otherwise off-mission: synthesize a minimal Issue
-        name = manager.extract_title(issue_file)
-        issue = Issue(name=name, slug=slug, status="completed", priority=0)
+    slugs, missing = manager.expand_show_slugs(
+        queries, children=children, include_completed=include_completed
+    )
+    for q in missing:
+        console.print(f"[red]Issue not found: {q}[/red]")
+    if not slugs:
+        return
 
-    render_issue(console, issue, issue_file, issues, manager=manager)
+    # Relations pool for blocker display (open mission + optional completed)
+    issues = manager.load_issues_for_relations(include_completed=include_completed)
+    # Always include mission issues for panel metadata even if not in pool flags
+    mission = manager.load_mission()
+    slug_to_issue = {i.slug: i for i in mission}
+    for i in issues:
+        slug_to_issue.setdefault(i.slug, i)
+
+    multi = len(slugs) > 1
+    for idx, slug in enumerate(slugs):
+        issue_file = manager.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            console.print(f"[red]Issue not found: {slug}[/red]")
+            continue
+        issue = slug_to_issue.get(slug)
+        if issue is None:
+            name = manager.extract_title(issue_file)
+            issue = Issue(name=name, slug=slug, status="completed", priority=0)
+            blocked_by, subtask_of = manager.extract_relations(issue_file)
+            issue.blocked_by = blocked_by
+            issue.subtask_of = subtask_of
+
+        if multi and idx > 0:
+            console.print()
+        if multi or children:
+            console.print(f"[bold dim]—— {slug} ——[/bold dim]")
+
+        render_issue(
+            console,
+            issue,
+            issue_file,
+            list(slug_to_issue.values()),
+            manager=manager,
+            use_pager=not multi and not children,
+        )
 
 
 def cmd_document(console: Console, manager: TaskAgent, args) -> None:
@@ -5275,7 +5328,10 @@ def display_overview(console: Console, manager: TaskAgent):
         ("promote", "Promote a draft task to pending"),
         ("demote", "Demote a pending task back to draft"),
         ("up/down", "Adjust task priority"),
-        ("show", "View a task (README + secondary Markdown docs)"),
+        (
+            "show",
+            "View task(s); --children expands dependents, --completed includes done ones",
+        ),
         ("document", "Add or list secondary documents on a task"),
         ("inbox", "Cross-store inbox: list / send / ack / gc"),
         ("ingest", "Scan disk for new markdown tasks"),
@@ -5343,9 +5399,27 @@ def main():
 
     show_parser = subparsers.add_parser(
         "show",
-        help="View a task's README and secondary Markdown documents",
+        help="View task(s) README and secondary Markdown documents",
     )
-    show_parser.add_argument("slug", help="Slug or title of the issue")
+    show_parser.add_argument(
+        "slug",
+        nargs="+",
+        help="Slug(s) or title(s) of the issue(s) to show",
+    )
+    show_parser.add_argument(
+        "--children",
+        "-c",
+        action="store_true",
+        help=(
+            "Also show all transitive dependents (subtasks and tasks "
+            "blocked by the given task(s))"
+        ),
+    )
+    show_parser.add_argument(
+        "--completed",
+        action="store_true",
+        help="When used with --children, include completed dependents",
+    )
 
     document_parser = subparsers.add_parser(
         "document",
@@ -6209,7 +6283,13 @@ Usage:
     elif args.command == "ingest":
         cmd_ingest(console, manager)
     elif args.command == "show":
-        cmd_show(console, manager, args.slug)
+        cmd_show(
+            console,
+            manager,
+            args.slug,
+            children=bool(getattr(args, "children", False)),
+            include_completed=bool(getattr(args, "completed", False)),
+        )
     elif args.command in ("document", "doc"):
         cmd_document(console, manager, args)
     elif args.command == "inbox":
