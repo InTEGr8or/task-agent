@@ -32,6 +32,55 @@ def test_mcp_list_tasks(mock_manager):
     assert "[2] DRAFT: Task 2 (blocked by: task-1)" in result
 
 
+def test_mcp_inbox_indicator_on_any_tool(mock_manager, tmp_path):
+    """Unread inbox banner is prepended to ordinary MCP tool results."""
+    from taskagent.inbox import send_message
+
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / ".task-agent").mkdir()
+    send_message(
+        store,
+        from_moniker="org/cocli",
+        body="Please look",
+        kind="question",
+        message_id="mcp-banner-1",
+    )
+    mock_manager.issues_root = store
+    mock_manager.sync_mission.return_value = [
+        Issue(name="Task 1", slug="task-1", status="pending", priority=1),
+    ]
+
+    result = mcp.list_tasks()
+    assert result.startswith("📬 Inbox")
+    assert "1 unread" in result
+    assert "[1] PENDING: Task 1" in result
+    # Still unread after tool use (non-mutating)
+    from taskagent.inbox import unread_count
+
+    assert unread_count(store) == 1
+
+
+def test_mcp_list_inbox_skips_duplicate_banner(mock_manager, tmp_path):
+    from taskagent.inbox import send_message
+
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / ".task-agent").mkdir()
+    send_message(
+        store,
+        from_moniker="org/cocli",
+        body="Hi",
+        message_id="mcp-list-1",
+    )
+    mock_manager.issues_root = store
+
+    result = mcp.list_inbox()
+    # Full list body, not a double 📬 prefix + list
+    assert result.count("📬 Inbox") == 0
+    assert "Unread inbox" in result or "unread" in result.lower()
+
+
 def test_mcp_create_task(mock_manager):
     mock_manager.create_issue.return_value = Issue(
         name="New Task", slug="new-task", status="pending"

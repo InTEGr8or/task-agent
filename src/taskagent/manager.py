@@ -1794,9 +1794,7 @@ class TaskAgent:
                 docs.append(entry)
         return docs
 
-    def format_task_details(
-        self, slug: str, include_completed: bool = True
-    ) -> str:
+    def format_task_details(self, slug: str, include_completed: bool = True) -> str:
         """Primary README content plus secondary Markdown documents.
 
         Secondary docs are appended after a separator so viewers and MCP

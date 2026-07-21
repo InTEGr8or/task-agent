@@ -279,7 +279,9 @@ def ack_message(
         raise FileNotFoundError(f"Unread message not found: {message_id!r}")
 
     day = ack_day or date.today()
-    dest_dir = read_dir(store_path) / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+    dest_dir = (
+        read_dir(store_path) / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
+    )
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / src.name
     if dest.exists():

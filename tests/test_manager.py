@@ -79,7 +79,9 @@ def test_add_task_document_migrates_file_based(manager, monkeypatch):
     status_dir = manager.issues_root / "pending"
     status_dir.mkdir(parents=True, exist_ok=True)
     flat = status_dir / "flat-task.md"
-    flat.write_text("---\ncreated_at: 2026-01-01T00:00:00\n---\n\n# Flat Task\n\nBody\n")
+    flat.write_text(
+        "---\ncreated_at: 2026-01-01T00:00:00\n---\n\n# Flat Task\n\nBody\n"
+    )
     # Manually register in mission
     from taskagent.models.issue import Issue
 

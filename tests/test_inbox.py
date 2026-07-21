@@ -132,9 +132,7 @@ def test_gc_zero_retention_deletes_all_past(tmp_path):
     today_dir.mkdir(parents=True)
     (today_dir / "y.msg.md").write_text("---\nfrom: x\nkind: info\n---\n\n\n")
 
-    deleted = gc_inbox(
-        store, retention_days=0, today=date(2026, 7, 21), dry_run=False
-    )
+    deleted = gc_inbox(store, retention_days=0, today=date(2026, 7, 21), dry_run=False)
     assert any("2020/01/01" in p.replace("\\", "/") for p in deleted)
     # today == cutoff for retention 0 → keep
     assert today_dir.exists()

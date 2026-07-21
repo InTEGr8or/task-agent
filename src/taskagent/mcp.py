@@ -1,7 +1,8 @@
+import functools
 import os
 import subprocess
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 from mcp.server.fastmcp import FastMCP
 
 from taskagent.manager import TaskAgent
@@ -9,6 +10,8 @@ from taskagent.discovery import discover, get_task_agent_project_root
 
 # Create an MCP server
 mcp = FastMCP("TaskAgent")
+
+_F = TypeVar("_F", bound=Callable)
 
 
 def get_manager() -> TaskAgent:
@@ -104,6 +107,69 @@ def _maybe_prepend_strategy(manager: TaskAgent, response: str) -> str:
     return response
 
 
+def _maybe_attach_inbox_indicator(
+    response: str,
+    *,
+    tool_name: str = "",
+    manager: Optional[TaskAgent] = None,
+) -> str:
+    """Prepend an unread-inbox line to MCP tool output when the current store has mail.
+
+    Non-mutating (same as the CLI banner). Skips tools that are themselves the
+    full inbox list, to avoid double-noise; still shows after ack/send so the
+    remaining count is visible.
+    """
+    if not isinstance(response, str):
+        return response
+    # list_inbox already enumerates unread messages
+    if tool_name == "list_inbox":
+        return response
+    # Avoid recursive decoration noise if banner text is the whole answer
+    if response.lstrip().startswith("📬 Inbox"):
+        return response
+
+    try:
+        mgr = manager if manager is not None else get_manager()
+        store = getattr(mgr, "issues_root", None)
+        if not store:
+            return response
+        from taskagent.inbox import format_unread_banner, moniker_for_store
+
+        moniker = moniker_for_store(store)
+        banner = format_unread_banner(store, moniker=moniker)
+        if not banner:
+            return response
+        return f"{banner}\n\n{response}"
+    except Exception:
+        return response
+
+
+# Wrap every @mcp.tool() so string results get the inbox indicator automatically.
+_orig_mcp_tool = mcp.tool
+
+
+def _mcp_tool_with_inbox(*tool_args, **tool_kwargs):  # type: ignore[no-untyped-def]
+    """Decorator factory: same as FastMCP.tool, plus inbox banner on str results."""
+    register = _orig_mcp_tool(*tool_args, **tool_kwargs)
+
+    def decorator(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
+            result = fn(*args, **kwargs)
+            if isinstance(result, str):
+                return _maybe_attach_inbox_indicator(
+                    result, tool_name=getattr(fn, "__name__", "")
+                )
+            return result
+
+        return register(wrapper)  # type: ignore[return-value]
+
+    return decorator
+
+
+mcp.tool = _mcp_tool_with_inbox  # type: ignore[method-assign]
+
+
 @mcp.tool()
 def list_inbox(thread: str = "", repo: Optional[str] = None) -> str:
     """List unread inbox messages for the current (or target) store.
@@ -185,7 +251,12 @@ def send_inbox_message(
             thread=thr,
             task_snapshot=snapshot,
         )
-    except (RepoNotFoundError, AmbiguousRepoMatchError, ValueError, FileExistsError) as e:
+    except (
+        RepoNotFoundError,
+        AmbiguousRepoMatchError,
+        ValueError,
+        FileExistsError,
+    ) as e:
         return f"Error sending inbox message: {e}"
     return (
         f"Sent inbox message {msg.id} → {resolved.moniker} "
@@ -539,9 +610,7 @@ def add_task_document(
     manager = get_manager()
     slug = _resolve_slug(manager, name)
     try:
-        path = manager.add_task_document(
-            slug, filename, content, overwrite=overwrite
-        )
+        path = manager.add_task_document(slug, filename, content, overwrite=overwrite)
         return f"Added document '{path.name}' to task '{slug}' at {path}."
     except FileNotFoundError:
         return f"Task matching '{name}' ({slug}) not found."

@@ -372,7 +372,9 @@ def _git_repo_with_version(tmp_path, version: str = "1.0.0"):
     (repo / "pyproject.toml").write_text(
         f'[project]\nname = "demo"\nversion = "{version}"\n'
     )
-    subprocess.run(["git", "add", "pyproject.toml"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "add", "pyproject.toml"], cwd=repo, check=True, capture_output=True
+    )
     subprocess.run(
         ["git", "commit", "-m", "feat: initial"],
         cwd=repo,
@@ -394,7 +396,9 @@ def test_can_amend_when_local_only(tmp_path):
     bare = tmp_path / "remote.git"
     import subprocess
 
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+    )
     _git("remote", "add", "origin", str(bare), cwd=repo)
     _git("push", "-u", "origin", "HEAD", cwd=repo)
     ok2, reason2 = _can_amend_version_safely(repo)
@@ -438,7 +442,9 @@ def test_promote_new_commit_when_published(tmp_path, monkeypatch):
 
     repo = _git_repo_with_version(tmp_path, "1.0.0")
     bare = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+    )
     _git("remote", "add", "origin", str(bare), cwd=repo)
     _git("push", "-u", "origin", "HEAD", cwd=repo)
 

@@ -200,7 +200,10 @@ def _can_amend_version_safely(git_root: Path) -> Tuple[bool, str]:
     published (no remote contains it) and is not already tagged.
     """
     if _git_head_is_on_remote(git_root):
-        return False, "HEAD is already on a remote (amend would rewrite published history)"
+        return (
+            False,
+            "HEAD is already on a remote (amend would rewrite published history)",
+        )
     tags = _git_tags_pointing_at_head(git_root)
     if tags:
         return False, f"HEAD is already tagged ({', '.join(tags)})"
@@ -311,9 +314,7 @@ def _commit_version_bump(
                 err = (res.stderr or res.stdout or "").strip()
                 raise RuntimeError(f"git commit --amend failed: {err}")
             mode = "amend"
-            console.print(
-                f"[dim]Amended version {new_v} into HEAD ({reason})[/dim]"
-            )
+            console.print(f"[dim]Amended version {new_v} into HEAD ({reason})[/dim]")
         else:
             console.print(
                 f"[dim]Creating new release commit (cannot amend: {reason})[/dim]"
@@ -356,7 +357,9 @@ def _push_branch_and_tag(
     """
     if push_branch:
         # Resolve upstream; if missing, push HEAD to origin with current branch name
-        upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=git_root)
+        upstream = _git(
+            "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=git_root
+        )
         branch = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_root)
         branch_name = (branch.stdout or "").strip() or "HEAD"
 
@@ -440,8 +443,7 @@ def tag_project_version(
     committed_v, _ = get_committed_version(git_root)
     if committed_v == "unknown":
         raise RuntimeError(
-            "Could not read version from HEAD. "
-            "Run `ta version promote <part>` first."
+            "Could not read version from HEAD. Run `ta version promote <part>` first."
         )
 
     working_v, _ = get_project_version(project_root)
@@ -465,9 +467,7 @@ def tag_project_version(
             _git("rev-parse", existing, cwd=git_root).stdout.strip() or existing
         )
         if existing_full == head_full:
-            console.print(
-                f"[dim]Tag {tag_name} already points at HEAD[/dim]"
-            )
+            console.print(f"[dim]Tag {tag_name} already points at HEAD[/dim]")
         else:
             raise RuntimeError(
                 f"Tag {tag_name} already exists but points at {existing_full[:12]}, "
@@ -485,9 +485,7 @@ def tag_project_version(
         )
 
     if push:
-        _push_branch_and_tag(
-            console, git_root, tag_name, push_branch=push_branch
-        )
+        _push_branch_and_tag(console, git_root, tag_name, push_branch=push_branch)
     else:
         console.print(
             f"[dim]Skipped push. When ready: git push && git push origin {tag_name}[/dim]"
@@ -706,9 +704,7 @@ def render_issue(
     secondary_paths: List[Path] = []
     if manager is not None:
         try:
-            content = manager.format_task_details(
-                issue.slug, include_completed=True
-            )
+            content = manager.format_task_details(issue.slug, include_completed=True)
             secondary_paths = manager.list_secondary_documents(
                 issue.slug, include_completed=True
             )
@@ -1104,9 +1100,7 @@ def cmd_search(console: Console, manager: TaskAgent, pattern: str):
                     issue.slug, include_completed=(issue.status == "completed")
                 )
                 if issue_file:
-                    render_issue(
-                        console, issue, issue_file, issues, manager=manager
-                    )
+                    render_issue(console, issue, issue_file, issues, manager=manager)
                     console.print(
                         "[dim]Press 'e' to edit, 'q' to return to list.[/dim]"
                     )
@@ -1687,7 +1681,12 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
                 thread=thread,
                 task_snapshot=snapshot,
             )
-        except (RepoNotFoundError, AmbiguousRepoMatchError, ValueError, FileExistsError) as e:
+        except (
+            RepoNotFoundError,
+            AmbiguousRepoMatchError,
+            ValueError,
+            FileExistsError,
+        ) as e:
             console.print(f"[red]Send failed: {e}[/red]")
             return
         console.print(
@@ -1714,9 +1713,7 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
         if retention is None:
             retention = DEFAULT_RETENTION_DAYS
         dry = bool(getattr(args, "dry_run", False))
-        deleted = gc_inbox(
-            store, retention_days=int(retention), dry_run=dry
-        )
+        deleted = gc_inbox(store, retention_days=int(retention), dry_run=dry)
         if not deleted:
             console.print(
                 f"[dim]Inbox GC: nothing to remove "
@@ -4268,15 +4265,9 @@ def cmd_version(
         if release:
             # Atomic: bump+commit, then tag, then push branch+tag
             new_v = promote_project_version(console, release, allow_amend=True)
-            console.print(
-                f"[blue]Release {new_v}: tagging and pushing...[/blue]"
-            )
-            tag_project_version(
-                console, push=push, push_branch=push_branch
-            )
-            console.print(
-                f"[bold green]Release v{new_v} complete.[/bold green]"
-            )
+            console.print(f"[blue]Release {new_v}: tagging and pushing...[/blue]")
+            tag_project_version(console, push=push, push_branch=push_branch)
+            console.print(f"[bold green]Release v{new_v} complete.[/bold green]")
             return
 
         if promote:
@@ -4291,9 +4282,7 @@ def cmd_version(
             return
 
         if tag:
-            tag_name = tag_project_version(
-                console, push=push, push_branch=push_branch
-            )
+            tag_name = tag_project_version(console, push=push, push_branch=push_branch)
             console.print(
                 f"[dim]Tag {tag_name} is bound to the version in HEAD's project file.[/dim]"
             )
@@ -4901,9 +4890,7 @@ def cmd_triage(
                     issue.slug, include_completed=show_completed
                 )
                 if issue_file:
-                    render_issue(
-                        console, issue, issue_file, issues, manager=manager
-                    )
+                    render_issue(console, issue, issue_file, issues, manager=manager)
                 else:
                     console.print(f"[red]Issue file not found for {issue.slug}[/red]")
                 questionary.press_any_key_to_continue().ask()
