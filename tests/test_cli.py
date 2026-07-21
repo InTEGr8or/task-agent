@@ -578,6 +578,80 @@ def test_cmd_init_mcp_claude(tmp_path):
         assert "run" in call_args
 
 
+def test_agy_mcp_config_path_user_and_project(tmp_path, monkeypatch):
+    from taskagent.cli import _agy_mcp_config_path
+
+    monkeypatch.chdir(tmp_path)
+    assert _agy_mcp_config_path("project") == tmp_path.resolve() / ".agents" / "mcp_config.json"
+    user_path = _agy_mcp_config_path("user")
+    assert user_path == Path.home() / ".gemini" / "antigravity-cli" / "mcp_config.json"
+
+
+def test_merge_mcp_server_config_preserves_others(tmp_path):
+    from taskagent.cli import _merge_mcp_server_config
+    import json
+
+    config_path = tmp_path / "mcp_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {"other": {"command": "x", "args": []}},
+                "experimental": {"keep": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    _merge_mcp_server_config(
+        config_path,
+        "task_agent",
+        {"command": "uv", "args": ["run", "ta", "mcp"], "trust": True},
+    )
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    assert data["experimental"] == {"keep": True}
+    assert data["mcpServers"]["other"]["command"] == "x"
+    assert data["mcpServers"]["task_agent"]["command"] == "uv"
+    assert data["mcpServers"]["task_agent"]["trust"] is True
+
+
+def test_cmd_init_mcp_agy_project_scope(tmp_path, monkeypatch):
+    from taskagent.cli import cmd_init_mcp
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    console = Console(force_terminal=False)
+    cmd_init_mcp(console, agy=True, scope="project")
+
+    config_path = tmp_path / ".agents" / "mcp_config.json"
+    assert config_path.is_file()
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    entry = data["mcpServers"]["task_agent"]
+    assert entry["command"] == "uv"
+    assert entry["trust"] is True
+    assert "ta" in entry["args"]
+    assert "mcp" in entry["args"]
+    assert str(tmp_path.resolve()) in entry["args"]
+
+
+def test_cmd_init_mcp_agy_user_scope(tmp_path, monkeypatch):
+    from taskagent.cli import cmd_init_mcp
+    import json
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    # Also patch Path.home used as Path.home() — Path.home is a staticmethod
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    console = Console(force_terminal=False)
+    cmd_init_mcp(console, agy=True, scope="user")
+
+    config_path = fake_home / ".gemini" / "antigravity-cli" / "mcp_config.json"
+    assert config_path.is_file()
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "task_agent" in data["mcpServers"]
+    assert data["mcpServers"]["task_agent"]["command"] == "uv"
+
+
 def test_detect_current_slug_from_git():
     from unittest.mock import patch, MagicMock
     from taskagent.cli import detect_current_slug_from_git

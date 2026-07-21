@@ -32,6 +32,18 @@ To list all pending tasks:
 ta list
 ```
 
+### Agent CLI integration
+
+```bash
+ta init-mcp --claude    # Claude Code
+ta init-mcp --agy       # Antigravity CLI
+ta init-mcp --print     # dump MCP JSON
+```
+
+Portable Agent Skills (prefer the mission queue over host todos) live in
+[`skills/`](../skills/README.md) — copy or symlink into Claude / Antigravity
+skills paths.
+
 ## 📂 Project Structure
 
 Task Agent operates directly on your filesystem, primarily within the `docs/tasks/` directory.

@@ -4261,12 +4261,57 @@ def cmd_mcp():
 # ... (in imports)
 
 
+def _agy_mcp_config_path(scope: str = "user") -> Path:
+    """Return the Antigravity CLI mcp_config.json path for the given scope.
+
+    - user: ``~/.gemini/antigravity-cli/mcp_config.json`` (CLI app data)
+    - project: ``.agents/mcp_config.json`` under the current working directory
+    """
+    if scope == "project":
+        return Path.cwd().resolve() / ".agents" / "mcp_config.json"
+    return Path.home() / ".gemini" / "antigravity-cli" / "mcp_config.json"
+
+
+def _merge_mcp_server_config(
+    config_path: Path,
+    server_name: str,
+    server_entry: dict,
+) -> Path:
+    """Merge a single MCP server entry into an mcp_config.json file.
+
+    Creates parent directories and a minimal file when missing. Preserves
+    unrelated keys (e.g. experimental blocks) and other servers.
+    """
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            config = json.loads(raw) if raw else {}
+    else:
+        config = {}
+
+    if not isinstance(config, dict):
+        config = {}
+
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers[server_name] = server_entry
+    config["mcpServers"] = servers
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with config_path.open("w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+        f.write("\n")
+    return config_path
+
+
 def cmd_init_mcp(
     console: Console,
     agent: str = "gemini",
     print_json: bool = False,
     scope: str = "project",
     claude: bool = False,
+    agy: bool = False,
 ):
     """Register the Task Agent as an MCP server.
 
@@ -4317,6 +4362,32 @@ def cmd_init_mcp(
             console.print(
                 "[yellow]Make sure Claude Code CLI is installed and available in your PATH.[/yellow]"
             )
+        return
+
+    if agy:
+        # --agy defaults to user-global CLI config (HOME). Pass --scope project
+        # for workspace .agents/mcp_config.json. When callers omit --scope,
+        # main() maps agy → user (see init-mcp dispatch).
+        config_path = _agy_mcp_config_path(scope)
+        console.print(
+            f"[blue]Registering Task Agent MCP with Antigravity CLI "
+            f"({scope} → {config_path})...[/blue]"
+        )
+        server_entry = {
+            "command": mcp_command,
+            "args": mcp_args,
+            "trust": True,
+        }
+        try:
+            written = _merge_mcp_server_config(config_path, "task_agent", server_entry)
+            console.print(
+                f"[bold green]Successfully registered Task Agent MCP at {written}![/bold green]"
+            )
+            console.print(
+                "[dim]Restart agy or reload MCP if the server list was already cached.[/dim]"
+            )
+        except Exception as e:
+            console.print(f"[red]Failed to register Antigravity MCP server: {e}[/red]")
         return
 
     if agent == "gemini":
@@ -5725,12 +5796,23 @@ Start working on a task. This command automates the following workflow:
     # init-mcp
     init_mcp_parser = subparsers.add_parser(
         "init-mcp",
-        help="Register Task Agent as an MCP server (Claude Code, Gemini CLI, OpenCode)",
+        help=(
+            "Register Task Agent as an MCP server "
+            "(Claude Code, Antigravity/agy, Gemini CLI, OpenCode)"
+        ),
     )
     init_mcp_parser.add_argument(
         "--claude",
         action="store_true",
         help="Register with Claude Code (via 'claude mcp add')",
+    )
+    init_mcp_parser.add_argument(
+        "--agy",
+        action="store_true",
+        help=(
+            "Register with Antigravity CLI (writes mcp_config.json; "
+            "defaults to user scope ~/.gemini/antigravity-cli/)"
+        ),
     )
     init_mcp_parser.add_argument(
         "--agent",
@@ -5745,7 +5827,10 @@ Start working on a task. This command automates the following workflow:
         "--scope",
         choices=["project", "user"],
         default="project",
-        help="Registration scope (default: project)",
+        help=(
+            "Registration scope (default: project; for --agy, default becomes "
+            "user unless --scope is passed explicitly)"
+        ),
     )
 
     # plan
@@ -6338,12 +6423,18 @@ Usage:
     elif args.command == "mcp":
         cmd_mcp()
     elif args.command == "init-mcp":
+        # --agy prefers user-global CLI config unless the user passed --scope.
+        agy = bool(getattr(args, "agy", False))
+        scope = args.scope
+        if agy and "--scope" not in sys.argv:
+            scope = "user"
         cmd_init_mcp(
             console,
             agent=args.agent,
             print_json=args.print,
-            scope=args.scope,
+            scope=scope,
             claude=args.claude,
+            agy=agy,
         )
     elif args.command == "push":
         cmd_push(console, manager)

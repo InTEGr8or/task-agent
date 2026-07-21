@@ -27,6 +27,7 @@ To use the Task Agent MCP server in Claude Code:
 
 ```bash
 ta init-mcp --claude
+ta init-mcp --agy      # Antigravity CLI (~/.gemini/antigravity-cli/mcp_config.json)
 ```
 
 This registers the task-agent MCP server with Claude Code's local configuration. Verify it's working:
@@ -34,6 +35,9 @@ This registers the task-agent MCP server with Claude Code's local configuration.
 ```bash
 claude mcp list      # Should show task-agent connected ✔
 ```
+
+Portable Agent Skills (next-task, complete-task, mission-workflow) are under
+`skills/` — see `skills/README.md` for Claude / Antigravity install paths.
 
 ### Build & Test
 
