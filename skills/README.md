@@ -19,6 +19,7 @@ These skills wrap the existing **MCP** / **CLI** surface. They do not replace
 
 ```bash
 ta init-mcp --claude          # Claude Code
+ta init-mcp --copilot         # GitHub Copilot CLI (global)
 ta init-mcp --agy             # Antigravity CLI (agy)
 ta init-mcp --agent opencode  # OpenCode
 ta init-mcp --print           # dump JSON for manual config

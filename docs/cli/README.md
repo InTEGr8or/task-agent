@@ -76,6 +76,7 @@ Register Task Agent as an MCP server for agent CLIs.
 
 - **Flags**:
   - `--claude`: Register with Claude Code (`claude mcp add`)
+  - `--copilot`: Register globally with GitHub Copilot CLI (`copilot mcp add`)
   - `--agy`: Register with Antigravity CLI (`agy`) by writing `mcp_config.json`
   - `--agent {gemini,opencode}`: Gemini CLI or OpenCode (default: `gemini`)
   - `--scope {project,user}`: Config scope (default: `project`; with `--agy` alone, defaults to **user**)
@@ -86,6 +87,7 @@ Register Task Agent as an MCP server for agent CLIs.
 - **Examples**:
   ```bash
   ta init-mcp --claude
+  ta init-mcp --copilot
   ta init-mcp --agy
   ta init-mcp --agy --scope project
   ta init-mcp --agent opencode

@@ -36,6 +36,7 @@ ta list
 
 ```bash
 ta init-mcp --claude    # Claude Code
+ta init-mcp --copilot   # GitHub Copilot CLI (global)
 ta init-mcp --agy       # Antigravity CLI
 ta init-mcp --print     # dump MCP JSON
 ```
@@ -53,4 +54,3 @@ Task Agent operates directly on your filesystem, primarily within the `docs/task
 - `docs/tasks/draft/`: Tasks currently being refined.
 - `docs/tasks/active/`: Tasks currently being worked on.
 - `docs/tasks/completed/`: Historical record of finished work.
-

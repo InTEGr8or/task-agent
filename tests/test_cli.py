@@ -574,6 +574,23 @@ def test_cmd_init_mcp_claude(tmp_path):
         assert "run" in call_args
 
 
+def test_cmd_init_mcp_copilot():
+    from unittest.mock import MagicMock, patch
+    from taskagent.cli import cmd_init_mcp
+
+    console = Console()
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock()
+        cmd_init_mcp(console, copilot=True)
+
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args[:5] == ["copilot", "mcp", "add", "task_agent", "--"]
+        assert call_args[5] == "uv"
+        assert "run" in call_args
+
+
 def test_agy_mcp_config_path_user_and_project(tmp_path, monkeypatch):
     from taskagent.cli import _agy_mcp_config_path
 

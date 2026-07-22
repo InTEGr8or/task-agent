@@ -4310,6 +4310,7 @@ def cmd_init_mcp(
     scope: str = "project",
     claude: bool = False,
     agy: bool = False,
+    copilot: bool = False,
 ):
     """Register the Task Agent as an MCP server.
 
@@ -4359,6 +4360,34 @@ def cmd_init_mcp(
             console.print("[red]Error: 'claude' command not found.[/red]")
             console.print(
                 "[yellow]Make sure Claude Code CLI is installed and available in your PATH.[/yellow]"
+            )
+        return
+
+    if copilot:
+        console.print(
+            "[blue]Registering Task Agent MCP with GitHub Copilot globally...[/blue]"
+        )
+        try:
+            command = [
+                "copilot",
+                "mcp",
+                "add",
+                "task_agent",
+                "--",
+                mcp_command,
+            ] + mcp_args
+            subprocess.run(command, check=True, shell=(os.name == "nt"))
+            console.print(
+                "[bold green]Successfully registered Task Agent MCP with GitHub Copilot![/bold green]"
+            )
+        except subprocess.CalledProcessError as e:
+            console.print(
+                f"[red]Failed to register GitHub Copilot MCP server: {e}[/red]"
+            )
+        except FileNotFoundError:
+            console.print("[red]Error: 'copilot' command not found.[/red]")
+            console.print(
+                "[yellow]Make sure GitHub Copilot CLI is installed and available in your PATH.[/yellow]"
             )
         return
 
@@ -5796,13 +5825,18 @@ Start working on a task. This command automates the following workflow:
         "init-mcp",
         help=(
             "Register Task Agent as an MCP server "
-            "(Claude Code, Antigravity/agy, Gemini CLI, OpenCode)"
+            "(Claude Code, GitHub Copilot, Antigravity/agy, Gemini CLI, OpenCode)"
         ),
     )
     init_mcp_parser.add_argument(
         "--claude",
         action="store_true",
         help="Register with Claude Code (via 'claude mcp add')",
+    )
+    init_mcp_parser.add_argument(
+        "--copilot",
+        action="store_true",
+        help="Register globally with GitHub Copilot CLI (via 'copilot mcp add')",
     )
     init_mcp_parser.add_argument(
         "--agy",
@@ -6433,6 +6467,7 @@ Usage:
             scope=scope,
             claude=args.claude,
             agy=agy,
+            copilot=args.copilot,
         )
     elif args.command == "push":
         cmd_push(console, manager)
