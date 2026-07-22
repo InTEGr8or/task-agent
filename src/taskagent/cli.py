@@ -2412,30 +2412,45 @@ def cmd_store(console: Console, args) -> None:
         from taskagent.store_registry import (
             StoreSymlinkError,
             docs_tasks_symlink_status,
+            normalize_store_symlink_preference,
             set_docs_tasks_symlink,
         )
 
         action = getattr(args, "symlink_action", None)
         host = _store_host_from_args(console, args)
         if action in (None, "status"):
+            # Materialize the implicit store_symlink default once for opted-in
+            # hosts (those with an existing .ta-config.json). Inspecting status
+            # is exactly when a human would expect this self-heal to run; never
+            # creates .ta-config.json where none existed.
+            wrote_default = normalize_store_symlink_preference(host)
             st = docs_tasks_symlink_status(host)
             pref = "on" if st["preferred"] else "off"
             console.print(f"[bold]Host[/bold]:       {st['host_path']}")
             console.print(f"[bold]Preference[/bold]: symlink {pref} (.ta-config.json)")
-            console.print(f"[bold]docs/tasks[/bold]: {st['kind']}")
-            if st.get("target"):
-                console.print(f"[bold]Target[/bold]:     {st['target']}")
-            console.print(f"[bold]Store[/bold]:      {st.get('store_path') or '—'}")
-            if st["kind"] == "symlink":
-                ok = st.get("points_to_store")
+            if wrote_default:
                 console.print(
-                    f"[bold]Points to store[/bold]: "
-                    f"{'[green]yes[/green]' if ok else '[yellow]no[/yellow]'}"
+                    "[dim]note: persisted missing store_symlink default "
+                    "(true) to .ta-config.json[/dim]"
                 )
-            console.print(
-                f"[bold].gitignore[/bold]: "
-                f"{'docs/tasks listed' if st.get('gitignore_has_docs_tasks') else 'docs/tasks not listed'}"
-            )
+            console.print(f"[bold]Store[/bold]:      {st.get('store_path') or '—'}")
+            for p in st.get("paths") or []:
+                rel = p["rel"]
+                kind = p["kind"]
+                line = f"[bold]{rel}[/bold]: {kind}"
+                if p.get("target"):
+                    line += f" → {p['target']}"
+                if kind == "symlink":
+                    ok = p.get("points_to_store")
+                    line += (
+                        "  [green]points to store[/green]"
+                        if ok
+                        else "  [yellow]not store[/yellow]"
+                    )
+                gi = (st.get("gitignore_entries") or {}).get(rel)
+                if gi:
+                    line += "  [dim](gitignored)[/dim]"
+                console.print(line)
             console.print(
                 "\n[dim]Human convenience only — agents should use "
                 "[bold]ta store path[/bold] / MCP, not docs/tasks.[/dim]"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -840,3 +841,400 @@ def test_migrate_refuses_overwrite_existing_dest(tmp_path):
     assert "already exists" in result.message.lower()
     # Source untouched
     assert (host / ".task-agent" / "tasks" / ".task-agent" / "mission.usv").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: symlink on/off, gitignore, config normalization
+# ---------------------------------------------------------------------------
+
+
+def _make_store(host: Path) -> Path:
+    """Create a minimal task store under host/.task-agent/tasks."""
+    store = host / ".task-agent" / "tasks"
+    store.mkdir(parents=True)
+    (store / ".task-agent").mkdir()
+    (store / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nX\x1fx\x1f\n", encoding="utf-8"
+    )
+    (store / "pending").mkdir()
+    (store / "active").mkdir()
+    (store / "draft").mkdir()
+    (store / "completed").mkdir()
+    return store
+
+
+def _write_config(
+    host: Path, *, store_symlink: bool = True, moniker: str = "m"
+) -> None:
+    cfg = host / ".ta-config.json"
+    cfg.write_text(
+        json.dumps({"store_moniker": moniker, "store_symlink": store_symlink}, indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_gitignore(host: Path, lines: List[str]) -> None:
+    (host / ".gitignore").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# -- remove_gitignore_entry -------------------------------------------------
+
+
+def test_remove_gitignore_entry_removes_all_variants(tmp_path):
+    from taskagent.store_registry import remove_gitignore_entry
+
+    lines = [
+        "docs/tasks",
+        "/docs/tasks",
+        "docs/tasks/",
+        "/docs/tasks/",
+        "# task-agent: human-facing store symlink",
+        "/docs/tasks",
+        "other.txt",
+    ]
+    _write_gitignore(tmp_path, lines)
+    assert remove_gitignore_entry(tmp_path, "docs/tasks") is True
+    result = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/tasks" not in result
+    assert "other.txt" in result
+
+
+def test_remove_gitignore_entry_noop_when_absent(tmp_path):
+    from taskagent.store_registry import remove_gitignore_entry
+
+    assert remove_gitignore_entry(tmp_path, "docs/tasks") is False
+
+
+def test_remove_gitignore_entry_noop_when_no_match(tmp_path):
+    from taskagent.store_registry import remove_gitignore_entry
+
+    _write_gitignore(tmp_path, ["other.txt"])
+    assert remove_gitignore_entry(tmp_path, "docs/tasks") is False
+
+
+def test_remove_gitignore_entry_bracketed_comment_stripped(tmp_path):
+    from taskagent.store_registry import remove_gitignore_entry
+
+    lines = [
+        "# task-agent: human-facing store symlink",
+        "docs/tasks",
+        "keep-me",
+    ]
+    _write_gitignore(tmp_path, lines)
+    assert remove_gitignore_entry(tmp_path, "docs/tasks") is True
+    result = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "task-agent" not in result
+    assert "docs/tasks" not in result
+    assert "keep-me" in result
+
+
+# -- normalize_store_symlink_preference -------------------------------------
+
+
+def test_normalize_writes_default_when_config_exists_missing_key(tmp_path):
+    from taskagent.store_registry import normalize_store_symlink_preference
+
+    tmp_path.joinpath(".ta-config.json").write_text(
+        json.dumps({"store_moniker": "m"}) + "\n", encoding="utf-8"
+    )
+    assert normalize_store_symlink_preference(tmp_path) is True
+    cfg = json.loads(tmp_path.joinpath(".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is True
+
+
+def test_normalize_noop_when_key_already_present(tmp_path):
+    from taskagent.store_registry import normalize_store_symlink_preference
+
+    _write_config(tmp_path, store_symlink=False)
+    assert normalize_store_symlink_preference(tmp_path) is False
+    cfg = json.loads(tmp_path.joinpath(".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_normalize_does_not_create_config_file(tmp_path):
+    from taskagent.store_registry import normalize_store_symlink_preference
+
+    assert normalize_store_symlink_preference(tmp_path) is False
+    assert not (tmp_path / ".ta-config.json").exists()
+
+
+# -- _safe_resolve_moniker --------------------------------------------------
+
+
+def test_safe_resolve_moniker_returns_empty_on_no_repo(tmp_path):
+    from taskagent.store_registry import _safe_resolve_moniker
+
+    result = _safe_resolve_moniker(tmp_path)
+    assert isinstance(result, str)
+
+
+# -- _kind_of ----------------------------------------------------------------
+
+
+def test_kind_of_broken_symlink(tmp_path):
+    from taskagent.store_registry import _kind_of
+
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "nonexistent")
+    assert _kind_of(link) == "broken_symlink"
+
+
+def test_kind_of_valid_symlink(tmp_path):
+    from taskagent.store_registry import _kind_of
+
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    assert _kind_of(link) == "symlink"
+
+
+def test_kind_of_directory(tmp_path):
+    from taskagent.store_registry import _kind_of
+
+    d = tmp_path / "dir"
+    d.mkdir()
+    assert _kind_of(d) == "directory"
+
+
+def test_kind_of_absent(tmp_path):
+    from taskagent.store_registry import _kind_of
+
+    assert _kind_of(tmp_path / "nope") == "absent"
+
+
+# -- set_docs_tasks_symlink: off branch ------------------------------------
+
+
+def test_off_removes_own_symlink(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(store)
+    _write_config(tmp_path)
+
+    result = set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    assert result["enabled"] is False
+    assert not (docs / "tasks").exists()
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_off_refuses_foreign_symlink(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "tasks").mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(foreign / "tasks")
+    _write_config(tmp_path)
+
+    result = set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    assert (docs / "tasks").exists()
+    assert any("refused" in a for a in result["actions"])
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_off_store_unlocatable_foreign_symlink(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(foreign)
+    _write_config(tmp_path)
+
+    set_docs_tasks_symlink(tmp_path, enabled=False)
+    assert (docs / "tasks").exists()
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_off_writes_config_when_store_unlocatable_no_symlink(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    _write_config(tmp_path)
+    result = set_docs_tasks_symlink(tmp_path, enabled=False)
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+    assert result["store_path"] is None
+
+
+def test_off_mixed_outcomes(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(store)
+    docks = tmp_path / "docks"
+    docks.mkdir()
+    (docks / "tasks").symlink_to(foreign)
+    _write_config(tmp_path)
+
+    result = set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    assert not (docs / "tasks").exists()
+    assert (docks / "tasks").exists()
+    actions = " | ".join(result["actions"])
+    assert "removed symlink" in actions
+    assert "refused" in actions
+
+
+def test_off_strips_gitignore_all_variants(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(store)
+    _write_gitignore(tmp_path, ["/docs/tasks", "docks/tasks"])
+    _write_config(tmp_path)
+
+    set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    gi = (tmp_path / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/tasks" not in gi
+    assert "docks/tasks" in gi
+
+
+def test_off_handles_docks_and_dot_task_agent_symlinks(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    # Store lives outside the host so .task-agent/tasks can be a symlink
+    store = tmp_path / "real-store"
+    store.mkdir()
+    (store / ".task-agent").mkdir()
+    (store / ".task-agent" / "mission.usv").write_text(
+        "Name\x1fSlug\x1fDependencies\nX\x1fx\x1f\n", encoding="utf-8"
+    )
+    (store / "pending").mkdir()
+    (store / "active").mkdir()
+    (store / "draft").mkdir()
+    (store / "completed").mkdir()
+
+    # Create symlinks for all three paths
+    (tmp_path / "docks").mkdir()
+    (tmp_path / "docks" / "tasks").symlink_to(store)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "tasks").symlink_to(store)
+    (tmp_path / ".task-agent").mkdir()
+    (tmp_path / ".task-agent" / "tasks").symlink_to(store)
+    _write_config(tmp_path)
+
+    set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    assert not (tmp_path / "docks" / "tasks").exists()
+    assert not (tmp_path / ".task-agent" / "tasks").exists()
+    assert not (tmp_path / "docs" / "tasks").exists()
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_off_leaves_real_dir_in_place(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    real = docs / "tasks"
+    real.mkdir()
+    (real / "file.txt").write_text("x", encoding="utf-8")
+    _write_config(tmp_path)
+
+    result = set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    assert real.is_dir()
+    assert (real / "file.txt").exists()
+    assert any("left" in a for a in result["actions"])
+
+
+def test_off_then_discovery_does_not_recreate(tmp_path):
+    from taskagent.store_registry import (
+        normalize_store_symlink_preference,
+        set_docs_tasks_symlink,
+    )
+
+    store = _make_store(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(store)
+    _write_config(tmp_path)
+
+    set_docs_tasks_symlink(tmp_path, enabled=False, store_path=store)
+    normalize_store_symlink_preference(tmp_path)
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+# -- set_docs_tasks_symlink: on branch --------------------------------------
+
+
+def test_on_creates_symlink_for_docs_and_docks_only(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    _write_config(tmp_path, store_symlink=False)
+
+    set_docs_tasks_symlink(tmp_path, enabled=True, store_path=store)
+    assert (tmp_path / "docs" / "tasks").exists()
+    assert (tmp_path / "docs" / "tasks").resolve() == store.resolve()
+    assert (tmp_path / "docks" / "tasks").exists()
+    assert (tmp_path / "docks" / "tasks").resolve() == store.resolve()
+    assert not (tmp_path / ".task-agent" / "tasks").is_symlink()
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is True
+
+
+def test_on_does_not_touch_dot_task_agent_tasks(tmp_path):
+    from taskagent.store_registry import set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    _write_config(tmp_path, store_symlink=False)
+
+    set_docs_tasks_symlink(tmp_path, enabled=True, store_path=store)
+    dot_ta_tasks = tmp_path / ".task-agent" / "tasks"
+    # The store itself IS at .task-agent/tasks, but on should not create a symlink
+    assert not dot_ta_tasks.is_symlink()
+
+
+def test_on_preflight_aborts_before_mutation(tmp_path):
+    from taskagent.store_registry import StoreSymlinkError, set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    conflict = docs / "tasks"
+    conflict.mkdir()
+    (conflict / "file.txt").write_text("x", encoding="utf-8")
+    _write_config(tmp_path, store_symlink=False)
+
+    with pytest.raises(StoreSymlinkError, match="non-empty real directory"):
+        set_docs_tasks_symlink(tmp_path, enabled=True, store_path=store)
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False
+
+
+def test_on_foreign_symlink_raises_and_skips_config(tmp_path):
+    from taskagent.store_registry import StoreSymlinkError, set_docs_tasks_symlink
+
+    store = _make_store(tmp_path)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "tasks").mkdir()
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "tasks").symlink_to(foreign / "tasks")
+    _write_config(tmp_path, store_symlink=False)
+
+    with pytest.raises(StoreSymlinkError):
+        set_docs_tasks_symlink(tmp_path, enabled=True, store_path=store)
+    assert (docs / "tasks").exists()
+    cfg = json.loads((tmp_path / ".ta-config.json").read_text(encoding="utf-8"))
+    assert cfg["store_symlink"] is False

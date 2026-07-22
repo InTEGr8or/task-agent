@@ -763,63 +763,302 @@ def ensure_gitignore_entry(host_path: Path, entry: str = "docs/tasks") -> bool:
     return True
 
 
+def remove_gitignore_entry(host_path: Path, entry: str = "docs/tasks") -> bool:
+    """Remove ``entry`` from host ``.gitignore``. Returns True if anything was stripped.
+
+    Phase 1 (broad strip): removes every line matching ``entry`` variants
+    (``docs/tasks``, ``/docs/tasks``, ``docs/tasks/``, ``/docs/tasks/``), plus a
+    directly-preceding ``# task-agent: human-facing store symlink`` comment line
+    that bracketed a removed entry. Idempotent; no-op when ``.gitignore`` absent.
+
+    TODO(T-A): tighten to bracket-only mode — only strip entries sitting directly
+    beneath a task-agent comment marker. Broad strip is a deliberate one-release
+    bridge so existing installed bases (whose .gitignore entries predate the
+    bracketing convention) get cleaned up; once those are flushed, switch to
+    bracket-only removal so user-managed entries survive.
+    """
+    host = project_host_root(host_path)
+    gitignore = host / ".gitignore"
+    if not gitignore.is_file():
+        return False
+    line = entry.strip().strip("/")
+    patterns = {line, f"/{line}", f"{line}/", f"/{line}/"}
+    marker = "# task-agent: human-facing store symlink"
+    text = gitignore.read_text(encoding="utf-8")
+    raw_lines = text.splitlines()
+    kept: List[str] = []
+    changed = False
+    i = 0
+    while i < len(raw_lines):
+        cur = raw_lines[i]
+        cur_stripped = cur.strip()
+        # Recognize a task-agent bracket comment directly preceding a matching entry:
+        # drop the comment together with the entry.
+        if cur_stripped == marker and i + 1 < len(raw_lines):
+            nxt_stripped = raw_lines[i + 1].strip()
+            if nxt_stripped in patterns:
+                changed = True
+                i += 2  # skip comment + entry
+                continue
+        if cur_stripped in patterns:
+            changed = True
+            i += 1
+            continue
+        kept.append(cur)
+        i += 1
+    if not changed:
+        return False
+    # Preserve a trailing newline if the original had one.
+    new_text = "\n".join(kept)
+    if text.endswith("\n") and new_text:
+        new_text += "\n"
+    gitignore.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _gitignore_has_entry(host: Path, entry: str) -> bool:
+    gitignore = host / ".gitignore"
+    if not gitignore.is_file():
+        return False
+    existing = {ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()}
+    patterns = {entry, f"/{entry}", f"{entry}/", f"/{entry}/"}
+    return bool(existing & patterns)
+
+
+def normalize_store_symlink_preference(host_path: Path) -> bool:
+    """Materialize the implicit ``store_symlink=true`` default when a config exists.
+
+    Returns True iff a write actually happened. Never creates ``.ta-config.json``
+    where none existed — only fills in the missing key in an existing file, so
+    hosts that have not opted in stay untouched.
+
+    Safe to call from inspection entry points (e.g. ``ta store symlink status``);
+    wraps the write in try/except so a read failure can never break discovery.
+    """
+    host = project_host_root(host_path)
+    path = host / ".ta-config.json"
+    if not path.is_file():
+        return False
+    cfg = read_host_store_config(host)
+    if "store_symlink" in cfg:
+        return False
+    try:
+        write_host_store_config(host, store_symlink=True)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def _safe_resolve_moniker(host: Path) -> str:
+    """Resolve a moniker for the host without ever raising (returns "" on failure).
+
+    Used by ``set_docs_tasks_symlink`` so the durable config write can record the
+    moniker when one is cheaply available, but never abort the write when it is not.
+    """
+    try:
+        return resolve_moniker_for_host(host)[0] or ""
+    except Exception:
+        return ""
+
+
 class StoreSymlinkError(RuntimeError):
     """Raised when docs/tasks cannot safely become a store symlink."""
+
+
+# Host-side local task link paths task-agent recognizes for symlink management.
+#   off (cleanup):    all three — hygiene, all are candidates task-agent may have
+#                     created at some point.
+#   on  (creation):   only docs/tasks and docks/tasks — .task-agent/tasks is
+#                     vestigial (untracked + gitignored in cocli) and must not be
+#                     recreated. On-branch tuple lists docks first so any
+#                     alias-selection from ON_RELS naturally prefers docks,
+#                     matching discovery precedence.
+_LOCAL_TASK_LINK_RELS = (
+    Path("docs") / "tasks",
+    Path("docks") / "tasks",
+    Path(".task-agent") / "tasks",
+)
+_ON_TASK_LINK_RELS = (Path("docks") / "tasks", Path("docs") / "tasks")
+# Explicit precedence for legacy single-link alias selection in status output:
+# docks > docs > .task-agent, matching discovery.py's docks-preferred behavior.
+_ALIAS_PRECEDENCE = (
+    Path("docks") / "tasks",
+    Path("docs") / "tasks",
+    Path(".task-agent") / "tasks",
+)
 
 
 def docs_tasks_symlink_status(
     host_path: Path, store_path: Optional[Path] = None
 ) -> Dict[str, Any]:
-    """Describe docs/tasks symlink state for the host project."""
+    """Describe the task-agent local link state for the host project.
+
+    Reports every candidate path in ``_LOCAL_TASK_LINK_RELS``
+    (``docs/tasks``, ``docks/tasks``, ``.task-agent/tasks``) as a ``paths`` list.
+    Top-level ``kind`` / ``target`` / ``points_to_store`` are legacy aliases
+    selected by explicit docks > docs > .task-agent precedence (not tuple order),
+    matching discovery's docks-preferred behavior so callers that still read the
+    legacy fields see the same link discovery would actually use.
+    """
     host = project_host_root(host_path)
-    link = host / "docs" / "tasks"
     preferred = store_symlink_preferred(host)
     store = store_path
     if store is None:
-        report = inspect_host(host)
-        store = Path(report["canonical_store_path"])
-        if not store.is_dir() and report.get("legacy_store_path"):
-            store = Path(report["legacy_store_path"])
-
-    target: Optional[str] = None
-    kind = "absent"
-    points_to_store = False
-    if link.is_symlink():
-        kind = "symlink"
         try:
-            target = str(link.resolve())
-            if store is not None and store.is_dir():
-                points_to_store = Path(target).resolve() == store.resolve()
+            report = inspect_host(host)
+            cand = report.get("canonical_store_path")
+            if cand:
+                store = Path(cand)
+            if (
+                store is not None
+                and not store.is_dir()
+                and report.get("legacy_store_path")
+            ):
+                store = Path(report["legacy_store_path"])
+        except Exception:
+            store = None
+
+    store_resolved: Optional[Path] = None
+    if store is not None and store.exists():
+        try:
+            store_resolved = store.resolve()
         except OSError:
-            target = str(link.readlink())
-            kind = "broken_symlink"
-    elif link.is_dir():
-        kind = "directory"
-    elif link.is_file():
-        kind = "file"
-    elif link.exists():
-        kind = "other"
+            store_resolved = store
+
+    paths: List[Dict[str, Any]] = []
+    for rel in _LOCAL_TASK_LINK_RELS:
+        link = host / rel
+        rel_paths_entry: Dict[str, Any] = {
+            "rel": rel.as_posix(),
+            "link_path": str(link),
+            "kind": "absent",
+            "target": None,
+            "points_to_store": False,
+        }
+        if link.is_symlink():
+            rel_paths_entry["kind"] = "symlink"
+            try:
+                resolved = link.resolve()
+                rel_paths_entry["target"] = str(resolved)
+                if store_resolved is not None:
+                    try:
+                        rel_paths_entry["points_to_store"] = (
+                            resolved.resolve() == store_resolved
+                        )
+                    except OSError:
+                        rel_paths_entry["points_to_store"] = False
+            except OSError:
+                rel_paths_entry["kind"] = "broken_symlink"
+                try:
+                    rel_paths_entry["target"] = str(link.readlink())
+                except OSError:
+                    rel_paths_entry["target"] = None
+        elif link.is_dir():
+            rel_paths_entry["kind"] = "directory"
+        elif link.is_file():
+            rel_paths_entry["kind"] = "file"
+        elif link.exists():
+            rel_paths_entry["kind"] = "other"
+        paths.append(rel_paths_entry)
+
+    # Legacy alias: first present link by explicit docks > docs > .task-agent order.
+    alias: Optional[Dict[str, Any]] = None
+    for pref_rel in _ALIAS_PRECEDENCE:
+        for p in paths:
+            if p["rel"] == pref_rel.as_posix() and p["kind"] != "absent":
+                alias = p
+                break
+        if alias is not None:
+            break
 
     return {
         "host_path": str(host),
-        "link_path": str(link),
-        "kind": kind,
-        "target": target,
-        "store_path": str(store.resolve())
-        if store and store.exists()
-        else (str(store) if store else None),
-        "points_to_store": points_to_store,
+        "paths": paths,
+        "link_path": alias["link_path"] if alias else str(host / "docs" / "tasks"),
+        "kind": alias["kind"] if alias else "absent",
+        "target": alias["target"] if alias else None,
+        "store_path": str(store_resolved) if store_resolved is not None else None,
+        "points_to_store": alias["points_to_store"] if alias else False,
         "preferred": preferred,
-        "gitignore_has_docs_tasks": _gitignore_has_docs_tasks(host),
+        "gitignore_entries": {
+            rel.as_posix(): _gitignore_has_entry(host, rel.as_posix())
+            for rel in _LOCAL_TASK_LINK_RELS
+        },
+        # Deprecated: retained for older callers keyed on the docs/tasks entry only.
+        "gitignore_has_docs_tasks": _gitignore_has_entry(host, "docs/tasks"),
     }
 
 
-def _gitignore_has_docs_tasks(host: Path) -> bool:
-    gitignore = host / ".gitignore"
-    if not gitignore.is_file():
-        return False
-    existing = {ln.strip() for ln in gitignore.read_text(encoding="utf-8").splitlines()}
-    return bool(existing & {"docs/tasks", "/docs/tasks", "docs/tasks/", "/docs/tasks/"})
+def _resolve_store_for_link_management(
+    host: Path, store_path: Optional[Path]
+) -> tuple[Optional[Path], Dict[str, Any]]:
+    """Best-effort store resolution for symlink on/off.
+
+    Returns ``(store_or_None, report)``. ``report`` is preserved (especially the
+    ``moniker`` entry) even when ``store`` is None, using per-step ``.get()``
+    degradation so a single missing/malformed field does not wipe the rest.
+
+    On the off path, ``store is None`` is a *tolerable* state — the off branch
+    must never raise just because the store can't be located (that was the
+    original serialization bug this function had). On the on path it is a hard
+    error — ``on`` must point at something.
+    """
+    report: Dict[str, Any] = {}
+    store: Optional[Path] = store_path
+    try:
+        report = inspect_host(host)
+    except Exception:
+        report = {}
+    if store is None:
+        cand_str = report.get("canonical_store_path")
+        if cand_str:
+            cand = Path(cand_str)
+            if cand.is_dir():
+                store = cand
+        reg = report.get("registry_entry") or {}
+        reg_sp = reg.get("store_path")
+        if store is None and reg_sp:
+            cand2 = Path(reg_sp)
+            if cand2.is_dir():
+                store = cand2
+    if store is not None and not (store.is_dir() and looks_like_store(store)):
+        # fall back to legacy resolved path if still on host
+        try:
+            leg = detect_legacy_store(host)
+        except Exception:
+            leg = None
+        if leg is not None and looks_like_store(leg):
+            store = leg
+        else:
+            store = None
+    if store is not None:
+        store = store.resolve()
+    return store, report
+
+
+def _kind_of(link: Path) -> str:
+    """Categorize a host-side task link path.
+
+    A symlink is "broken" when its target does not exist. On Python 3.6+
+    ``Path.resolve(strict=False)`` (the default) does *not* raise on a dangling
+    symlink, so we detect broken-ness via ``link.exists()`` (which follows the
+    link). ``OSError`` from a symlink loop or permission error is also treated
+    as broken — the off-branch will then ``unlink`` it.
+    """
+    if link.is_symlink():
+        try:
+            if link.exists():  # follows the link to test the target
+                return "symlink"
+            return "broken_symlink"
+        except OSError:
+            return "broken_symlink"
+    if link.is_dir():
+        return "directory"
+    if link.is_file():
+        return "file"
+    if link.exists():
+        return "other"
+    return "absent"
 
 
 def set_docs_tasks_symlink(
@@ -828,121 +1067,168 @@ def set_docs_tasks_symlink(
     enabled: bool,
     store_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Turn the human-facing ``docs/tasks`` → store symlink on or off.
+    """Turn the task-agent host→store symlinks on or off.
 
-    - **on**: create/repair symlink; ensure ``docs/tasks`` is gitignored.
-      Fails with :class:`StoreSymlinkError` if a real file/dir is in the way.
-    - **off**: remove the symlink if it points at the store (or is broken);
-      leave a real user ``docs/tasks`` tree alone. Preference stored as false.
+    Manages the three host-side local task-link paths in
+    ``_LOCAL_TASK_LINK_RELS`` for **off** (cleanup): ``docs/tasks``,
+    ``docks/tasks``, ``.task-agent/tasks``. Only ``docs/tasks`` and
+    ``docks/tasks`` are managed by **on** — ``.task-agent/tasks`` is vestigial
+    (untracked + gitignored) and must not be recreated.
+
+    Invariants (see incident-ta-store-symlink-off-...):
+
+    1. The **off** branch never raises. Foreign/broken-store situations are
+       collected as refused actions and the loop continues. The durable
+       ``store_symlink=false`` config write is *unconditional* — nothing may
+       abort between link inspection and that write.
+    2. Foreign symlinks on **off** never raise. The loop records a refusal,
+       leaves the link in place, and continues to the next rel.
+    3. **on** is all-or-nothing on the filesystem. A two-pass pre-flight inspects
+       every rel for conflicts and raises ``StoreSymlinkError`` *before* any
+       mutation; pass 2 runs only if pass 1 was clean.
+    4. Neither branch ever moves store data. Only ``unlink``, symlink creation,
+       ``.gitignore`` writes, and ``.ta-config.json`` writes occur here.
 
     Does **not** delete the centralized store. Binding remains via moniker/registry.
     """
     host = project_host_root(host_path)
-    report = inspect_host(host)
-    store = store_path or Path(report["canonical_store_path"])
-    if report.get("registry_entry") and report["registry_entry"].get("store_path"):
-        cand = Path(report["registry_entry"]["store_path"])
-        if cand.is_dir():
-            store = cand
-    if not store.is_dir() or not looks_like_store(store):
-        # fall back to legacy resolved path if still on host
-        leg = detect_legacy_store(host)
-        if leg is not None and looks_like_store(leg):
-            store = leg
-        else:
-            raise StoreSymlinkError(
-                f"No task store found for {host}. "
-                "Run `ta store migrate` first, or ensure data-root store exists."
-            )
+    store, report = _resolve_store_for_link_management(host, store_path)
 
-    store = store.resolve()
-    link = host / "docs" / "tasks"
     actions: List[str] = []
+    rels = _ON_TASK_LINK_RELS if enabled else _LOCAL_TASK_LINK_RELS
 
     if enabled:
-        if link.is_symlink():
-            try:
-                current = link.resolve()
-            except OSError:
+        if store is None:
+            raise StoreSymlinkError(
+                f"Cannot turn symlink on: no task store located for {host}. "
+                "Run `ta store migrate` first, or ensure the data-root store exists."
+            )
+        # Pass 1: pre-flight, no mutation. Collect every rel's conflict so the
+        # user gets one complete error message listing all blockers, not just the
+        # first. Mutating nothing here is what makes on genuinely all-or-nothing.
+        conflicts: List[str] = []
+        for rel in rels:
+            link = host / rel
+            kind = _kind_of(link)
+            if kind == "broken_symlink":
+                continue  # pass 2 will repair it
+            if kind == "symlink":
+                try:
+                    current = link.resolve()
+                except OSError:
+                    continue
+                if current != store:
+                    conflicts.append(f"{link} → {current} (expected {store})")
+            elif kind == "directory":
+                if any(link.iterdir()):
+                    conflicts.append(f"{link} is a non-empty real directory")
+                # empty directory is OK; pass 2 will rmdir + symlink
+            elif kind == "file":
+                conflicts.append(f"{link} is a regular file")
+            elif kind == "other":
+                conflicts.append(f"{link} exists with an unexpected type")
+        if conflicts:
+            raise StoreSymlinkError(
+                "Conflicts prevent `ta store symlink on`:\n  - "
+                + "\n  - ".join(conflicts)
+                + "\nResolve manually, then re-run `ta store symlink on`."
+            )
+        # Pass 2: mutate. Guaranteed clean — no rel's mutation can fail on a
+        # foreign/conflict state because pass 1 already refused them.
+        for rel in rels:
+            link = host / rel
+            kind = _kind_of(link)
+            skip_create = False
+            if kind == "broken_symlink":
                 link.unlink()
                 actions.append(f"removed broken symlink {link}")
-            else:
-                if current == store:
-                    actions.append(f"symlink already correct: {link} → {store}")
+            elif kind == "symlink":
+                try:
+                    if link.resolve() == store:
+                        actions.append(f"symlink already correct: {link} → {store}")
+                        skip_create = True
+                    else:
+                        link.unlink()
+                        actions.append(f"removed foreign symlink {link}")
+                except OSError:
+                    link.unlink()
+                    actions.append(f"removed broken symlink {link}")
+            elif kind == "directory":
+                if any(link.iterdir()):
+                    # Should be unreachable post-pre-flight; defensive.
+                    actions.append(f"skipped non-empty {link}")
+                    skip_create = True
                 else:
-                    raise StoreSymlinkError(
-                        f"{link} is a symlink to {current}, not the task store "
-                        f"({store}). Remove or retarget it manually, then re-run "
-                        "`ta store symlink on`."
-                    )
-        elif link.is_dir():
-            if any(link.iterdir()):
-                raise StoreSymlinkError(
-                    f"{link} is a real directory with content (not a task-agent "
-                    "symlink). It may be your own docs. Move or rename it, then "
-                    "run `ta store symlink on` to create a symlink to the "
-                    f"centralized store at {store}."
-                )
-            link.rmdir()
-            actions.append(f"removed empty directory {link}")
-        elif link.is_file():
-            raise StoreSymlinkError(
-                f"{link} is a regular file, not a symlink. Move or rename it, "
-                "then run `ta store symlink on`."
-            )
-        elif link.exists():
-            raise StoreSymlinkError(
-                f"{link} exists and is not a symlink (type conflict). "
-                "Resolve manually, then re-run `ta store symlink on`."
-            )
-
-        if not link.exists() and not link.is_symlink():
-            link.parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(str(store), str(link))
-            actions.append(f"created symlink {link} → {store}")
-
-        if ensure_gitignore_entry(host, "docs/tasks"):
-            actions.append("added docs/tasks to .gitignore")
-        else:
-            actions.append("docs/tasks already in .gitignore")
-
-        moniker = report.get("moniker") or resolve_moniker_for_host(host)[0]
+                    link.rmdir()
+                    actions.append(f"removed empty directory {link}")
+            elif kind == "absent":
+                pass
+            else:  # file / other — unreachable post-pre-flight; defensive
+                actions.append(f"skipped {link} ({kind} at {rel})")
+                skip_create = True
+            if not skip_create:
+                link.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(str(store), str(link))
+                actions.append(f"created symlink {link} → {store}")
+            if ensure_gitignore_entry(host, rel.as_posix()):
+                actions.append(f"added {rel.as_posix()} to .gitignore")
+            else:
+                actions.append(f"{rel.as_posix()} already in .gitignore")
+        moniker = report.get("moniker") or _safe_resolve_moniker(host)
         write_host_store_config(host, moniker=moniker, store_symlink=True)
         actions.append("set store_symlink=true in .ta-config.json")
     else:
-        # off
-        if link.is_symlink():
-            try:
-                current = link.resolve()
-            except OSError:
+        # off — the serialization-invariant branch. Never raises.
+        for rel in rels:
+            link = host / rel
+            kind = _kind_of(link)
+            if kind == "broken_symlink":
                 link.unlink()
                 actions.append(f"removed broken symlink {link}")
-            else:
-                if current == store or not current.exists():
+                if remove_gitignore_entry(host, rel.as_posix()):
+                    actions.append(f"stripped {rel.as_posix()} from .gitignore")
+            elif kind == "symlink":
+                try:
+                    current = link.resolve()
+                except OSError:
+                    link.unlink()
+                    actions.append(f"removed broken symlink {link}")
+                    if remove_gitignore_entry(host, rel.as_posix()):
+                        actions.append(f"stripped {rel.as_posix()} from .gitignore")
+                    continue
+                if store is not None and current == store:
                     link.unlink()
                     actions.append(f"removed symlink {link}")
-                else:
-                    raise StoreSymlinkError(
-                        f"{link} points to {current}, not this project's store "
-                        f"({store}). Not removing a foreign symlink. "
-                        "Fix manually if needed."
+                    if remove_gitignore_entry(host, rel.as_posix()):
+                        actions.append(f"stripped {rel.as_posix()} from .gitignore")
+                elif store is not None and current != store:
+                    actions.append(
+                        f"refused foreign symlink {link} → {current} (expected {store})"
                     )
-        elif link.exists():
-            actions.append(f"left {link} in place (not a task-agent store symlink)")
-        else:
-            actions.append(f"{link} already absent")
-
-        moniker = report.get("moniker") or resolve_moniker_for_host(host)[0]
+                else:  # store is None
+                    actions.append(
+                        f"refused symlink {link}: store unlocatable; "
+                        "remove manually if trusted"
+                    )
+            elif kind == "directory" or kind == "file" or kind == "other":
+                actions.append(f"left {link} in place ({kind})")
+            else:  # absent
+                actions.append(f"{link} already absent")
+                # No .gitignore-strip for the absent case — nothing on disk
+                # indicates task-agent ever created a symlink here. Stripping
+                # an unbracketed user-managed entry would be unsafe; T-A will
+                # revisit bracketed vs. broad strip semantics separately.
+        moniker = report.get("moniker") or _safe_resolve_moniker(host)
         write_host_store_config(host, moniker=moniker, store_symlink=False)
         actions.append("set store_symlink=false in .ta-config.json")
 
     return {
         "enabled": enabled,
         "host_path": str(host),
-        "store_path": str(store),
-        "link_path": str(link),
+        "store_path": str(store) if store is not None else None,
+        "link_path": str(host / "docs" / "tasks"),
         "actions": actions,
-        "status": docs_tasks_symlink_status(host, store),
+        "status": docs_tasks_symlink_status(host, store if store is not None else None),
     }
 
 
