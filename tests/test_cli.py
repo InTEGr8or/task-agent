@@ -7,6 +7,7 @@ from taskagent.cli import (
     cmd_promote,
     cmd_show,
     cmd_document,
+    cmd_prompt,
     get_project_version,
     main,
 )
@@ -1004,3 +1005,138 @@ def test_cmd_triage_subtask_of(manager, monkeypatch):
 
     issue_t2_unlinked = manager.load_mission()[1]
     assert issue_t2_unlinked.subtask_of is None
+
+
+# ---------------------------------------------------------------------------
+# ta prompt tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def prompt_manager(tmp_path):
+    """Minimal manager fixture with an explicit task-root layout."""
+    issues_root = tmp_path / "docs" / "tasks"
+    for subdir in ["pending", "draft", "active", "completed"]:
+        (issues_root / subdir).mkdir(parents=True)
+    return TaskAgent(config_dir=str(issues_root))
+
+
+def _make_active_dir_task(manager, slug: str) -> None:
+    """Create an active directory task directly (bypasses mission.usv for speed)."""
+    task_dir = manager.issues_root / "active" / slug
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "README.md").write_text(f"# {slug}\n")
+
+
+def _make_pending_dir_task(manager, slug: str) -> None:
+    task_dir = manager.issues_root / "pending" / slug
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "README.md").write_text(f"# {slug}\n")
+
+
+class TestCmdPrompt:
+    """Tests for cmd_prompt — shell-integration one-liner."""
+
+    # --- no active task ---
+
+    def test_no_active_default_silent(self, prompt_manager, capsys):
+        cmd_prompt(prompt_manager, fmt="default")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
+
+    def test_no_active_text_silent(self, prompt_manager, capsys):
+        cmd_prompt(prompt_manager, fmt="text")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_no_active_json_outputs_null(self, prompt_manager, capsys):
+        import json
+
+        cmd_prompt(prompt_manager, fmt="json")
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data == {"active": None}
+
+    def test_no_active_json_with_pending(self, prompt_manager, capsys):
+        import json
+
+        _make_pending_dir_task(prompt_manager, "some-pending-task")
+        cmd_prompt(prompt_manager, fmt="json", pending_count=True)
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["active"] is None
+        assert data["pending"] == 1
+
+    # --- active task: default format ---
+
+    def test_active_default_format(self, prompt_manager, capsys):
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        cmd_prompt(prompt_manager, fmt="default")
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "[ta:my-active-task]"
+
+    def test_active_default_with_pending(self, prompt_manager, capsys):
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        _make_pending_dir_task(prompt_manager, "p1")
+        _make_pending_dir_task(prompt_manager, "p2")
+        cmd_prompt(prompt_manager, fmt="default", pending_count=True)
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "[ta:my-active-task +2]"
+
+    def test_active_default_without_pending_flag(self, prompt_manager, capsys):
+        """Pending count must NOT appear unless --pending is given."""
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        _make_pending_dir_task(prompt_manager, "p1")
+        cmd_prompt(prompt_manager, fmt="default", pending_count=False)
+        captured = capsys.readouterr()
+        assert "+1" not in captured.out
+
+    # --- active task: text format ---
+
+    def test_active_text_format(self, prompt_manager, capsys):
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        cmd_prompt(prompt_manager, fmt="text")
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "my-active-task"
+
+    def test_active_text_no_brackets(self, prompt_manager, capsys):
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        cmd_prompt(prompt_manager, fmt="text")
+        assert "[" not in capsys.readouterr().out
+
+    # --- active task: json format ---
+
+    def test_active_json_format(self, prompt_manager, capsys):
+        import json
+
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        cmd_prompt(prompt_manager, fmt="json")
+        data = json.loads(capsys.readouterr().out)
+        assert data == {"active": "my-active-task"}
+
+    def test_active_json_with_pending(self, prompt_manager, capsys):
+        import json
+
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        _make_pending_dir_task(prompt_manager, "p1")
+        cmd_prompt(prompt_manager, fmt="json", pending_count=True)
+        data = json.loads(capsys.readouterr().out)
+        assert data["active"] == "my-active-task"
+        assert data["pending"] == 1
+
+    def test_active_json_no_pending_key_by_default(self, prompt_manager, capsys):
+        import json
+
+        _make_active_dir_task(prompt_manager, "my-active-task")
+        cmd_prompt(prompt_manager, fmt="json", pending_count=False)
+        data = json.loads(capsys.readouterr().out)
+        assert "pending" not in data
+
+    # --- multi-active: uses first (alphabetical) slug ---
+
+    def test_multi_active_uses_first(self, prompt_manager, capsys):
+        _make_active_dir_task(prompt_manager, "aaa-task")
+        _make_active_dir_task(prompt_manager, "zzz-task")
+        cmd_prompt(prompt_manager, fmt="text")
+        assert capsys.readouterr().out.strip() == "aaa-task"

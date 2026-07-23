@@ -35,6 +35,18 @@ Marks a task as active.
 - Moves the task to the `active/` directory.
 - Supports partial slug matching.
 
+### `ta prompt`
+Prints a fast, lightweight one-liner for shell prompt integration (e.g. bash, zsh, Starship).
+- Reads task state directly from disk with sub-millisecond latency.
+- Exits 0 and prints nothing when no active task is present.
+- **Flags**:
+  - `--format {default,text,json}`: Output style (`default` → `[ta:slug]`, `text` → `slug`, `json` → `{"active":"slug"}`).
+  - `--pending`: Include count of pending tasks (e.g. `[ta:slug +3]`).
+- **Bash integration**:
+  ```bash
+  PS1='$(ta prompt) '$PS1
+  ```
+
 ### `ta done [slug]`
 Marks a task as completed.
 - **Flags**:

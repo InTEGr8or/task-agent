@@ -3764,6 +3764,69 @@ def cmd_demote(console: Console, manager: TaskAgent, slug_part: str):
         console.print(f"[red]Error: {e}[/red]")
 
 
+
+def cmd_prompt(
+    manager: TaskAgent,
+    fmt: str = "default",
+    pending_count: bool = False,
+) -> None:
+    """Print a compact one-liner of the active task, suitable for shell prompts.
+
+    Reads task state directly from the filesystem (no full mission parse, no
+    network) for sub-millisecond latency when embedded in a shell prompt.
+
+    Outputs nothing (and exits 0) when there is no active task, so the shell
+    prompt string stays clean.
+
+    Formats:
+      default   -- [ta:slug]  or  [ta:slug +N]  (with --pending)
+      text      -- slug only (machine-readable, whitespace-free)
+      json      -- {"active": "slug", "pending": N}  (omits pending key unless requested)
+    """
+    import json as _json
+
+    active_dir = manager.issues_root / "active"
+    active_slugs: List[str] = []
+    if active_dir.is_dir():
+        for entry in sorted(active_dir.iterdir()):
+            if entry.is_dir():
+                active_slugs.append(entry.name)
+            elif entry.suffix == ".md" and entry.stem != "README":
+                active_slugs.append(entry.stem)
+
+    pending_n: Optional[int] = None
+    if pending_count:
+        pending_dir = manager.issues_root / "pending"
+        if pending_dir.is_dir():
+            pending_n = sum(
+                1 for e in pending_dir.iterdir()
+                if e.is_dir() or (e.suffix == ".md" and e.stem != "README")
+            )
+
+    primary = active_slugs[0] if active_slugs else None
+
+    if fmt == "json":
+        obj: dict = {"active": primary}
+        if pending_count:
+            obj["pending"] = pending_n
+        print(_json.dumps(obj))
+        return
+
+    if fmt == "text":
+        if primary:
+            print(primary)
+        return
+
+    # default: shell-prompt fragment
+    if not primary:
+        return  # empty output — shell prompt stays clean
+
+    parts = [f"ta:{primary}"]
+    if pending_count and pending_n is not None:
+        parts.append(f"+{pending_n}")
+    print("[" + " ".join(parts) + "]")
+
+
 def cmd_active(
     console: Console,
     manager: TaskAgent,
@@ -5449,6 +5512,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("inbox", "Cross-store inbox: list / send / ack / gc"),
         ("ingest", "Scan disk for new markdown tasks"),
         ("triage", "(alias for prior)"),
+        ("prompt", "Print active task as a shell-prompt fragment (bash/zsh/Starship)"),
         ("", ""),  # Spacer
         ("init-worker", "Scaffold an autonomous sidecar worker"),
         ("init-mcp", "Register Task Agent MCP (Claude Code, Gemini CLI, etc.)"),
@@ -5740,6 +5804,29 @@ def main():
     )
     active_parser.add_argument(
         "slug", nargs="?", help="Optional slug of the task to mark as active"
+    )
+    prompt_parser = subparsers.add_parser(
+        "prompt",
+        help=(
+            "Print active task as a shell-prompt fragment — fast, no network, "
+            "suitable for $PROMPT_COMMAND or Starship custom modules"
+        ),
+    )
+    prompt_parser.add_argument(
+        "--format",
+        choices=["default", "text", "json"],
+        default="default",
+        help=(
+            "Output format: 'default' → [ta:slug], "
+            "'text' → slug only, "
+            "'json' → {\"active\":\"slug\"}"
+        ),
+    )
+    prompt_parser.add_argument(
+        "--pending",
+        action="store_true",
+        default=False,
+        help="Also include the count of pending tasks in the output",
     )
     update_parser = subparsers.add_parser(
         "update",
@@ -6368,10 +6455,16 @@ Usage:
         sys.exit(1)
 
     # Unread inbox banner (idempotent; never mutates). Skip noisy/server cmds.
-    if args.command not in ("mcp", "mcp-api", "version", "self-up", "init-mcp"):
+    if args.command not in ("mcp", "mcp-api", "version", "self-up", "init-mcp", "prompt"):
         maybe_show_inbox_banner(console, manager)
 
-    if args.command == "path":
+    if args.command == "prompt":
+        cmd_prompt(
+            manager,
+            fmt=getattr(args, "format", "default"),
+            pending_count=getattr(args, "pending", False),
+        )
+    elif args.command == "path":
         issue_file = manager.find_issue_file(args.slug)
         if issue_file:
             print(issue_file.absolute())
