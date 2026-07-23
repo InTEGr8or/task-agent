@@ -742,11 +742,22 @@ def add_task_document(
 
 @mcp.tool()
 def update_task(name: str, content: str) -> str:
-    """Update the Markdown content of a task.
+    """OVERWRITE the entire Markdown body of a task (destructive, not a patch).
+
+    This replaces the task's full body text. Frontmatter fields (created_at,
+    blocked_by, subtask_of) are merged, but everything else — problem
+    descriptions, plans, investigation notes, solution write-ups, metrics,
+    any prose the task contained — is gone and replaced by ``content``.
+
+    To ADD content without destroying the existing body, use
+    ``add_task_document`` instead (writes a separate .md file next to the
+    README), or call ``get_task_details`` first to read the current body and
+    include it in the new ``content``.
 
     Args:
         name: The title or partial name of the task to update.
         content: The new complete Markdown content for the task.
+            Must include the entire body — anything omitted is lost.
     """
     manager = get_manager()
     slug = _resolve_slug(manager, name)
