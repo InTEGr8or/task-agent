@@ -1286,9 +1286,6 @@ class TaskAgent:
         if solution_explanation:
             content += f"\n## Solution\n\n{solution_explanation}\n"
 
-        if metrics is not None:
-            content += "\n" + metrics.to_markdown()
-
         content += "\n---\n**Completed in commit:** `<pending-commit-id>`\n"
 
         # 3. Execute Move and USV update (Mission Repo)

@@ -245,8 +245,7 @@ def test_api_complete_issue_with_metrics(manager):
         / "metric-task"
     )
     readme = (task_dir / "README.md").read_text(encoding="utf-8")
-    assert "## Agent Metrics" in readme
-    assert "grok-4" in readme
+    assert "## Agent Metrics" not in readme
     assert "## Solution" in readme
 
     meta_path = task_dir / "meta.json"
