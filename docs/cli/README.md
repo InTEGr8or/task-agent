@@ -90,19 +90,20 @@ Register Task Agent as an MCP server for agent CLIs.
   - `--claude`: Register with Claude Code (`claude mcp add`)
   - `--copilot`: Register globally with GitHub Copilot CLI (`copilot mcp add`)
   - `--agy`: Register with Antigravity CLI (`agy`) by writing `mcp_config.json`
+  - `--opencode`: Register globally with OpenCode by writing `opencode.json`
   - `--agent {gemini,opencode}`: Gemini CLI or OpenCode (default: `gemini`)
-  - `--scope {project,user}`: Config scope (default: `project`; with `--agy` alone, defaults to **user**)
+  - `--scope {project,user}`: Config scope (default: `project`; for `--agy` and `--opencode`, defaults to **user**)
   - `--print`: Print MCP JSON instead of writing config
-- **Antigravity paths**:
-  - user: `~/.gemini/antigravity-cli/mcp_config.json`
-  - project: `.agents/mcp_config.json`
+- **Global / User paths**:
+  - Antigravity: `~/.gemini/antigravity-cli/mcp_config.json`
+  - OpenCode: `~/.config/opencode/opencode.json`
 - **Examples**:
   ```bash
   ta init-mcp --claude
   ta init-mcp --copilot
   ta init-mcp --agy
-  ta init-mcp --agy --scope project
-  ta init-mcp --agent opencode
+  ta init-mcp --opencode
+  ta init-mcp --opencode --scope project
   ta init-mcp --print
   ```
 

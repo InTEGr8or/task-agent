@@ -4389,12 +4389,16 @@ def cmd_init_mcp(
     claude: bool = False,
     agy: bool = False,
     copilot: bool = False,
+    opencode: bool = False,
 ):
     """Register the Task Agent as an MCP server.
 
     Uses ``uv run --project <root> ta mcp`` so the server can be spawned
     without the project's virtualenv being active in the calling shell.
     """
+    if opencode:
+        agent = "opencode"
+
     project_root = Path.cwd().resolve()
     mcp_command = "uv"
     mcp_args = ["run", "--project", str(project_root), "ta", "mcp"]
@@ -5949,6 +5953,14 @@ Start working on a task. This command automates the following workflow:
         ),
     )
     init_mcp_parser.add_argument(
+        "--opencode",
+        action="store_true",
+        help=(
+            "Register globally with OpenCode (writes opencode.json; "
+            "defaults to user scope ~/.config/opencode/opencode.json)"
+        ),
+    )
+    init_mcp_parser.add_argument(
         "--agent",
         choices=["gemini", "opencode"],
         default="gemini",
@@ -5962,7 +5974,7 @@ Start working on a task. This command automates the following workflow:
         choices=["project", "user"],
         default="project",
         help=(
-            "Registration scope (default: project; for --agy, default becomes "
+            "Registration scope (default: project; for --agy and OpenCode, default becomes "
             "user unless --scope is passed explicitly)"
         ),
     )
@@ -6570,19 +6582,22 @@ Usage:
     elif args.command == "mcp":
         cmd_mcp()
     elif args.command == "init-mcp":
-        # --agy prefers user-global CLI config unless the user passed --scope.
+        # --agy and OpenCode prefer user-global CLI config unless the user passed --scope.
         agy = bool(getattr(args, "agy", False))
+        opencode = bool(getattr(args, "opencode", False))
+        agent = "opencode" if opencode else args.agent
         scope = args.scope
-        if agy and "--scope" not in sys.argv:
+        if (agy or agent == "opencode") and "--scope" not in sys.argv:
             scope = "user"
         cmd_init_mcp(
             console,
-            agent=args.agent,
+            agent=agent,
             print_json=args.print,
             scope=scope,
             claude=args.claude,
             agy=agy,
             copilot=args.copilot,
+            opencode=opencode,
         )
     elif args.command == "push":
         cmd_push(console, manager)

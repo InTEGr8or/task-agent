@@ -669,6 +669,44 @@ def test_cmd_init_mcp_agy_user_scope(tmp_path, monkeypatch):
     assert data["mcpServers"]["task_agent"]["command"] == "uv"
 
 
+def test_cmd_init_mcp_opencode_user_scope(tmp_path, monkeypatch):
+    from taskagent.cli import cmd_init_mcp
+    import json
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    console = Console(force_terminal=False)
+    cmd_init_mcp(console, opencode=True, scope="user")
+
+    config_path = fake_home / ".config" / "opencode" / "opencode.json"
+    assert config_path.is_file()
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "mcp" in data
+    assert "task_agent" in data["mcp"]
+    assert data["mcp"]["task_agent"]["type"] == "local"
+    assert data["mcp"]["task_agent"]["command"][0] == "uv"
+
+
+def test_cmd_init_mcp_opencode_project_scope(tmp_path, monkeypatch):
+    from taskagent.cli import cmd_init_mcp
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    console = Console(force_terminal=False)
+    cmd_init_mcp(console, opencode=True, scope="project")
+
+    config_path = tmp_path / "opencode.json"
+    assert config_path.is_file()
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "mcp" in data
+    assert "task_agent" in data["mcp"]
+    assert data["mcp"]["task_agent"]["type"] == "local"
+
+
+
 def test_detect_current_slug_from_git():
     from unittest.mock import patch, MagicMock
     from taskagent.cli import detect_current_slug_from_git
