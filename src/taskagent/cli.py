@@ -3764,7 +3764,6 @@ def cmd_demote(console: Console, manager: TaskAgent, slug_part: str):
         console.print(f"[red]Error: {e}[/red]")
 
 
-
 def cmd_prompt(
     manager: TaskAgent,
     fmt: str = "default",
@@ -3799,7 +3798,8 @@ def cmd_prompt(
         pending_dir = manager.issues_root / "pending"
         if pending_dir.is_dir():
             pending_n = sum(
-                1 for e in pending_dir.iterdir()
+                1
+                for e in pending_dir.iterdir()
                 if e.is_dir() or (e.suffix == ".md" and e.stem != "README")
             )
 
@@ -5819,7 +5819,7 @@ def main():
         help=(
             "Output format: 'default' → [ta:slug], "
             "'text' → slug only, "
-            "'json' → {\"active\":\"slug\"}"
+            '\'json\' → {"active":"slug"}'
         ),
     )
     prompt_parser.add_argument(
@@ -6455,7 +6455,14 @@ Usage:
         sys.exit(1)
 
     # Unread inbox banner (idempotent; never mutates). Skip noisy/server cmds.
-    if args.command not in ("mcp", "mcp-api", "version", "self-up", "init-mcp", "prompt"):
+    if args.command not in (
+        "mcp",
+        "mcp-api",
+        "version",
+        "self-up",
+        "init-mcp",
+        "prompt",
+    ):
         maybe_show_inbox_banner(console, manager)
 
     if args.command == "prompt":

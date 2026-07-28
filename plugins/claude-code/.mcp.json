@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "task_agent": {
+      "command": "uv",
+      "args": ["run", "ta", "mcp"]
+    }
+  }
+}

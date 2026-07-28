@@ -41,9 +41,9 @@ ta init-mcp --agy       # Antigravity CLI
 ta init-mcp --print     # dump MCP JSON
 ```
 
-Portable Agent Skills (prefer the mission queue over host todos) live in
-[`skills/`](../skills/README.md) — copy or symlink into Claude / Antigravity
-skills paths.
+- **Claude Code Plugin:** Full plugin package (`.claude-plugin/plugin.json`, `.mcp.json`, `SessionStart` hooks, status line) is available in [`plugins/claude-code/`](../plugins/claude-code/README.md).
+- **Portable Agent Skills:** Skills (`skills/next-task`, `skills/complete-task`, `skills/mission-workflow`) live in [`skills/`](../skills/README.md).
+
 
 ## 📂 Project Structure
 
