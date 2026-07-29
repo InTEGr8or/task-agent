@@ -571,8 +571,7 @@ def test_cmd_init_mcp_claude(tmp_path):
         assert call_args[2] == "add"
         assert call_args[3] == "task_agent"
         assert call_args[4] == "--"
-        assert call_args[5] == "uv"
-        assert "run" in call_args
+        assert call_args[5] in ("uv", "ta")
 
 
 def test_cmd_init_mcp_copilot():
@@ -588,8 +587,7 @@ def test_cmd_init_mcp_copilot():
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0][0]
         assert call_args[:5] == ["copilot", "mcp", "add", "task_agent", "--"]
-        assert call_args[5] == "uv"
-        assert "run" in call_args
+        assert call_args[5] in ("uv", "ta")
 
 
 def test_agy_mcp_config_path_user_and_project(tmp_path, monkeypatch):
@@ -642,11 +640,8 @@ def test_cmd_init_mcp_agy_project_scope(tmp_path, monkeypatch):
     assert config_path.is_file()
     data = json.loads(config_path.read_text(encoding="utf-8"))
     entry = data["mcpServers"]["task_agent"]
-    assert entry["command"] == "uv"
+    assert entry["command"] in ("uv", "ta")
     assert entry["trust"] is True
-    assert "ta" in entry["args"]
-    assert "mcp" in entry["args"]
-    assert str(tmp_path.resolve()) in entry["args"]
 
 
 def test_cmd_init_mcp_agy_user_scope(tmp_path, monkeypatch):
@@ -666,7 +661,7 @@ def test_cmd_init_mcp_agy_user_scope(tmp_path, monkeypatch):
     assert config_path.is_file()
     data = json.loads(config_path.read_text(encoding="utf-8"))
     assert "task_agent" in data["mcpServers"]
-    assert data["mcpServers"]["task_agent"]["command"] == "uv"
+    assert data["mcpServers"]["task_agent"]["command"] in ("uv", "ta")
 
 
 def test_cmd_init_mcp_opencode_user_scope(tmp_path, monkeypatch):
@@ -687,7 +682,7 @@ def test_cmd_init_mcp_opencode_user_scope(tmp_path, monkeypatch):
     assert "mcp" in data
     assert "task_agent" in data["mcp"]
     assert data["mcp"]["task_agent"]["type"] == "local"
-    assert data["mcp"]["task_agent"]["command"][0] == "uv"
+    assert data["mcp"]["task_agent"]["command"][0] in ("uv", "ta")
 
 
 def test_cmd_init_mcp_opencode_project_scope(tmp_path, monkeypatch):

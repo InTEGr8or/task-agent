@@ -4604,11 +4604,7 @@ def cmd_init_plugin(
 
         elif target == "agy":
             dest = (
-                Path.home()
-                / ".gemini"
-                / "antigravity-cli"
-                / "plugins"
-                / "task-agent"
+                Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "task-agent"
             )
             dest.parent.mkdir(parents=True, exist_ok=True)
             if claude_plugin_src.is_dir():
