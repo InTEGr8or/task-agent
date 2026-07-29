@@ -4552,6 +4552,71 @@ def cmd_init_mcp(
             console.print(f"[red]Failed to register Task Agent MCP: {e}[/red]")
 
 
+def cmd_agents_list(
+    console: Console,
+    agent_id: Optional[str] = None,
+    json_format: bool = False,
+) -> None:
+    """Inspect local installation and MCP/plugin registration status for agent CLIs."""
+    from taskagent.agent_registry import inspect_agent_cli, inspect_all_agent_clis
+
+    if agent_id:
+        try:
+            results = [inspect_agent_cli(agent_id)]
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            return
+    else:
+        results = inspect_all_agent_clis()
+
+    if json_format:
+        import json as _json
+
+        print(_json.dumps(results, indent=2))
+        return
+
+    table = Table(
+        title="Agent CLI Registry & Local Integration Status", show_header=True
+    )
+    table.add_column("Agent CLI", style="cyan", no_wrap=True)
+    table.add_column("Binary", style="dim")
+    table.add_column("Installed", justify="center")
+    table.add_column("MCP Status", justify="center")
+    table.add_column("Plugin Status", justify="center")
+    table.add_column("Register Command", style="bold green")
+
+    for item in results:
+        installed_str = (
+            "[green]Yes[/green]" if item["installed"] else "[dim]No[/dim]"
+        )
+
+        if not item["mcp_support"]:
+            mcp_str = "[dim]N/A[/dim]"
+        elif item["mcp_registered"]:
+            mcp_str = "[green]Registered[/green]"
+        else:
+            mcp_str = "[yellow]Not registered[/yellow]"
+
+        if not item["plugin_support"]:
+            plugin_str = "[dim]N/A[/dim]"
+        elif item["plugin_installed"]:
+            plugin_str = "[green]Installed[/green]"
+        else:
+            plugin_str = "[dim]Not installed[/dim]"
+
+        cmd = item["mcp_command_example"] or ""
+        table.add_row(
+            item["name"],
+            item["binary"],
+            installed_str,
+            mcp_str,
+            plugin_str,
+            cmd,
+        )
+
+    console.print(table)
+
+
 def cmd_version(
     console: Console,
     promote: Optional[str] = None,
@@ -5979,6 +6044,23 @@ Start working on a task. This command automates the following workflow:
         ),
     )
 
+    # agents
+    agents_parser = subparsers.add_parser(
+        "agents",
+        help="Inspect installed agent CLIs and task-agent MCP/plugin integration status",
+    )
+    agents_parser.add_argument(
+        "agent_name",
+        nargs="?",
+        default=None,
+        help="Specific agent CLI ID to inspect (e.g. claude, agy, opencode, copilot)",
+    )
+    agents_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output inspection data as JSON",
+    )
+
     # plan
     subparsers.add_parser("plan", help="View or edit the project plan")
 
@@ -6599,6 +6681,8 @@ Usage:
             copilot=args.copilot,
             opencode=opencode,
         )
+    elif args.command == "agents":
+        cmd_agents_list(console, agent_id=args.agent_name, json_format=args.json)
     elif args.command == "push":
         cmd_push(console, manager)
     elif args.command == "plan":

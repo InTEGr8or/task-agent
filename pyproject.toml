@@ -53,5 +53,5 @@ replace = "version = \"{new_version}\""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=/tmp/pytest"
+
 

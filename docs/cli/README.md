@@ -107,6 +107,19 @@ Register Task Agent as an MCP server for agent CLIs.
   ta init-mcp --print
   ```
 
+### `ta agents`
+Inspect installed agent CLIs on the local system and their `task-agent` MCP/plugin integration status.
+
+- **Options**:
+  - `[agent_name]`: Optional specific agent CLI ID to inspect (e.g. `claude`, `agy`, `opencode`, `copilot`, `grok`, `cursor`)
+  - `--json`: Output inspection results as JSON
+- **Examples**:
+  ```bash
+  ta agents
+  ta agents claude
+  ta agents --json
+  ```
+
 ### Portable agent skills
 See [`skills/README.md`](../../skills/README.md) for SKILL.md packages
 (`next-task`, `complete-task`, `mission-workflow`) and host install paths.
