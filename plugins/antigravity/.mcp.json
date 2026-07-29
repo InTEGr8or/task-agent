@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "task_agent": {
+      "command": "ta",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

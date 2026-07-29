@@ -4567,6 +4567,7 @@ def cmd_init_plugin(
 
     repo_root = Path(__file__).parent.parent.parent
     claude_plugin_src = repo_root / "plugins" / "claude-code"
+    agy_plugin_src = repo_root / "plugins" / "antigravity"
 
     targets: List[str] = []
     if claude:
@@ -4607,12 +4608,13 @@ def cmd_init_plugin(
                 Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "task-agent"
             )
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if claude_plugin_src.is_dir():
+            src_dir = agy_plugin_src if agy_plugin_src.is_dir() else claude_plugin_src
+            if src_dir.is_dir():
                 import shutil
 
                 if dest.exists():
                     shutil.rmtree(dest)
-                shutil.copytree(claude_plugin_src, dest)
+                shutil.copytree(src_dir, dest)
                 console.print(
                     f"[bold green]Successfully installed Antigravity plugin at {dest}![/bold green]"
                 )

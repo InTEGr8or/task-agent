@@ -1,0 +1,19 @@
+{
+  "name": "task-agent",
+  "version": "0.1.0",
+  "description": "Task Agent plugin for Google Antigravity CLI (agy). Packages MCP server, portable skills, SessionStart queue context injection, rules, and status line.",
+  "author": {
+    "name": "Task Agent Team"
+  },
+  "homepage": "https://github.com/InTEGr8or/task-agent",
+  "repository": "https://github.com/InTEGr8or/task-agent",
+  "license": "MIT",
+  "keywords": [
+    "task-management",
+    "mcp",
+    "skills",
+    "rules",
+    "workflow",
+    "session-start"
+  ]
+}

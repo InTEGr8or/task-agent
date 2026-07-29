@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "${GEMINI_PLUGIN_DIR}/hooks/session_start.sh"
+      }
+    ]
+  }
+}
