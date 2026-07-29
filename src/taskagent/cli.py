@@ -4586,9 +4586,7 @@ def cmd_agents_list(
     table.add_column("Register Command", style="bold green")
 
     for item in results:
-        installed_str = (
-            "[green]Yes[/green]" if item["installed"] else "[dim]No[/dim]"
-        )
+        installed_str = "[green]Yes[/green]" if item["installed"] else "[dim]No[/dim]"
 
         if not item["mcp_support"]:
             mcp_str = "[dim]N/A[/dim]"

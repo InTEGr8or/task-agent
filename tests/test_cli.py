@@ -706,7 +706,6 @@ def test_cmd_init_mcp_opencode_project_scope(tmp_path, monkeypatch):
     assert data["mcp"]["task_agent"]["type"] == "local"
 
 
-
 def test_detect_current_slug_from_git():
     from unittest.mock import patch, MagicMock
     from taskagent.cli import detect_current_slug_from_git
