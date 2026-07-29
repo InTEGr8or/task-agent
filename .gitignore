@@ -5,8 +5,10 @@ opencode
 .envrc
 .code_signatures.json
 taskhash.json
-docs/tasks
 .gwt/
 taskhash
 .task-agent/
 .task-agent
+.pytest_cache/
+pytest-of-*/
+
