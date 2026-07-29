@@ -1135,7 +1135,7 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "1.0.36"
+version = "1.0.37"
 source = { editable = "." }
 dependencies = [
     { name = "githubkit" },
@@ -1159,7 +1159,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "githubkit", specifier = ">=0.15.5" },
-    { name = "mcp", specifier = ">=1.26.0" },
+    { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
