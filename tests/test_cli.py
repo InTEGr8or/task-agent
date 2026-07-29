@@ -706,6 +706,25 @@ def test_cmd_init_mcp_opencode_project_scope(tmp_path, monkeypatch):
     assert data["mcp"]["task_agent"]["type"] == "local"
 
 
+def test_cmd_init_plugin_claude(tmp_path, monkeypatch):
+    from taskagent.cli import cmd_init_plugin
+    from unittest.mock import MagicMock, patch
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    console = Console(force_terminal=False)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock()
+        cmd_init_plugin(console, claude=True)
+
+    plugin_dir = fake_home / ".claude" / "plugins" / "task-agent"
+    assert plugin_dir.is_dir()
+    assert (plugin_dir / ".claude-plugin" / "plugin.json").is_file()
+
+
 def test_detect_current_slug_from_git():
     from unittest.mock import patch, MagicMock
     from taskagent.cli import detect_current_slug_from_git

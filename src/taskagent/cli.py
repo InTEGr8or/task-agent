@@ -4400,8 +4400,12 @@ def cmd_init_mcp(
         agent = "opencode"
 
     project_root = Path.cwd().resolve()
-    mcp_command = "uv"
-    mcp_args = ["run", "--project", str(project_root), "ta", "mcp"]
+    if shutil.which("ta"):
+        mcp_command = "ta"
+        mcp_args = ["mcp"]
+    else:
+        mcp_command = "uv"
+        mcp_args = ["run", "--project", str(project_root), "ta", "mcp"]
 
     mcp_config = {
         "mcpServers": {
@@ -4550,6 +4554,76 @@ def cmd_init_mcp(
             )
         except Exception as e:
             console.print(f"[red]Failed to register Task Agent MCP: {e}[/red]")
+
+
+def cmd_init_plugin(
+    console: Console,
+    claude: bool = False,
+    agy: bool = False,
+    scope: str = "user",
+) -> None:
+    """Scaffold and register task-agent plugin, skills, and MCP server for host agent CLIs."""
+    from taskagent.agent_registry import inspect_all_agent_clis
+
+    repo_root = Path(__file__).parent.parent.parent
+    claude_plugin_src = repo_root / "plugins" / "claude-code"
+
+    targets: List[str] = []
+    if claude:
+        targets.append("claude")
+    if agy:
+        targets.append("agy")
+
+    if not targets:
+        # Auto-detect installed CLIs
+        installed = inspect_all_agent_clis()
+        for item in installed:
+            if item["installed"] and item["id"] in ("claude", "agy", "opencode"):
+                targets.append(item["id"])
+
+    if not targets:
+        console.print(
+            "[yellow]No supported agent CLIs detected or specified for plugin installation.[/yellow]"
+        )
+        return
+
+    for target in targets:
+        if target == "claude":
+            dest = Path.home() / ".claude" / "plugins" / "task-agent"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if claude_plugin_src.is_dir():
+                import shutil
+
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(claude_plugin_src, dest)
+                console.print(
+                    f"[bold green]Successfully installed Claude Code plugin at {dest}![/bold green]"
+                )
+            cmd_init_mcp(console, claude=True, scope=scope)
+
+        elif target == "agy":
+            dest = (
+                Path.home()
+                / ".gemini"
+                / "antigravity-cli"
+                / "plugins"
+                / "task-agent"
+            )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if claude_plugin_src.is_dir():
+                import shutil
+
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(claude_plugin_src, dest)
+                console.print(
+                    f"[bold green]Successfully installed Antigravity plugin at {dest}![/bold green]"
+                )
+            cmd_init_mcp(console, agy=True, scope=scope)
+
+        elif target == "opencode":
+            cmd_init_mcp(console, opencode=True, scope=scope)
 
 
 def cmd_agents_list(
@@ -6042,6 +6116,28 @@ Start working on a task. This command automates the following workflow:
         ),
     )
 
+    # init-plugin
+    init_plugin_parser = subparsers.add_parser(
+        "init-plugin",
+        help="Install task-agent plugin package, skills, and MCP server for host agent CLIs",
+    )
+    init_plugin_parser.add_argument(
+        "--claude",
+        action="store_true",
+        help="Install plugin package for Claude Code",
+    )
+    init_plugin_parser.add_argument(
+        "--agy",
+        action="store_true",
+        help="Install plugin package for Antigravity CLI",
+    )
+    init_plugin_parser.add_argument(
+        "--scope",
+        choices=["project", "user"],
+        default="user",
+        help="Installation scope (default: user)",
+    )
+
     # agents
     agents_parser = subparsers.add_parser(
         "agents",
@@ -6678,6 +6774,13 @@ Usage:
             agy=agy,
             copilot=args.copilot,
             opencode=opencode,
+        )
+    elif args.command == "init-plugin":
+        cmd_init_plugin(
+            console,
+            claude=args.claude,
+            agy=args.agy,
+            scope=args.scope,
         )
     elif args.command == "agents":
         cmd_agents_list(console, agent_id=args.agent_name, json_format=args.json)

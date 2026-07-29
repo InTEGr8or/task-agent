@@ -107,6 +107,20 @@ Register Task Agent as an MCP server for agent CLIs.
   ta init-mcp --print
   ```
 
+### `ta init-plugin`
+Scaffold and install the complete `task-agent` plugin package (MCP server configuration + `SessionStart` context hooks + status line helper + portable skills) for detected or specified host agent CLIs.
+
+- **Flags**:
+  - `--claude`: Install plugin package for Claude Code (`~/.claude/plugins/task-agent`)
+  - `--agy`: Install plugin package for Antigravity CLI (`~/.gemini/antigravity-cli/plugins/task-agent`)
+  - `--scope {project,user}`: Installation scope (default: `user`)
+- **Examples**:
+  ```bash
+  ta init-plugin             # Auto-detect installed CLIs and install plugins
+  ta init-plugin --claude
+  ta init-plugin --agy
+  ```
+
 ### `ta agents`
 Inspect installed agent CLIs on the local system and their `task-agent` MCP/plugin integration status.
 
