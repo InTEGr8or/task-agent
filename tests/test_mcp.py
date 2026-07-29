@@ -300,6 +300,26 @@ def test_mcp_add_task_document_error(mock_manager):
     assert "bad name" in result
 
 
+def test_mcp_add_task_document_with_repo(mock_manager, tmp_path):
+    with patch("taskagent.mcp.get_manager_for_repo") as mock_get_repo:
+        repo_mgr = MagicMock()
+        repo_mgr.slugify.return_value = "remote-task"
+        repo_mgr.resolve_issue_slug.return_value = None
+        dest = tmp_path / "drift.md"
+        repo_mgr.add_task_document.return_value = dest
+        mock_get_repo.return_value = repo_mgr
+
+        result = mcp.add_task_document(
+            "remote-task", "drift.md", "# Analysis", repo="stations"
+        )
+        assert "Added document" in result
+        assert "drift.md" in result
+        mock_get_repo.assert_called_once_with("stations")
+        repo_mgr.add_task_document.assert_called_once_with(
+            "remote-task", "drift.md", "# Analysis", overwrite=False
+        )
+
+
 def test_mcp_commit_repo_no_tasks_dir(mock_manager):
     mock_manager.issues_root = None
     result = mcp.commit_repo("msg")

@@ -715,6 +715,7 @@ def add_task_document(
     filename: str,
     content: str,
     overwrite: bool = False,
+    repo: Optional[str] = None,
 ) -> str:
     """Add a secondary Markdown document to a task directory.
 
@@ -728,8 +729,14 @@ def add_task_document(
             ``.md`` is appended if missing. Cannot be README.md.
         content: Full Markdown content to write.
         overwrite: If True, replace an existing document with the same name.
+        repo: Optional moniker/host fragment for another registered store
+            (zoxide-style fuzzy match). Omit to use the current project.
     """
-    manager = get_manager()
+    try:
+        manager = get_manager_for_repo(repo)
+    except Exception as e:
+        return f"Error resolving repo '{repo}': {e}"
+
     slug = _resolve_slug(manager, name)
     try:
         path = manager.add_task_document(slug, filename, content, overwrite=overwrite)
