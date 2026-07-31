@@ -1,6 +1,6 @@
 [project]
 name = "task-agent"
-version = "1.0.38"
+version = "1.0.39"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
 requires-python = ">=3.12"
