@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 from rich.console import Console
 
 
@@ -27,9 +26,7 @@ def test_cmd_init_plugin_agy(tmp_path, monkeypatch):
     console = Console(force_terminal=False)
     cmd_init_plugin(console, agy=True)
 
-    plugin_dir = (
-        fake_home / ".gemini" / "antigravity-cli" / "plugins" / "task-agent"
-    )
+    plugin_dir = fake_home / ".gemini" / "antigravity-cli" / "plugins" / "task-agent"
     assert plugin_dir.is_dir()
     assert (plugin_dir / ".gemini-plugin" / "plugin.json").is_file()
     assert (plugin_dir / "rules" / "task_agent.md").is_file()

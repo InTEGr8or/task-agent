@@ -190,12 +190,6 @@ def _github_token() -> Optional[str]:
         if tok:
             return tok
 
-    # User-local default matching AWS-style 1Password refs
-    default_ref = "op://Private/GitHub CLI Token/oauth_token"
-    tok = _read_op_secret(default_ref)
-    if tok:
-        return tok
-
     return _gh_auth_token()
 
 
@@ -370,16 +364,37 @@ class GitHubPlugin:
             github_config.get("token")
             or config.get("token")
             or os.environ.get("GITHUB_TOKEN")
+            or _github_token()
         )
         self.repo_full_name = github_config.get("repo") or config.get("repo")
 
-        if not self.token:
-            raise ValueError(
-                "GitHub token required. Set 'github.token' in config or GITHUB_TOKEN env var."
-            )
+        if not self.repo_full_name:
+            # Try to infer from git remote origin
+            try:
+                res = subprocess.run(
+                    ["git", "config", "--get", "remote.origin.url"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    shell=(os.name == "nt"),
+                )
+                url = res.stdout.strip()
+                parsed = _parse_github_origin(url)
+                if parsed:
+                    _, owner, repo = parsed
+                    self.repo_full_name = f"{owner}/{repo}"
+            except Exception:
+                pass
 
         if not self.repo_full_name:
-            raise ValueError("GitHub repo required. Set 'github.repo' in config.")
+            raise ValueError(
+                "GitHub repo required. Set 'github.repo' in config or ensure git remote 'origin' is a GitHub repo."
+            )
+
+        if not self.token:
+            raise ValueError(
+                "GitHub token required. Set 'github.token' in config, GITHUB_TOKEN env var, or run 'gh auth login'."
+            )
 
         self.github = GitHub(self.token)
 

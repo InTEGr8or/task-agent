@@ -994,19 +994,21 @@ def cmd_next(console: Console, manager: TaskAgent):
     render_issue(console, next_issue, issue_file, issues, manager=manager)
 
 
-def cmd_search(console: Console, manager: TaskAgent, pattern: str):
-    """Search for issues by slug pattern (case-insensitive fuzzy match)."""
+def normalize(s: str) -> str:
+    """Normalize pattern: remove dashes, punctuation, lowercase"""
     import re
 
-    # Normalize pattern: remove dashes, punctuation, lowercase
-    def normalize(s: str) -> str:
-        return re.sub(r"[^a-zA-Z0-9]", "", s).lower()
+    return re.sub(r"[^a-zA-Z0-9]", "", s).lower()
 
-    def fuzzy_match(slug: str, pattern: str) -> bool:
-        slug_clean = normalize(slug)
-        pat_clean = normalize(pattern)
-        return pat_clean in slug_clean or slug_clean.startswith(pat_clean)
 
+def fuzzy_match(slug: str, pattern: str) -> bool:
+    slug_clean = normalize(slug)
+    pat_clean = normalize(pattern)
+    return pat_clean in slug_clean or slug_clean.startswith(pat_clean)
+
+
+def cmd_search(console: Console, manager: TaskAgent, pattern: str):
+    """Search for issues by slug pattern (case-insensitive fuzzy match)."""
     pat_norm = normalize(pattern)
     if not pat_norm:
         console.print("[yellow]No pattern provided.[/yellow]")
@@ -3509,7 +3511,8 @@ def cmd_list(
             f"[yellow]{blocked_str}[/yellow]" if blocked_str else "",
             display_slug,
         )
-    console.print(table)
+    with console.pager(styles=True):
+        console.print(table)
 
 
 def _parse_created_at(manager: TaskAgent, slug: str) -> Optional[datetime]:
@@ -4984,22 +4987,37 @@ def cmd_github(console: Console, manager: TaskAgent, args):
         except Exception as e:
             console.print(f"[red]Error syncing: {e}[/red]")
 
-    elif args.github_command == "create":
+    elif args.github_command == "push":
         try:
-            issue = None
-            # Find the issue by slug
-            issue_file = manager.find_issue_file(args.slug)
+            # Fuzzy find the issue by slug
+            pat_norm = normalize(args.slug)
+            matches = [
+                i.slug for i in manager.load_mission() if fuzzy_match(i.slug, pat_norm)
+            ]
+            if not matches:
+                for _, completed_slug in manager.walk_completed():
+                    if fuzzy_match(completed_slug, pat_norm):
+                        matches.append(completed_slug)
+
+            if not matches:
+                console.print(f"[red]Issue '{args.slug}' not found[/red]")
+                return
+            if len(matches) > 1:
+                console.print(
+                    f"[red]Multiple issues match '{args.slug}'. Please be more specific.[/red]"
+                )
+                for m in matches:
+                    console.print(f"  - {m}")
+                return
+
+            args.slug = matches[0]
+            issue_file = manager.find_issue_file(args.slug, include_completed=True)
             if not issue_file:
                 console.print(f"[red]Issue '{args.slug}' not found[/red]")
                 return
 
             # Load issue details
-            content = (
-                issue_file.read_text()
-                if issue_file.name == "README.md"
-                else issue_file.read_text()
-            )
-            name = content.split("\n")[0].lstrip("#").strip()
+            name = manager.extract_title(issue_file)
 
             # Create GitHub issue
             from taskagent.models.issue import Issue
@@ -5012,7 +5030,7 @@ def cmd_github(console: Console, manager: TaskAgent, args):
         except Exception as e:
             console.print(f"[red]Error creating issue: {e}[/red]")
     else:
-        console.print("[yellow]Use 'sync' or 'create' subcommand[/yellow]")
+        console.print("[yellow]Use 'sync' or 'push' subcommand[/yellow]")
 
 
 def _copy_files_to_worktree(console: Console, worktree_path: Path, patterns: list):
@@ -5233,15 +5251,33 @@ def cmd_triage(
     # Map flat index to (issue, depth)
     indexed_issues = [(issue, depth) for issue, depth in hierarchy]
     cursor = 0
+    last_key = ""
 
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:
+            # Calculate viewport: reserve lines for title, header, help, borders
+            term_height = getattr(getattr(console, "size", None), "height", 24)
+            if not isinstance(term_height, int):
+                term_height = 24
+            # Table chrome: title(1) + header(1) + border lines(~4) + help subtitle(1) + panel border(2)
+            chrome_lines = 10
+            visible_rows = max(3, term_height - chrome_lines)
+
+            # Compute scroll offset to keep cursor visible
+            total = len(indexed_issues)
+            # Clamp scroll so cursor is always within the visible window
+            scroll_offset = max(0, min(cursor - visible_rows + 1, total - visible_rows))
+            scroll_offset = max(0, min(scroll_offset, cursor))
+            window_end = min(scroll_offset + visible_rows, total)
+
             # Render
             title = "[bold blue]Triage Mode[/bold blue]"
             if show_completed:
                 title = "[bold magenta]Triage Mode (COMPLETED)[/bold magenta]"
             if search_query:
                 title += f" [dim](Search: {search_query})[/dim]"
+            if total > visible_rows:
+                title += f" [dim]({scroll_offset + 1}-{window_end} of {total})[/dim]"
 
             table = Table(
                 title=title,
@@ -5255,7 +5291,8 @@ def cmd_triage(
             table.add_column("Status", width=10)
             table.add_column("Slug")
 
-            for idx, (issue, depth) in enumerate(indexed_issues):
+            for idx in range(scroll_offset, window_end):
+                issue, depth = indexed_issues[idx]
                 style = "bold cyan" if idx == cursor else "white"
                 indent = "  " * depth
                 prefix = "└─ " if depth > 0 else ""
@@ -5284,7 +5321,7 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | A: active | l: depends on above | h: unlink dep | /: search | y: copy slug | q: exit[/dim]"
+            help_text = "[dim]j/k: move | G/gg: bottom/top | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | A: active | l/h: link/unlink | /: search | y: copy | q: exit[/dim]"
 
             live.update(
                 Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
@@ -5292,11 +5329,25 @@ def cmd_triage(
 
             # Input
             key = get_key()
+            prev_key = last_key
+            last_key = ""
 
             if key in ["q", "\x1b"]:  # q, esc
                 break
             elif key == "\r":  # enter (return)
                 break
+            elif key == "G":  # shift+g: jump to bottom
+                cursor = len(indexed_issues) - 1
+            elif key == "g":  # gg: jump to top
+                if prev_key == "g":
+                    cursor = 0
+                else:
+                    last_key = "g"
+                continue
+            elif key in ["k", "\x1b[A"]:  # up
+                cursor = max(0, cursor - 1)
+            elif key in ["j", "\x1b[B"]:  # down
+                cursor = min(len(indexed_issues) - 1, cursor + 1)
             elif key == "/":
                 live.stop()
                 search_query = questionary.text("Search slug:").ask()
@@ -5316,10 +5367,7 @@ def cmd_triage(
                 issues = get_display_issues(search_query, show_completed)
                 indexed_issues = build_hierarchy(issues)
                 cursor = 0
-            elif key in ["k", "\x1b[A"]:  # up
-                cursor = max(0, cursor - 1)
-            elif key in ["j", "\x1b[B"]:  # down
-                cursor = min(len(indexed_issues) - 1, cursor + 1)
+
             elif key == "v":
                 live.stop()
                 issue = indexed_issues[cursor][0]
@@ -5922,10 +5970,8 @@ def main():
     sync_parser = github_sub.add_parser("sync", help="Import issues from GitHub")
     sync_parser.add_argument("--repo", help="Repository (owner/repo) override")
 
-    create_parser = github_sub.add_parser(
-        "create", help="Create GitHub issue from task"
-    )
-    create_parser.add_argument("slug", help="Task slug to create GitHub issue for")
+    push_parser = github_sub.add_parser("push", help="Push task to create GitHub issue")
+    push_parser.add_argument("slug", help="Task slug to push as GitHub issue")
 
     # Add other commands as needed
 

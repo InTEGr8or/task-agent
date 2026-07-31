@@ -12,3 +12,9 @@ taskhash
 .pytest_cache/
 pytest-of-*/
 
+
+# task-agent: human-facing store symlink
+docks/tasks
+
+# task-agent: human-facing store symlink
+docs/tasks
