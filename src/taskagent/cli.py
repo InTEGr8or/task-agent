@@ -3484,8 +3484,8 @@ def cmd_list(
         elif issue.status == "completed":
             status_style = "bold blue"
 
-        indent = "  " * depth
-        prefix = "└─ " if depth > 0 else ""
+        indent = "  " * (depth - 1) if depth > 1 else ""
+        prefix = "[dim cyan]└─[/dim cyan] " if depth > 0 else ""
         display_slug = f"{indent}{prefix}{issue.slug}"
         created_date = get_created_date(manager, issue.slug)
         # Shorten to MM-DD
@@ -5294,8 +5294,8 @@ def cmd_triage(
             for idx in range(scroll_offset, window_end):
                 issue, depth = indexed_issues[idx]
                 style = "bold cyan" if idx == cursor else "white"
-                indent = "  " * depth
-                prefix = "└─ " if depth > 0 else ""
+                indent = "  " * (depth - 1) if depth > 1 else ""
+                prefix = "[dim cyan]└─[/dim cyan] " if depth > 0 else ""
                 if idx == cursor:
                     display_slug = f"[reverse]{indent}{prefix}{issue.slug}[/reverse]"
                 else:
