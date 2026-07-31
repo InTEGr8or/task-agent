@@ -5297,9 +5297,9 @@ def cmd_triage(
                 indent = "  " * depth
                 prefix = "└─ " if depth > 0 else ""
                 if idx == cursor:
-                    display_slug = f"> [reverse]{indent}{prefix}{issue.slug}[/reverse]"
+                    display_slug = f"[reverse]{indent}{prefix}{issue.slug}[/reverse]"
                 else:
-                    display_slug = f"  {indent}{prefix}{issue.slug}"
+                    display_slug = f"{indent}{prefix}{issue.slug}"
 
                 status_style = "white"
                 if issue.status == "active":

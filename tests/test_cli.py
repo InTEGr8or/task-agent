@@ -1191,3 +1191,72 @@ class TestCmdPrompt:
         _make_active_dir_task(prompt_manager, "zzz-task")
         cmd_prompt(prompt_manager, fmt="text")
         assert capsys.readouterr().out.strip() == "aaa-task"
+
+
+def test_cmd_list_table_columns(manager, monkeypatch):
+    """Verify ta list table column structure and widths."""
+    from taskagent.cli import cmd_list
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Sample Task")
+
+    tables = []
+
+    def mock_print(table, *args, **kwargs):
+        if hasattr(table, "columns"):
+            tables.append(table)
+
+    mock_console = MagicMock()
+    mock_console.print = mock_print
+
+    cmd_list(mock_console, manager, output_format="table")
+
+    assert len(tables) == 1
+    cols = tables[0].columns
+    col_headers = [c.header for c in cols]
+    assert col_headers == ["Pri", "Date", "Status", "Blocked", "Slug"]
+
+    # Verify column specifications
+    assert cols[0].width == 3  # Pri
+    assert cols[1].width == 5  # Date
+    assert cols[2].width == 6  # Status
+    assert cols[3].width == 8  # Blocked
+
+
+def test_cmd_triage_table_columns(manager, monkeypatch):
+    """Verify ta prior / triage table column structure and widths."""
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Sample Task")
+
+    tables = []
+
+    def mock_update(panel, *args, **kwargs):
+        if hasattr(panel, "renderable") and hasattr(panel.renderable, "columns"):
+            tables.append(panel.renderable)
+
+    mock_live = MagicMock()
+    mock_live.update = mock_update
+
+    keys = ["q"]
+
+    def mock_get_key():
+        return keys.pop(0) if keys else "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live", return_value=mock_live),
+    ):
+        mock_live.__enter__.return_value = mock_live
+        cmd_triage(MagicMock(), manager)
+
+    assert len(tables) >= 1
+    cols = tables[0].columns
+    col_headers = [c.header for c in cols]
+    assert col_headers == ["Pos", "Created", "Status", "Slug"]
+
+    # Verify column specifications match design spec
+    assert cols[1].width == 16  # Created
+    assert cols[2].width == 10  # Status
+
