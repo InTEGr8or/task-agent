@@ -46,12 +46,28 @@ def _parse_name_list(names: str) -> list[str]:
 
 
 def _resolve_slug(manager: TaskAgent, name: str) -> str:
-    """Resolve title/slug query to a concrete task slug (supports retitled tasks)."""
+    """Resolve title/slug query to a concrete task slug (supports retitled tasks and cross-repo resolution)."""
     resolved = manager.resolve_issue_slug(name)
     if resolved:
         return resolved
-    # Fall back to slugify so error messages stay familiar for missing tasks
+    if manager.find_issue_file(name, include_completed=True):
+        return manager.slugify(name)
+
+    # Check other registered stores if not found in current manager
+    try:
+        from taskagent.store_registry import get_all_registered_managers
+
+        for _moniker, other_mgr in get_all_registered_managers():
+            r = other_mgr.resolve_issue_slug(name)
+            if r:
+                return r
+            if other_mgr.find_issue_file(name, include_completed=True):
+                return other_mgr.slugify(name)
+    except Exception:
+        pass
+
     return manager.slugify(name)
+
 
 
 def _normalize_relation_slugs(manager: TaskAgent, value: str) -> str:
@@ -342,13 +358,40 @@ def get_strategy() -> str:
 
 @mcp.tool()
 def list_tasks(repo: Optional[str] = None) -> str:
-    """List all tasks in the current project's mission queue.
+    """List all tasks in the current project's mission queue or across all registered stores.
 
     Tasks may have parent relationships (sub-task of) or ordering constraints (blocked by).
 
     Args:
-        repo: Optional moniker/host fragment for another registered store.
+        repo: Optional moniker/host fragment for another registered store, or "all" / "*" for all stores.
     """
+    if repo and repo.strip().lower() in ("all", "*"):
+        from taskagent.store_registry import get_all_registered_managers
+
+        all_managers = get_all_registered_managers()
+        if not all_managers:
+            return "No registered stores found."
+        sections = []
+        for moniker, mgr in all_managers:
+            try:
+                issues = mgr.sync_mission()
+            except Exception:
+                continue
+            if not issues:
+                sections.append(f"### Store: {moniker}\nNo tasks found in the queue.")
+            else:
+                lines = [f"### Store: {moniker}"]
+                for i in issues:
+                    deps_list = []
+                    if i.subtask_of:
+                        deps_list.append(f"subtask of: {i.subtask_of}")
+                    if i.blocked_by:
+                        deps_list.append(f"blocked by: {', '.join(i.blocked_by)}")
+                    deps = f" ({'; '.join(deps_list)})" if deps_list else ""
+                    lines.append(f"[{i.priority}] {i.status.upper()}: {i.name}{deps}")
+                sections.append("\n".join(lines))
+        return "\n\n".join(sections)
+
     try:
         manager = get_manager_for_repo(repo)
     except ValueError as e:
@@ -368,6 +411,7 @@ def list_tasks(repo: Optional[str] = None) -> str:
             lines.append(f"[{i.priority}] {i.status.upper()}: {i.name}{deps}")
         res = "\n".join(lines)
     return _maybe_prepend_strategy(manager, res)
+
 
 
 @mcp.tool()
@@ -593,29 +637,77 @@ def complete_task(
         return f"Error completing task: {e}"
 
 
-@mcp.tool()
-def search_task(name: str) -> str:
-    """Search for a task by title or partial name, including in completed tasks.
-
-    Matches current display title even when it differs from the slug (retitled tasks).
-
-    Args:
-        name: The title or partial name of the task to search for.
-    """
-    manager = get_manager()
+def _search_single_store(manager: TaskAgent, name: str, moniker: Optional[str] = None) -> str:
+    """Helper to search a single TaskAgent store for a task query."""
     slug = _resolve_slug(manager, name)
     issue_file = manager.find_issue_file(slug, include_completed=True)
     if not issue_file:
-        return f"Task matching '{name}' ({slug}) not found anywhere."
+        return f"Task matching '{name}' ({slug}) not found in {moniker or 'store'}."
 
-    # Determine status based on path
     status = "unknown"
     for s in ["pending", "draft", "active", "completed"]:
         if f"/{s}/" in str(issue_file.absolute()):
             status = s
             break
 
-    return f"Task '{slug}' found in [bold]{status}[/bold]. Location: {issue_file}"
+    prefix = f"Store '{moniker}': " if moniker else ""
+    return f"{prefix}Task '{slug}' found in [bold]{status}[/bold]. Location: {issue_file}"
+
+
+@mcp.tool()
+def search_task(name: str, repo: Optional[str] = None) -> str:
+    """Search for a task by title or partial name across one or all registered stores.
+
+    Matches current display title even when it differs from the slug (retitled tasks).
+
+    Args:
+        name: The title or partial name of the task to search for.
+        repo: Optional moniker/host fragment for a specific store, or "all" / "*" to search across all registered stores.
+            If omitted, searches current project first, then fans out across all registered stores.
+    """
+    if repo and repo.strip().lower() not in ("all", "*"):
+        try:
+            manager = get_manager_for_repo(repo)
+        except Exception as e:
+            return f"Error resolving repo '{repo}': {e}"
+        return _search_single_store(manager, name, moniker=repo)
+
+    # Fan-out search across registered stores
+    from taskagent.store_registry import get_all_registered_managers
+
+    all_managers = get_all_registered_managers()
+
+    results: list[str] = []
+    seen_paths: set[str] = set()
+
+    # Check current project manager first
+    try:
+        current_mgr = get_manager()
+        current_store_path = getattr(current_mgr, "issues_root", None)
+        if current_store_path:
+            seen_paths.add(str(current_store_path.resolve()))
+            from taskagent.inbox import moniker_for_store
+
+            current_moniker = moniker_for_store(current_store_path) or "current"
+            res = _search_single_store(current_mgr, name, moniker=current_moniker)
+            if "not found" not in res.lower():
+                results.append(res)
+    except Exception:
+        pass
+
+    for moniker, mgr in all_managers:
+        mgr_store_path = getattr(mgr, "issues_root", None)
+        if mgr_store_path and str(mgr_store_path.resolve()) not in seen_paths:
+            seen_paths.add(str(mgr_store_path.resolve()))
+            res = _search_single_store(mgr, name, moniker=moniker)
+            if "not found" not in res.lower():
+                results.append(res)
+
+    if not results:
+        return f"Task matching '{name}' not found in any registered store."
+
+    return "\n\n".join(results)
+
 
 
 @mcp.tool()

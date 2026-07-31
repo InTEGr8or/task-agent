@@ -2440,6 +2440,30 @@ def manager_for_repo_query(
     return TaskAgent(config_dir=str(resolved.store_path)), resolved
 
 
+def get_all_registered_managers(
+    data_root: Optional[Path] = None,
+) -> list[tuple[str, Any]]:
+    """Return a list of ``(moniker, TaskAgent)`` pairs for all registered stores in the machine registry.
+
+    Safely skips any store directory that fails to open or read.
+    """
+    from taskagent.manager import TaskAgent
+
+    root = data_root if data_root is not None else get_data_root()
+    reg = MachineRegistry(root)
+    entries = reg.load()
+    results: list[tuple[str, Any]] = []
+
+    for moniker in sorted(entries.keys()):
+        try:
+            mgr, _ = manager_for_repo_query(moniker, data_root=root)
+            results.append((moniker, mgr))
+        except Exception:
+            continue
+    return results
+
+
+
 def rebind_store_moniker(
     host_path: Path,
     new_moniker: Optional[str] = None,

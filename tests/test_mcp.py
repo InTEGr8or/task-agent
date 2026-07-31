@@ -620,6 +620,68 @@ def test_mcp_rename_task(monkeypatch):
     assert result == "Successfully renamed task to 'new-title' (New Title)."
 
 
+def test_mcp_list_tasks_fan_out(monkeypatch):
+    class ManagerA(_SlugManager):
+        def sync_mission(self):
+            return [Issue(name="Task A", slug="task-a", status="pending", priority=1)]
+
+    class ManagerB(_SlugManager):
+        def sync_mission(self):
+            return [Issue(name="Task B", slug="task-b", status="active", priority=1)]
+
+    monkeypatch.setattr(
+        "taskagent.store_registry.get_all_registered_managers",
+        lambda: [("repo-a", ManagerA()), ("repo-b", ManagerB())],
+    )
+
+    result = mcp.list_tasks(repo="all")
+    assert "### Store: repo-a" in result
+    assert "PENDING: Task A" in result
+    assert "### Store: repo-b" in result
+    assert "ACTIVE: Task B" in result
+
+
+def test_mcp_search_task_fan_out(tmp_path, monkeypatch):
+    store_a = tmp_path / "store-a"
+    (store_a / "pending" / "target-task").mkdir(parents=True)
+    (store_a / "pending" / "target-task" / "README.md").write_text("# Target Task\n")
+
+    class ManagerA(_SlugManager):
+        issues_root = store_a
+
+    class ManagerB(_SlugManager):
+        issues_root = tmp_path / "store-b"
+
+    monkeypatch.setattr(
+        "taskagent.store_registry.get_all_registered_managers",
+        lambda: [("repo-a", ManagerA()), ("repo-b", ManagerB())],
+    )
+    monkeypatch.setattr(mcp, "get_manager", lambda: ManagerB())
+
+    result = mcp.search_task("target-task")
+    assert "Store 'repo-a': Task 'target-task' found in pending" in result
+
+
+def test_mcp_fan_out_resilient_to_store_failure(monkeypatch):
+    class FailingManager:
+        def sync_mission(self):
+            raise RuntimeError("Database corrupted")
+
+    class GoodManager(_SlugManager):
+        def sync_mission(self):
+            return [Issue(name="Good Task", slug="good-task", status="pending", priority=1)]
+
+    monkeypatch.setattr(
+        "taskagent.store_registry.get_all_registered_managers",
+        lambda: [("broken-repo", FailingManager()), ("good-repo", GoodManager())],
+    )
+
+    result = mcp.list_tasks(repo="all")
+    assert "### Store: good-repo" in result
+    assert "PENDING: Good Task" in result
+
+
+
 def test_mcp_all_tools_registered():
     import asyncio
 
