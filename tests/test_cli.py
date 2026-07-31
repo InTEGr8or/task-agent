@@ -1196,7 +1196,7 @@ class TestCmdPrompt:
 def test_cmd_list_table_columns(manager, monkeypatch):
     """Verify ta list table column structure and widths."""
     from taskagent.cli import cmd_list
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     manager.create_issue("Sample Task")
 
@@ -1254,9 +1254,8 @@ def test_cmd_triage_table_columns(manager, monkeypatch):
     assert len(tables) >= 1
     cols = tables[0].columns
     col_headers = [c.header for c in cols]
-    assert col_headers == ["Pos", "Created", "Status", "Slug"]
+    assert col_headers == ["Pos", "Date", "Status", "Slug"]
 
     # Verify column specifications match design spec
-    assert cols[1].width == 16  # Created
+    assert cols[1].width == 5  # Date
     assert cols[2].width == 10  # Status
-

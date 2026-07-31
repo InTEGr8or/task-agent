@@ -5287,7 +5287,7 @@ def cmd_triage(
                 padding=theme.table_padding,
             )
             table.add_column("Pos", justify="right", style="dim")
-            table.add_column("Created", style="dim", width=16)
+            table.add_column("Date", style="dim", width=5)
             table.add_column("Status", width=10)
             table.add_column("Slug")
 
@@ -5312,6 +5312,8 @@ def cmd_triage(
                     status_style = "bold blue"
 
                 created_date = get_created_date(manager, issue.slug)
+                if len(created_date) >= 10:
+                    created_date = created_date[5:10]
 
                 table.add_row(
                     str(idx + 1) if not show_completed else "-",
