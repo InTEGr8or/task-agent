@@ -47,27 +47,26 @@ def _parse_name_list(names: str) -> list[str]:
 
 def _resolve_slug(manager: TaskAgent, name: str) -> str:
     """Resolve title/slug query to a concrete task slug (supports retitled tasks and cross-repo resolution)."""
-    resolved = manager.resolve_issue_slug(name)
-    if resolved:
-        return resolved
-    if manager.find_issue_file(name, include_completed=True):
-        return manager.slugify(name)
+    if hasattr(manager, "resolve_issue_slug"):
+        resolved = manager.resolve_issue_slug(name)
+        if resolved:
+            return resolved
 
     # Check other registered stores if not found in current manager
     try:
         from taskagent.store_registry import get_all_registered_managers
 
         for _moniker, other_mgr in get_all_registered_managers():
-            r = other_mgr.resolve_issue_slug(name)
-            if r:
-                return r
-            if other_mgr.find_issue_file(name, include_completed=True):
-                return other_mgr.slugify(name)
+            if hasattr(other_mgr, "resolve_issue_slug"):
+                r = other_mgr.resolve_issue_slug(name)
+                if r:
+                    return r
     except Exception:
         pass
 
-    return manager.slugify(name)
-
+    if hasattr(manager, "slugify"):
+        return manager.slugify(name)
+    return name.lower().replace(" ", "-")
 
 
 def _normalize_relation_slugs(manager: TaskAgent, value: str) -> str:
@@ -413,7 +412,6 @@ def list_tasks(repo: Optional[str] = None) -> str:
     return _maybe_prepend_strategy(manager, res)
 
 
-
 @mcp.tool()
 def list_active_tasks() -> str:
     """List only the currently active tasks in the mission queue."""
@@ -637,7 +635,9 @@ def complete_task(
         return f"Error completing task: {e}"
 
 
-def _search_single_store(manager: TaskAgent, name: str, moniker: Optional[str] = None) -> str:
+def _search_single_store(
+    manager: TaskAgent, name: str, moniker: Optional[str] = None
+) -> str:
     """Helper to search a single TaskAgent store for a task query."""
     slug = _resolve_slug(manager, name)
     issue_file = manager.find_issue_file(slug, include_completed=True)
@@ -651,7 +651,9 @@ def _search_single_store(manager: TaskAgent, name: str, moniker: Optional[str] =
             break
 
     prefix = f"Store '{moniker}': " if moniker else ""
-    return f"{prefix}Task '{slug}' found in [bold]{status}[/bold]. Location: {issue_file}"
+    return (
+        f"{prefix}Task '{slug}' found in [bold]{status}[/bold]. Location: {issue_file}"
+    )
 
 
 @mcp.tool()
@@ -709,7 +711,6 @@ def search_task(name: str, repo: Optional[str] = None) -> str:
     return "\n\n".join(results)
 
 
-
 @mcp.tool()
 def rename_task(name: str, new_title: str) -> str:
     """Rename a task slug and update its title, directory, and references across the project.
@@ -728,7 +729,6 @@ def rename_task(name: str, new_title: str) -> str:
 
 
 @mcp.tool()
-
 def restore_task(name: str, status: str = "pending") -> str:
     """Restore a completed task back to pending, draft, or active status.
 

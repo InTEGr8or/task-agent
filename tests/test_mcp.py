@@ -642,24 +642,28 @@ def test_mcp_list_tasks_fan_out(monkeypatch):
 
 
 def test_mcp_search_task_fan_out(tmp_path, monkeypatch):
+    from taskagent.manager import TaskAgent
+
     store_a = tmp_path / "store-a"
     (store_a / "pending" / "target-task").mkdir(parents=True)
     (store_a / "pending" / "target-task" / "README.md").write_text("# Target Task\n")
 
-    class ManagerA(_SlugManager):
-        issues_root = store_a
+    store_b = tmp_path / "store-b"
+    for sub in ["pending", "draft", "active", "completed"]:
+        (store_b / sub).mkdir(parents=True)
 
-    class ManagerB(_SlugManager):
-        issues_root = tmp_path / "store-b"
+    mgr_a = TaskAgent(config_dir=str(store_a))
+    mgr_b = TaskAgent(config_dir=str(store_b))
 
     monkeypatch.setattr(
         "taskagent.store_registry.get_all_registered_managers",
-        lambda: [("repo-a", ManagerA()), ("repo-b", ManagerB())],
+        lambda: [("repo-a", mgr_a), ("repo-b", mgr_b)],
     )
-    monkeypatch.setattr(mcp, "get_manager", lambda: ManagerB())
+    monkeypatch.setattr(mcp, "get_manager", lambda: mgr_b)
 
     result = mcp.search_task("target-task")
-    assert "Store 'repo-a': Task 'target-task' found in pending" in result
+    assert "Store 'repo-a': Task 'target-task' found in" in result
+    assert "[bold]pending[/bold]" in result
 
 
 def test_mcp_fan_out_resilient_to_store_failure(monkeypatch):
@@ -669,7 +673,9 @@ def test_mcp_fan_out_resilient_to_store_failure(monkeypatch):
 
     class GoodManager(_SlugManager):
         def sync_mission(self):
-            return [Issue(name="Good Task", slug="good-task", status="pending", priority=1)]
+            return [
+                Issue(name="Good Task", slug="good-task", status="pending", priority=1)
+            ]
 
     monkeypatch.setattr(
         "taskagent.store_registry.get_all_registered_managers",
@@ -681,7 +687,6 @@ def test_mcp_fan_out_resilient_to_store_failure(monkeypatch):
     assert "PENDING: Good Task" in result
 
 
-
 def test_mcp_all_tools_registered():
     import asyncio
 
@@ -691,4 +696,3 @@ def test_mcp_all_tools_registered():
         f"Missing: {EXPECTED_TOOLS - registered}, "
         f"Unexpected: {registered - EXPECTED_TOOLS}"
     )
-

@@ -1860,7 +1860,9 @@ class TaskAgent:
                 new_subtask_of = None
 
                 if actual_old_slug in blocked_by:
-                    new_blocked_by = [new_slug if b == actual_old_slug else b for b in blocked_by]
+                    new_blocked_by = [
+                        new_slug if b == actual_old_slug else b for b in blocked_by
+                    ]
                     needs_update = True
                 if subtask_of == actual_old_slug:
                     new_subtask_of = new_slug
@@ -1870,8 +1872,12 @@ class TaskAgent:
                     self._set_writable(task_file, True)
                     updated_content = TaskAgent._write_frontmatter_edges(
                         file_content,
-                        blocked_by=new_blocked_by if actual_old_slug in blocked_by else None,
-                        subtask_of=new_subtask_of if subtask_of == actual_old_slug else None,
+                        blocked_by=new_blocked_by
+                        if actual_old_slug in blocked_by
+                        else None,
+                        subtask_of=new_subtask_of
+                        if subtask_of == actual_old_slug
+                        else None,
                     )
                     task_file.write_text(updated_content, encoding="utf-8")
 
@@ -1882,7 +1888,9 @@ class TaskAgent:
                 i.slug = new_slug
                 i.name = new_title.strip()
             if actual_old_slug in i.blocked_by:
-                i.blocked_by = [new_slug if b == actual_old_slug else b for b in i.blocked_by]
+                i.blocked_by = [
+                    new_slug if b == actual_old_slug else b for b in i.blocked_by
+                ]
             if i.subtask_of == actual_old_slug:
                 i.subtask_of = new_slug
 
@@ -1906,7 +1914,6 @@ class TaskAgent:
             slug=new_slug,
             status=status,
         )
-
 
     # --- Secondary task documents (siblings of README.md) ---
 

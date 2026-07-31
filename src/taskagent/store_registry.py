@@ -2447,7 +2447,6 @@ def get_all_registered_managers(
 
     Safely skips any store directory that fails to open or read.
     """
-    from taskagent.manager import TaskAgent
 
     root = data_root if data_root is not None else get_data_root()
     reg = MachineRegistry(root)
@@ -2461,7 +2460,6 @@ def get_all_registered_managers(
         except Exception:
             continue
     return results
-
 
 
 def rebind_store_moniker(

@@ -1215,10 +1215,14 @@ def test_rename_issue_updates_directory_title_and_references(manager):
     assert "# Brand New Name" in content
 
     # Subtask and blocker references updated
-    child_content = (manager.issues_root / "pending" / "child-task" / "README.md").read_text(encoding="utf-8")
+    child_content = (
+        manager.issues_root / "pending" / "child-task" / "README.md"
+    ).read_text(encoding="utf-8")
     assert "subtask_of: brand-new-name" in child_content
 
-    dep_content = (manager.issues_root / "pending" / "dependent-task" / "README.md").read_text(encoding="utf-8")
+    dep_content = (
+        manager.issues_root / "pending" / "dependent-task" / "README.md"
+    ).read_text(encoding="utf-8")
     assert "blocked_by: brand-new-name" in dep_content
 
     # Index (mission.usv) updated
@@ -1244,4 +1248,3 @@ def test_rename_issue_validation(manager):
     # Empty title fails
     with pytest.raises(ValueError, match="empty"):
         manager.rename_issue("task-one", "")
-

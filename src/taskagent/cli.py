@@ -3567,7 +3567,6 @@ def cmd_rename(
         sys.exit(1)
 
 
-
 def cmd_start(
     console: Console,
     manager: TaskAgent,
@@ -5629,7 +5628,6 @@ def main():
         help="New title for the task (generates the new slug)",
     )
     start_parser = subparsers.add_parser(
-
         "start",
         help="Activate a task and set up its git worktree/branch",
         description="""

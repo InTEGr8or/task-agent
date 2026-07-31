@@ -1277,4 +1277,3 @@ def test_cmd_rename(manager):
     assert manager.find_issue_file("original-slug-task") is None
     mock_console.print.assert_called_once()
     assert "renamed-slug-task" in mock_console.print.call_args[0][0]
-
