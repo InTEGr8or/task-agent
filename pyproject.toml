@@ -16,7 +16,7 @@ dependencies = [
     "questionary>=2.1.1",
     "rich>=13.9.4",
     "githubkit>=0.15.5",
-    "verkit>=0.1.2",
+    "verkit>=0.1.4",
 ]
 
 [project.scripts]
@@ -54,5 +54,8 @@ replace = "version = \"{new_version}\""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+verkit = { path = "/home/mstouffer/repos/verkit" }
 
 

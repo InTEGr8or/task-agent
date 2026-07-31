@@ -1166,7 +1166,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "questionary", specifier = ">=2.1.1" },
     { name = "rich", specifier = ">=13.9.4" },
-    { name = "verkit", specifier = ">=0.1.2" },
+    { name = "verkit", directory = "/home/mstouffer/repos/verkit" },
 ]
 
 [package.metadata.requires-dev]
@@ -1223,15 +1223,14 @@ wheels = [
 
 [[package]]
 name = "verkit"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.4"
+source = { directory = "/home/mstouffer/repos/verkit" }
 dependencies = [
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/4a/231410fed49fe1fe4c1c3d32cb98355668df3607a0b340e1d8368f73c94a/verkit-0.1.2.tar.gz", hash = "sha256:cc44c782092992890898d7c5dc529afd142e2a893c31e3538a3919f0fb28831c", size = 9030, upload-time = "2026-07-31T14:14:53.567Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/d9/292ec256c8c1e1f9df252bc2e14ce18c0352e7280295a440f251bdec340e/verkit-0.1.2-py3-none-any.whl", hash = "sha256:de783f9be06b6cb365f53a6493a0a62c79945e6e576fa0cbc9b296b9f7d8d05d", size = 9149, upload-time = "2026-07-31T14:14:52.342Z" },
-]
+
+[package.metadata]
+requires-dist = [{ name = "rich", specifier = ">=10.0.0" }]
 
 [[package]]
 name = "virtualenv"
