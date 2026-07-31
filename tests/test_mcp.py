@@ -598,6 +598,7 @@ EXPECTED_TOOLS = {
     "set_task_parent",
     "bulk_set_task_blocked_by",
     "bulk_set_task_parent",
+    "rename_task",
     "commit_repo",
     "commit_tasks",
     "get_strategy",
@@ -605,6 +606,18 @@ EXPECTED_TOOLS = {
     "send_inbox_message",
     "ack_inbox",
 }
+
+
+def test_mcp_rename_task(monkeypatch):
+    class DummyManager(_SlugManager):
+        def rename_issue(self, old_slug, new_title):
+            assert old_slug == "old-slug"
+            assert new_title == "New Title"
+            return Issue(name="New Title", slug="new-title", status="pending")
+
+    monkeypatch.setattr(mcp, "get_manager", lambda: DummyManager())
+    result = mcp.rename_task("Old Slug", "New Title")
+    assert result == "Successfully renamed task to 'new-title' (New Title)."
 
 
 def test_mcp_all_tools_registered():
@@ -616,3 +629,4 @@ def test_mcp_all_tools_registered():
         f"Missing: {EXPECTED_TOOLS - registered}, "
         f"Unexpected: {registered - EXPECTED_TOOLS}"
     )
+

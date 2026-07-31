@@ -3550,6 +3550,24 @@ def cmd_update(
         sys.exit(1)
 
 
+def cmd_rename(
+    console: Console,
+    manager: TaskAgent,
+    old_slug: str,
+    new_title: str,
+):
+    """Rename a task slug and title."""
+    try:
+        issue = manager.rename_issue(old_slug, new_title)
+        console.print(
+            f"[bold green]Successfully renamed task to '{issue.slug}' ({issue.name}).[/bold green]"
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+
 def cmd_start(
     console: Console,
     manager: TaskAgent,
@@ -5598,7 +5616,20 @@ def main():
         "--subtask-of",
         help="Slug of the parent task this task is a subtask of (use empty string to clear)",
     )
+    rename_parser = subparsers.add_parser(
+        "rename",
+        help="Safely rename a task slug and update references across the project",
+    )
+    rename_parser.add_argument(
+        "slug",
+        help="Current slug or title of the task to rename",
+    )
+    rename_parser.add_argument(
+        "new_title",
+        help="New title for the task (generates the new slug)",
+    )
     start_parser = subparsers.add_parser(
+
         "start",
         help="Activate a task and set up its git worktree/branch",
         description="""
@@ -6340,6 +6371,14 @@ Usage:
             add_blocked_by=args.add_blocked_by,
             remove_blocked_by=args.remove_blocked_by,
         )
+    elif args.command == "rename":
+        cmd_rename(
+            console,
+            manager,
+            args.slug,
+            args.new_title,
+        )
+
     elif args.command == "start":
         cmd_start(console, manager, args.slug, run=args.run, agent_name=args.agent)
     elif args.command == "run":

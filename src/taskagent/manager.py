@@ -1764,6 +1764,150 @@ class TaskAgent:
             status="completed",
         )
 
+    def _find_all_task_files(self) -> List[Path]:
+        """Return all task markdown files (README.md or *.md) across all statuses in issues_root."""
+        results: List[Path] = []
+        if not self.issues_root.exists():
+            return results
+
+        for root, _, files in os.walk(self.issues_root):
+            root_path = Path(root)
+            for file in files:
+                if file.endswith(".md"):
+                    results.append(root_path / file)
+        return results
+
+    def rename_issue(self, old_slug: str, new_title: str) -> Issue:
+        """Rename a task's slug based on a new title, updating directory name,
+        H1 title heading, mission.usv, and references in other tasks.
+        """
+        if not new_title or not new_title.strip():
+            raise ValueError("New title cannot be empty.")
+
+        issue_file = self.find_issue_file(old_slug, include_completed=True)
+        if not issue_file or not issue_file.exists():
+            raise FileNotFoundError(f"Issue '{old_slug}' not found.")
+
+        # Determine actual old slug
+        if issue_file.name == "README.md":
+            actual_old_slug = self.slugify(issue_file.parent.name)
+        else:
+            actual_old_slug = self.slugify(issue_file.stem)
+
+        new_slug = self.slugify(new_title)
+        if not new_slug:
+            raise ValueError("New title results in an empty slug.")
+
+        # If slug changes, check for collisions
+        if new_slug != actual_old_slug:
+            existing_file = self.find_issue_file(new_slug, include_completed=True)
+            if existing_file and existing_file.exists():
+                raise ValueError(f"Task with slug '{new_slug}' already exists.")
+
+            # Make old path writable
+            if issue_file.name == "README.md":
+                old_dir = issue_file.parent
+                self._set_writable(old_dir, True)
+                self._set_writable(issue_file, True)
+                new_dir = old_dir.parent / new_slug
+                old_dir.rename(new_dir)
+                target_file = new_dir / "README.md"
+            else:
+                self._set_writable(issue_file, True)
+                new_file = issue_file.parent / f"{new_slug}.md"
+                issue_file.rename(new_file)
+                target_file = new_file
+        else:
+            target_file = issue_file
+            self._set_writable(target_file, True)
+
+        # Update H1 Title in target_file
+        content = target_file.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        h1_found = False
+        new_lines = []
+        for line in lines:
+            if not h1_found and line.strip().startswith("# "):
+                new_lines.append(f"# {new_title.strip()}")
+                h1_found = True
+            else:
+                new_lines.append(line)
+
+        if not h1_found:
+            fm_text, body = TaskAgent._parse_frontmatter(content)
+            if fm_text is not None:
+                fields = TaskAgent._parse_frontmatter_dict(fm_text)
+                fm_block = TaskAgent._serialize_frontmatter(fields)
+                content = fm_block + f"\n\n# {new_title.strip()}\n" + body.lstrip("\n")
+            else:
+                content = f"# {new_title.strip()}\n\n" + content
+        else:
+            content = "\n".join(new_lines)
+            if content and not content.endswith("\n"):
+                content += "\n"
+
+        target_file.write_text(content, encoding="utf-8")
+
+        # Rewrite references in other tasks if slug changed
+        if new_slug != actual_old_slug:
+            for task_file in self._find_all_task_files():
+                if task_file == target_file or not task_file.exists():
+                    continue
+                file_content = task_file.read_text(encoding="utf-8")
+                blocked_by, subtask_of = TaskAgent.extract_relations(task_file)
+                needs_update = False
+                new_blocked_by = None
+                new_subtask_of = None
+
+                if actual_old_slug in blocked_by:
+                    new_blocked_by = [new_slug if b == actual_old_slug else b for b in blocked_by]
+                    needs_update = True
+                if subtask_of == actual_old_slug:
+                    new_subtask_of = new_slug
+                    needs_update = True
+
+                if needs_update:
+                    self._set_writable(task_file, True)
+                    updated_content = TaskAgent._write_frontmatter_edges(
+                        file_content,
+                        blocked_by=new_blocked_by if actual_old_slug in blocked_by else None,
+                        subtask_of=new_subtask_of if subtask_of == actual_old_slug else None,
+                    )
+                    task_file.write_text(updated_content, encoding="utf-8")
+
+        # Update mission USV and in-memory list
+        issues = self.load_mission()
+        for i in issues:
+            if i.slug == actual_old_slug:
+                i.slug = new_slug
+                i.name = new_title.strip()
+            if actual_old_slug in i.blocked_by:
+                i.blocked_by = [new_slug if b == actual_old_slug else b for b in i.blocked_by]
+            if i.subtask_of == actual_old_slug:
+                i.subtask_of = new_slug
+
+        self.save_mission(issues)
+        self._commit_task_store(f"task: rename {actual_old_slug} to {new_slug}")
+
+        for i in issues:
+            if i.slug == new_slug:
+                return i
+
+        status = "pending"
+        if "completed" in str(target_file):
+            status = "completed"
+        elif "active" in str(target_file):
+            status = "active"
+        elif "draft" in str(target_file):
+            status = "draft"
+
+        return Issue(
+            name=new_title.strip(),
+            slug=new_slug,
+            status=status,
+        )
+
+
     # --- Secondary task documents (siblings of README.md) ---
 
     _PRIMARY_DOC_NAMES = frozenset({"readme.md"})

@@ -619,6 +619,24 @@ def search_task(name: str) -> str:
 
 
 @mcp.tool()
+def rename_task(name: str, new_title: str) -> str:
+    """Rename a task slug and update its title, directory, and references across the project.
+
+    Args:
+        name: Current slug or title of the task to rename.
+        new_title: The new title (which will also generate the new slug).
+    """
+    manager = get_manager()
+    slug = _resolve_slug(manager, name)
+    try:
+        issue = manager.rename_issue(slug, new_title)
+        return f"Successfully renamed task to '{issue.slug}' ({issue.name})."
+    except Exception as e:
+        return f"Error renaming task: {e}"
+
+
+@mcp.tool()
+
 def restore_task(name: str, status: str = "pending") -> str:
     """Restore a completed task back to pending, draft, or active status.
 

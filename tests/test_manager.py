@@ -1191,3 +1191,57 @@ def test_demote_cascades_subtask_of_only(manager):
     # External dep NOT cascaded
     assert not (manager.issues_root / "draft" / "external-dep" / "README.md").exists()
     assert (manager.issues_root / "pending" / "external-dep" / "README.md").exists()
+
+
+def test_rename_issue_updates_directory_title_and_references(manager):
+    """rename_issue renames task folder, updates H1 title, mission.usv, and rewrites references across tasks."""
+    manager.create_issue("Old Task Name")
+    manager.create_issue("Child Task", subtask_of="old-task-name")
+    manager.create_issue("Dependent Task", blocked_by="old-task-name")
+
+    # Rename old-task-name -> Brand New Name
+    renamed = manager.rename_issue("old-task-name", "Brand New Name")
+    assert renamed.slug == "brand-new-name"
+    assert renamed.name == "Brand New Name"
+
+    # Directory and README should exist at new location
+    old_file = manager.issues_root / "pending" / "old-task-name" / "README.md"
+    new_file = manager.issues_root / "pending" / "brand-new-name" / "README.md"
+    assert not old_file.exists()
+    assert new_file.exists()
+
+    # H1 Title updated
+    content = new_file.read_text(encoding="utf-8")
+    assert "# Brand New Name" in content
+
+    # Subtask and blocker references updated
+    child_content = (manager.issues_root / "pending" / "child-task" / "README.md").read_text(encoding="utf-8")
+    assert "subtask_of: brand-new-name" in child_content
+
+    dep_content = (manager.issues_root / "pending" / "dependent-task" / "README.md").read_text(encoding="utf-8")
+    assert "blocked_by: brand-new-name" in dep_content
+
+    # Index (mission.usv) updated
+    issues = manager.load_mission()
+    slugs = {i.slug for i in issues}
+    assert "brand-new-name" in slugs
+    assert "old-task-name" not in slugs
+
+
+def test_rename_issue_validation(manager):
+    """Validation errors during rename_issue."""
+    manager.create_issue("Task One")
+    manager.create_issue("Task Two")
+
+    # Renaming to existing slug fails
+    with pytest.raises(ValueError, match="already exists"):
+        manager.rename_issue("task-one", "Task Two")
+
+    # Renaming non-existent task fails
+    with pytest.raises(FileNotFoundError, match="not found"):
+        manager.rename_issue("non-existent", "New Title")
+
+    # Empty title fails
+    with pytest.raises(ValueError, match="empty"):
+        manager.rename_issue("task-one", "")
+

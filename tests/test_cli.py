@@ -1261,3 +1261,20 @@ def test_cmd_triage_table_columns(manager, monkeypatch):
     # Verify column specifications match design spec
     assert cols[1].width == 5  # Date
     assert cols[2].width == 10  # Status
+
+
+def test_cmd_rename(manager):
+    """cmd_rename successfully renames a task."""
+    from taskagent.cli import cmd_rename
+    from unittest.mock import MagicMock
+
+    manager.create_issue("Original Slug Task")
+    mock_console = MagicMock()
+
+    cmd_rename(mock_console, manager, "original-slug-task", "Renamed Slug Task")
+
+    assert manager.find_issue_file("renamed-slug-task") is not None
+    assert manager.find_issue_file("original-slug-task") is None
+    mock_console.print.assert_called_once()
+    assert "renamed-slug-task" in mock_console.print.call_args[0][0]
+
