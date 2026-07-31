@@ -3473,6 +3473,10 @@ def cmd_list(
     table.add_column("Blocked", style="yellow", width=8)
     table.add_column("Slug")
 
+    term_width = getattr(getattr(console, "size", None), "width", 80)
+    if not isinstance(term_width, int) or term_width <= 0:
+        term_width = 80
+
     for issue, depth in rows_to_display:
         status_style = "white"
         if issue.status == "active":
@@ -3485,8 +3489,19 @@ def cmd_list(
             status_style = "bold blue"
 
         indent = "  " * (depth - 1) if depth > 1 else ""
+        prefix_plain = "└─ " if depth > 0 else ""
         prefix = "[dim cyan]└─[/dim cyan] " if depth > 0 else ""
-        display_slug = f"{indent}{prefix}{issue.slug}"
+
+        # Fixed columns width: Pri (~4) + Date (5) + Status (6) + Blocked (8) + borders/padding (~12)
+        available_width = max(10, term_width - 35)
+        prefix_len = len(indent) + len(prefix_plain)
+        max_slug_len = max(5, available_width - prefix_len)
+
+        slug_str = issue.slug
+        if len(slug_str) > max_slug_len:
+            slug_str = slug_str[: max_slug_len - 1] + "…"
+
+        display_slug = f"{indent}{prefix}{slug_str}"
         created_date = get_created_date(manager, issue.slug)
         # Shorten to MM-DD
         if len(created_date) >= 10:
@@ -5291,15 +5306,30 @@ def cmd_triage(
             table.add_column("Status", width=10)
             table.add_column("Slug")
 
+            term_width = getattr(getattr(console, "size", None), "width", 80)
+            if not isinstance(term_width, int) or term_width <= 0:
+                term_width = 80
+
             for idx in range(scroll_offset, window_end):
                 issue, depth = indexed_issues[idx]
                 style = "bold cyan" if idx == cursor else "white"
                 indent = "  " * (depth - 1) if depth > 1 else ""
+                prefix_plain = "└─ " if depth > 0 else ""
                 prefix = "[dim cyan]└─[/dim cyan] " if depth > 0 else ""
+
+                # Fixed columns width: Pos (~4) + Date (5) + Status (10) + borders/padding (~10)
+                available_width = max(10, term_width - 30)
+                prefix_len = len(indent) + len(prefix_plain)
+                max_slug_len = max(5, available_width - prefix_len)
+
+                slug_str = issue.slug
+                if len(slug_str) > max_slug_len:
+                    slug_str = slug_str[: max_slug_len - 1] + "…"
+
                 if idx == cursor:
-                    display_slug = f"[reverse]{indent}{prefix}{issue.slug}[/reverse]"
+                    display_slug = f"[reverse]{indent}{prefix}{slug_str}[/reverse]"
                 else:
-                    display_slug = f"{indent}{prefix}{issue.slug}"
+                    display_slug = f"{indent}{prefix}{slug_str}"
 
                 status_style = "white"
                 if issue.status == "active":
