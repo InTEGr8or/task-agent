@@ -433,12 +433,12 @@ def _git_repo_with_version(tmp_path, version: str = "1.0.0"):
 
 
 def test_can_amend_when_local_only(tmp_path):
-    from taskagent.cli import _can_amend_version_safely, _git
+    from verkit.promoter import _can_amend_version_safely, _git
 
     repo = _git_repo_with_version(tmp_path)
     ok, reason = _can_amend_version_safely(repo)
     assert ok is True
-    assert "local-only" in reason
+    assert "no tracking upstream" in reason or "local" in reason.lower()
 
     # Simulate a remote that contains HEAD
     bare = tmp_path / "remote.git"
@@ -451,11 +451,12 @@ def test_can_amend_when_local_only(tmp_path):
     _git("push", "-u", "origin", "HEAD", cwd=repo)
     ok2, reason2 = _can_amend_version_safely(repo)
     assert ok2 is False
-    assert "remote" in reason2.lower()
+    assert "already published" in reason2.lower() or "remote" in reason2.lower()
 
 
 def test_promote_amends_local_head(tmp_path, monkeypatch):
-    from taskagent.cli import promote_project_version, get_committed_version, _git
+    from taskagent.cli import promote_project_version, get_committed_version
+    from verkit.promoter import _git
 
     repo = _git_repo_with_version(tmp_path, "1.0.0")
     console = Console(force_terminal=False)
@@ -467,15 +468,13 @@ def test_promote_amends_local_head(tmp_path, monkeypatch):
         )
         return "1.0.1"
 
-    monkeypatch.setattr("taskagent.cli._bump_project_version", fake_bump)
+    monkeypatch.setattr("verkit.promoter._bump_project_version", fake_bump)
     monkeypatch.chdir(repo)
 
     before = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
     new_v = promote_project_version(console, "patch", project_root=repo)
     assert new_v == "1.0.1"
     after = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    # Amend rewrites HEAD (same parent, new SHA) — still one commit ahead of empty?
-    # Parent of HEAD should still be empty root's only parent chain length 1
     count = _git("rev-list", "--count", "HEAD", cwd=repo).stdout.strip()
     assert count == "1"
     assert before != after
@@ -485,7 +484,8 @@ def test_promote_amends_local_head(tmp_path, monkeypatch):
 
 
 def test_promote_new_commit_when_published(tmp_path, monkeypatch):
-    from taskagent.cli import promote_project_version, get_committed_version, _git
+    from taskagent.cli import promote_project_version, get_committed_version
+    from verkit.promoter import _git
     import subprocess
 
     repo = _git_repo_with_version(tmp_path, "1.0.0")
@@ -502,7 +502,7 @@ def test_promote_new_commit_when_published(tmp_path, monkeypatch):
         )
         return "1.0.1"
 
-    monkeypatch.setattr("taskagent.cli._bump_project_version", fake_bump)
+    monkeypatch.setattr("verkit.promoter._bump_project_version", fake_bump)
     console = Console(force_terminal=False)
     promote_project_version(console, "patch", project_root=repo)
 
@@ -526,7 +526,8 @@ def test_tag_requires_matching_working_tree(tmp_path):
 
 
 def test_tag_refuses_existing_other_commit(tmp_path, monkeypatch):
-    from taskagent.cli import tag_project_version, _git
+    from taskagent.cli import tag_project_version
+    from verkit.promoter import _git
 
     repo = _git_repo_with_version(tmp_path, "1.0.0")
     # Tag current HEAD as v1.0.0
@@ -542,7 +543,8 @@ def test_tag_refuses_existing_other_commit(tmp_path, monkeypatch):
 
 
 def test_tag_idempotent_on_same_head(tmp_path):
-    from taskagent.cli import tag_project_version, _git
+    from taskagent.cli import tag_project_version
+    from verkit.promoter import _git
 
     repo = _git_repo_with_version(tmp_path, "1.0.0")
     console = Console(force_terminal=False)

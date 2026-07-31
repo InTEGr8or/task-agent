@@ -16,6 +16,7 @@ dependencies = [
     "questionary>=2.1.1",
     "rich>=13.9.4",
     "githubkit>=0.15.5",
+    "verkit>=0.1.2",
 ]
 
 [project.scripts]

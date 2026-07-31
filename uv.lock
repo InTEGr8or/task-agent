@@ -1145,6 +1145,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "questionary" },
     { name = "rich" },
+    { name = "verkit" },
 ]
 
 [package.dev-dependencies]
@@ -1165,6 +1166,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "questionary", specifier = ">=2.1.1" },
     { name = "rich", specifier = ">=13.9.4" },
+    { name = "verkit", specifier = ">=0.1.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -1217,6 +1219,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/32/ce/eeb58ae4ac36fe09e3842eb02e0eb676bf2c53ae062b98f1b2531673efdd/uvicorn-0.41.0.tar.gz", hash = "sha256:09d11cf7008da33113824ee5a1c6422d89fbc2ff476540d69a34c87fab8b571a", size = 82633, upload-time = "2026-02-16T23:07:24.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/83/e4/d04a086285c20886c0daad0e026f250869201013d18f81d9ff5eada73a88/uvicorn-0.41.0-py3-none-any.whl", hash = "sha256:29e35b1d2c36a04b9e180d4007ede3bcb32a85fbdfd6c6aeb3f26839de088187", size = 68783, upload-time = "2026-02-16T23:07:22.357Z" },
+]
+
+[[package]]
+name = "verkit"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/4a/231410fed49fe1fe4c1c3d32cb98355668df3607a0b340e1d8368f73c94a/verkit-0.1.2.tar.gz", hash = "sha256:cc44c782092992890898d7c5dc529afd142e2a893c31e3538a3919f0fb28831c", size = 9030, upload-time = "2026-07-31T14:14:53.567Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/d9/292ec256c8c1e1f9df252bc2e14ce18c0352e7280295a440f251bdec340e/verkit-0.1.2-py3-none-any.whl", hash = "sha256:de783f9be06b6cb365f53a6493a0a62c79945e6e576fa0cbc9b296b9f7d8d05d", size = 9149, upload-time = "2026-07-31T14:14:52.342Z" },
 ]
 
 [[package]]

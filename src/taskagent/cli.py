@@ -14,8 +14,6 @@ import argparse
 import os
 import json
 import re
-import importlib.metadata
-import urllib.request
 import questionary
 import subprocess
 import shlex
@@ -46,344 +44,30 @@ from taskagent.discovery import discover, get_task_agent_project_root
 from taskagent import agent
 
 
+import verkit  # type: ignore[import-untyped]
+
+
 def get_tool_version() -> str:
     """Read the task-agent tool version."""
-    try:
-        return importlib.metadata.version("task-agent")
-    except Exception:
-        return "unknown"
+    return verkit.get_installed_version("task-agent")
 
 
 def get_latest_pypi_version(timeout: int = 4) -> Optional[str]:
     """Fetch the latest version of task-agent from PyPI."""
-    url = "https://pypi.org/pypi/task-agent/json"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            data = json.load(response)
-            return data["info"]["version"]
-    except Exception:
-        return None
+    return verkit.get_latest_pypi_version("task-agent", timeout=timeout)
 
 
 def display_version_info(console: Console):
     """Display running and PyPI version information."""
-    # 1. Get running tool version
-    tool_v = get_tool_version()
-    console.print(f"[bold blue]Running version:[/bold blue] {tool_v}")
-
-    # 2. Check PyPI
-    latest_v = get_latest_pypi_version()
-    if latest_v:
-        if latest_v != tool_v:
-            console.print(f"[bold yellow]Latest PyPI version:[/bold yellow] {latest_v}")
-            console.print("[dim]Run [bold]ta self-up[/bold] to upgrade.[/dim]")
-        else:
-            console.print(f"[dim]Latest PyPI version:[/dim] {latest_v} (up to date)")
-
-    # 3. Optional: show local project version if available
-    try:
-        v, source = get_project_version()
-        if v != "unknown":
-            console.print(f"[dim]Local project version:[/dim] {v} (from {source})")
-    except Exception:
-        pass
+    verkit.display_version_info(console, "task-agent", upgrade_cmd="ta self-up")
 
 
 def get_committed_version(
     root: Optional[Path] = None,
 ) -> Tuple[str, Optional[str]]:
     """Read the version from HEAD (committed code), not working tree."""
-    files_to_check = [
-        ("pyproject.toml", r'version\s*=\s*"(.*?)"'),
-        ("package.json", None),  # Special handling below
-        ("Cargo.toml", r'^version\s*=\s*"(.*?)"'),
-    ]
-
-    git_c = ["git"]
-    if root is not None:
-        git_c = ["git", "-C", str(root)]
-
-    for filename, pattern in files_to_check:
-        try:
-            result = subprocess.run(
-                git_c + ["show", f"HEAD:{filename}"],
-                capture_output=True,
-                text=True,
-                check=False,
-                shell=(os.name == "nt"),
-            )
-            if result.returncode == 0:
-                if filename == "package.json":
-                    try:
-                        data = json.loads(result.stdout)
-                        if "version" in data:
-                            return data["version"], "package.json"
-                    except Exception:
-                        pass
-                elif pattern:
-                    match = re.search(pattern, result.stdout, re.MULTILINE)
-                    if match:
-                        return match.group(1), filename
-        except Exception:
-            pass
-
-    return "unknown", None
-
-
-# --- Version release workflow (promote / tag / release) ---
-
-_VERSION_FILES = ("pyproject.toml", "package.json", "uv.lock", "Cargo.toml")
-
-
-def _git(
-    *args: str,
-    cwd: Optional[Path] = None,
-    check: bool = False,
-    text: bool = True,
-) -> subprocess.CompletedProcess:
-    """Run a git command; ``cwd`` is passed as ``git -C`` when set."""
-    cmd = ["git"]
-    if cwd is not None:
-        cmd.extend(["-C", str(cwd)])
-    cmd.extend(args)
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=text,
-        check=check,
-        shell=(os.name == "nt"),
-    )
-
-
-def _find_git_root(start: Optional[Path] = None) -> Optional[Path]:
-    start = start or Path.cwd()
-    res = _git("rev-parse", "--show-toplevel", cwd=start)
-    if res.returncode != 0:
-        return None
-    return Path(res.stdout.strip())
-
-
-def _git_head_sha(git_root: Path) -> Optional[str]:
-    res = _git("rev-parse", "HEAD", cwd=git_root)
-    if res.returncode != 0:
-        return None
-    return res.stdout.strip()
-
-
-def _git_head_is_on_remote(git_root: Path) -> bool:
-    """True if any remote-tracking branch contains HEAD (commit is published)."""
-    res = _git("branch", "-r", "--contains", "HEAD", cwd=git_root)
-    return res.returncode == 0 and bool(res.stdout.strip())
-
-
-def _git_tags_pointing_at_head(git_root: Path) -> List[str]:
-    res = _git("tag", "--points-at", "HEAD", cwd=git_root)
-    if res.returncode != 0 or not res.stdout.strip():
-        return []
-    return [t.strip() for t in res.stdout.splitlines() if t.strip()]
-
-
-def _git_tag_target(git_root: Path, tag_name: str) -> Optional[str]:
-    """Return the commit SHA a tag points at, or None if missing."""
-    res = _git("rev-parse", "--verify", f"refs/tags/{tag_name}^{{}}", cwd=git_root)
-    if res.returncode != 0:
-        # Lightweight tags: try without peel
-        res = _git("rev-parse", "--verify", f"refs/tags/{tag_name}", cwd=git_root)
-        if res.returncode != 0:
-            return None
-    return res.stdout.strip()
-
-
-def _can_amend_version_safely(git_root: Path) -> Tuple[bool, str]:
-    """Whether folding the version bump into HEAD via amend is safe.
-
-    Amend rewrites the commit SHA. That is only safe when HEAD has never been
-    published (no remote contains it) and is not already tagged.
-    """
-    if _git_head_is_on_remote(git_root):
-        return (
-            False,
-            "HEAD is already on a remote (amend would rewrite published history)",
-        )
-    tags = _git_tags_pointing_at_head(git_root)
-    if tags:
-        return False, f"HEAD is already tagged ({', '.join(tags)})"
-    # Detached HEAD: still OK if not published
-    return True, "HEAD is local-only and untagged"
-
-
-def _stage_version_files(git_root: Path, project_root: Path) -> List[str]:
-    """Stage only known version files; return relative paths that were staged."""
-    staged: List[str] = []
-    for name in _VERSION_FILES:
-        path = project_root / name
-        if not path.exists():
-            continue
-        try:
-            rel = path.resolve().relative_to(git_root.resolve())
-        except ValueError:
-            rel = Path(name)
-        rel_s = str(rel).replace("\\", "/")
-        _git("add", "--", rel_s, cwd=git_root)
-        staged.append(rel_s)
-    return staged
-
-
-def _bump_project_version(
-    part: str,
-    project_root: Path,
-    source: str,
-) -> str:
-    """Bump version files in place; return the new version string."""
-    if source == "pyproject.toml":
-        subprocess.run(
-            [
-                "uv",
-                "run",
-                "bump-my-version",
-                "bump",
-                part,
-                "--no-commit",
-                "--no-tag",
-            ],
-            check=True,
-            cwd=str(project_root),
-            shell=(os.name == "nt"),
-        )
-        if (project_root / "uv.lock").exists():
-            subprocess.run(
-                ["uv", "lock"],
-                check=True,
-                cwd=str(project_root),
-                shell=(os.name == "nt"),
-            )
-    elif source == "package.json":
-        subprocess.run(
-            ["npm", "version", part, "--no-git-tag-version"],
-            check=True,
-            cwd=str(project_root),
-            shell=(os.name == "nt"),
-        )
-    else:
-        raise RuntimeError(
-            f"Cannot bump version: unsupported project file source {source!r}"
-        )
-
-    new_v, _ = get_project_version(project_root)
-    if new_v == "unknown":
-        raise RuntimeError("Version bump ran but new version could not be read.")
-    return new_v
-
-
-def _commit_version_bump(
-    console: Console,
-    git_root: Path,
-    project_root: Path,
-    new_v: str,
-    *,
-    allow_amend: bool = True,
-) -> str:
-    """Commit staged version bump. Returns ``amend`` or ``commit``.
-
-    Prefers amend only when HEAD is unpublished and untagged; otherwise creates
-    a new ``chore(release): vX.Y.Z`` commit so main stays fast-forwardable.
-    """
-    staged = _stage_version_files(git_root, project_root)
-    if not staged:
-        raise RuntimeError("No version files found to stage after bump.")
-
-    # Refuse to accidentally fold unrelated staged files into the release commit
-    cached = _git("diff", "--cached", "--name-only", cwd=git_root)
-    extra = [
-        line.strip()
-        for line in (cached.stdout or "").splitlines()
-        if line.strip() and line.strip() not in staged
-    ]
-    if extra:
-        raise RuntimeError(
-            "Refusing to commit version bump: unrelated files are staged: "
-            + ", ".join(extra)
-            + ". Unstage them and retry."
-        )
-
-    mode = "commit"
-    if allow_amend:
-        ok, reason = _can_amend_version_safely(git_root)
-        if ok:
-            res = _git("commit", "--amend", "--no-edit", cwd=git_root)
-            if res.returncode != 0:
-                err = (res.stderr or res.stdout or "").strip()
-                raise RuntimeError(f"git commit --amend failed: {err}")
-            mode = "amend"
-            console.print(f"[dim]Amended version {new_v} into HEAD ({reason})[/dim]")
-        else:
-            console.print(
-                f"[dim]Creating new release commit (cannot amend: {reason})[/dim]"
-            )
-
-    if mode == "commit":
-        msg = f"chore(release): v{new_v}"
-        res = _git("commit", "-m", msg, cwd=git_root)
-        if res.returncode != 0:
-            err = (res.stderr or res.stdout or "").strip()
-            if "nothing to commit" in err.lower():
-                raise RuntimeError(
-                    "Nothing to commit after version bump "
-                    "(working tree already at this version?)."
-                )
-            raise RuntimeError(f"git commit failed: {err}")
-        console.print(f"[dim]Committed {msg}[/dim]")
-
-    committed_v, _ = get_committed_version(git_root)
-    if committed_v != new_v:
-        raise RuntimeError(
-            f"Post-commit verification failed: HEAD has version {committed_v!r}, "
-            f"expected {new_v!r}."
-        )
-    return mode
-
-
-def _push_branch_and_tag(
-    console: Console,
-    git_root: Path,
-    tag_name: str,
-    *,
-    push_branch: bool = True,
-) -> None:
-    """Push current branch (if possible) then the release tag.
-
-    Branch push uses a normal fast-forward push. Tag is only pushed after the
-    branch push succeeds (or is skipped), so we never publish a tag for a commit
-    the remote branch does not have.
-    """
-    if push_branch:
-        # Resolve upstream; if missing, push HEAD to origin with current branch name
-        upstream = _git(
-            "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=git_root
-        )
-        branch = _git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_root)
-        branch_name = (branch.stdout or "").strip() or "HEAD"
-
-        console.print(f"[blue]Pushing branch {branch_name} to origin...[/blue]")
-        if upstream.returncode == 0:
-            res = _git("push", cwd=git_root)
-        else:
-            res = _git("push", "-u", "origin", "HEAD", cwd=git_root)
-        if res.returncode != 0:
-            err = (res.stderr or res.stdout or "").strip()
-            raise RuntimeError(
-                f"Failed to push branch (tag not pushed): {err}\n"
-                "Fix the branch push (history rewrite? set upstream?), then run "
-                f"`ta version tag` again or `git push origin {tag_name}`."
-            )
-        console.print(f"[bold green]Pushed branch {branch_name}[/bold green]")
-
-    console.print(f"[blue]Pushing tag {tag_name} to origin...[/blue]")
-    res = _git("push", "origin", tag_name, cwd=git_root)
-    if res.returncode != 0:
-        err = (res.stderr or res.stdout or "").strip()
-        raise RuntimeError(f"Failed to push tag {tag_name}: {err}")
-    console.print(f"[bold green]Pushed tag {tag_name}[/bold green]")
+    info = verkit.inspect_committed(root)
+    return info.version, info.source
 
 
 def promote_project_version(
@@ -393,34 +77,10 @@ def promote_project_version(
     project_root: Optional[Path] = None,
     allow_amend: bool = True,
 ) -> str:
-    """Bump project version and commit it. Returns the new version string.
-
-    Amends HEAD only when it is unpublished and untagged; otherwise creates
-    ``chore(release): vX.Y.Z``. Raises on failure (no silent half-states).
-    """
-    project_root = (project_root or Path.cwd()).resolve()
-    git_root = _find_git_root(project_root)
-    if not git_root:
-        raise RuntimeError("Not inside a git repository.")
-
-    working_v, source = get_project_version(project_root)
-    if not source or working_v == "unknown":
-        raise RuntimeError(
-            "Could not find a project version file (pyproject.toml / package.json)."
-        )
-
-    pre_committed, _ = get_committed_version(git_root)
-    console.print(
-        f"[blue]Bumping {part} from working {working_v} "
-        f"(HEAD {pre_committed}) via {source}...[/blue]"
+    """Bump project version and commit it. Returns the new version string."""
+    return verkit.promote_version(
+        part, project_root=project_root, console=console, allow_amend=allow_amend
     )
-
-    new_v = _bump_project_version(part, project_root, source)
-    console.print(f"[bold green]Promoted to version {new_v}[/bold green]")
-    _commit_version_bump(
-        console, git_root, project_root, new_v, allow_amend=allow_amend
-    )
-    return new_v
 
 
 def tag_project_version(
@@ -430,153 +90,19 @@ def tag_project_version(
     push: bool = True,
     push_branch: bool = True,
 ) -> str:
-    """Create ``vX.Y.Z`` on HEAD from the *committed* version and optionally push.
-
-    Verifies working tree version matches HEAD before tagging. Pushes the
-    branch first, then the tag, so CI never sees a floating tag.
-    Returns the tag name.
-    """
-    project_root = (project_root or Path.cwd()).resolve()
-    git_root = _find_git_root(project_root)
-    if not git_root:
-        raise RuntimeError("Not inside a git repository.")
-
-    committed_v, _ = get_committed_version(git_root)
-    if committed_v == "unknown":
-        raise RuntimeError(
-            "Could not read version from HEAD. Run `ta version promote <part>` first."
-        )
-
-    working_v, _ = get_project_version(project_root)
-    if working_v != "unknown" and working_v != committed_v:
-        raise RuntimeError(
-            f"Working tree version {working_v} differs from HEAD {committed_v}. "
-            "Commit or discard local version edits (or run `ta version promote`) "
-            "before tagging."
-        )
-
-    tag_name = f"v{committed_v}"
-    head = _git_head_sha(git_root)
-    if not head:
-        raise RuntimeError("Could not resolve HEAD.")
-
-    existing = _git_tag_target(git_root, tag_name)
-    if existing:
-        # Compare full object names (peel annotated tags)
-        head_full = _git("rev-parse", head, cwd=git_root).stdout.strip() or head
-        existing_full = (
-            _git("rev-parse", existing, cwd=git_root).stdout.strip() or existing
-        )
-        if existing_full == head_full:
-            console.print(f"[dim]Tag {tag_name} already points at HEAD[/dim]")
-        else:
-            raise RuntimeError(
-                f"Tag {tag_name} already exists but points at {existing_full[:12]}, "
-                f"not HEAD ({head_full[:12]}). Delete it (`git tag -d {tag_name}`) "
-                "only if you intend to retarget, or promote to a new version."
-            )
-    else:
-        res = _git("tag", tag_name, cwd=git_root)
-        if res.returncode != 0:
-            err = (res.stderr or res.stdout or "").strip()
-            raise RuntimeError(f"Failed to create tag {tag_name}: {err}")
-        console.print(
-            f"[bold green]Tagged HEAD as {tag_name}[/bold green] "
-            f"[dim]({head[:12]})[/dim]"
-        )
-
-    if push:
-        _push_branch_and_tag(console, git_root, tag_name, push_branch=push_branch)
-    else:
-        console.print(
-            f"[dim]Skipped push. When ready: git push && git push origin {tag_name}[/dim]"
-        )
-
-    return tag_name
+    """Create ``vX.Y.Z`` on HEAD from the *committed* version and optionally push."""
+    return verkit.tag_version(
+        project_root=project_root,
+        console=console,
+        push=push,
+        push_branch=push_branch,
+    )
 
 
 def get_project_version(root: Optional[Path] = None) -> Tuple[str, Optional[str]]:
     """Read the current project version from various project files (working tree)."""
-    root = root or Path.cwd()
-
-    # Check pyproject.toml
-    pyproject = root / "pyproject.toml"
-    if pyproject.exists():
-        try:
-            with pyproject.open("r") as f:
-                content = f.read()
-                match = re.search(r'version\s*=\s*"(.*?)"', content)
-                if match:
-                    return match.group(1), "pyproject.toml"
-        except Exception:
-            pass
-
-    # Check package.json
-    package_json = root / "package.json"
-    if package_json.exists():
-        try:
-            with package_json.open("r") as f:
-                data = json.load(f)
-                if "version" in data:
-                    return data["version"], "package.json"
-        except Exception:
-            pass
-
-    # Check Cargo.toml (Rust)
-    cargo = root / "Cargo.toml"
-    if cargo.exists():
-        try:
-            with cargo.open("r") as f:
-                content = f.read()
-                match = re.search(r'^version\s*=\s*"(.*?)"', content, re.MULTILINE)
-                if match:
-                    return match.group(1), "Cargo.toml"
-        except Exception:
-            pass
-
-    # Check *.csproj (.NET)
-    for csproj in root.glob("*.csproj"):
-        try:
-            with csproj.open("r") as f:
-                content = f.read()
-                match = re.search(r"<Version>(.*?)</Version>", content)
-                if match:
-                    return match.group(1), csproj.name
-        except Exception:
-            pass
-
-    # Check pom.xml (Java/Maven)
-    pom = root / "pom.xml"
-    if pom.exists():
-        try:
-            with pom.open("r") as f:
-                content = f.read()
-                match = re.search(r"<version>(.*?)</version>", content)
-                if match:
-                    return match.group(1), "pom.xml"
-        except Exception:
-            pass
-
-    # Check build.gradle (Java/Gradle)
-    gradle_kts = root / "build.gradle.kts"
-    gradle = root / "build.gradle"
-    gradle_file = None
-    if gradle_kts.exists():
-        gradle_file = gradle_kts
-    elif gradle.exists():
-        gradle_file = gradle
-
-    if gradle_file:
-        try:
-            with gradle_file.open("r") as f:
-                content = f.read()
-                match = re.search(r'version\s*=\s*["\'](.*?)["\']', content)
-                if match:
-                    return match.group(1), gradle_file.name
-        except Exception:
-            pass
-
-    return "unknown", None
+    info = verkit.inspect_project(root)
+    return info.version, info.source
 
 
 def get_key() -> str:
