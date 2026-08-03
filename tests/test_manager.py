@@ -699,6 +699,47 @@ def test_should_show_strategy_after_cooldown_returns_true(manager):
     assert not manager.should_show_strategy(cooldown_hours=4.0)
 
 
+def test_strategy_cooldown_default(manager):
+    assert manager.strategy_cooldown_hours == manager.DEFAULT_STRATEGY_COOLDOWN_HOURS
+
+
+def test_strategy_cooldown_from_meta(manager):
+    manager.set_strategy_cooldown_hours(0.5)
+    assert manager.strategy_cooldown_hours == 0.5
+    # Setting the cooldown must not clobber other meta fields
+    manager.update_strategy_last_shown()
+    manager.set_strategy_cooldown_hours(1.5)
+    meta = manager.get_strategy_meta()
+    assert meta["cooldown_hours"] == 1.5
+    assert "last_shown_at" in meta
+
+
+def test_strategy_cooldown_env_overrides_meta(manager, monkeypatch):
+    manager.set_strategy_cooldown_hours(8.0)
+    monkeypatch.setenv("TA_STRATEGY_COOLDOWN_HOURS", "0.25")
+    assert manager.strategy_cooldown_hours == 0.25
+
+
+def test_strategy_cooldown_invalid_values_fall_through(manager, monkeypatch):
+    monkeypatch.setenv("TA_STRATEGY_COOLDOWN_HOURS", "not-a-number")
+    assert manager.strategy_cooldown_hours == manager.DEFAULT_STRATEGY_COOLDOWN_HOURS
+    monkeypatch.delenv("TA_STRATEGY_COOLDOWN_HOURS")
+    manager.strategy_dir.mkdir(parents=True, exist_ok=True)
+    import json
+
+    with manager.strategy_meta_file.open("w", encoding="utf-8") as f:
+        json.dump({"cooldown_hours": "bogus"}, f)
+    assert manager.strategy_cooldown_hours == manager.DEFAULT_STRATEGY_COOLDOWN_HOURS
+
+
+def test_should_show_strategy_zero_cooldown_always_shows(manager, monkeypatch):
+    manager.init_strategy()
+    manager.update_strategy_last_shown()
+    assert not manager.should_show_strategy()
+    monkeypatch.setenv("TA_STRATEGY_COOLDOWN_HOURS", "0")
+    assert manager.should_show_strategy()
+
+
 def test_init_strategy_creates_files(manager):
     assert not manager.strategy_dir.exists()
     assert not manager.strategy_file.exists()

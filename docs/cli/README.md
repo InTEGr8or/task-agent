@@ -11,7 +11,9 @@ The `ta` command-line interface provides everything you need to manage your task
 
 ### `ta next`
 Displays the highest priority task currently in the queue.
-- Uses a pager for long descriptions.
+- Uses a pager for interactive reading (`less`-like).
+- **Flags**:
+  - `-t`, `--text`: Output plain text without using a pager.
 - Automatically sorts the queue before fetching.
 
 ### `ta list`

@@ -286,11 +286,7 @@ def render_issue(
 
     md = Markdown(content)
 
-    # Estimate lines: Panel (~6) + Markdown content + some buffer
-    total_lines = 8 + content.count("\n")
-    terminal_height = console.size.height
-
-    if use_pager and total_lines > terminal_height:
+    if use_pager:
         with console.pager(styles=True):
             console.print(panel)
             console.print(md)
@@ -433,8 +429,39 @@ def cmd_strategy(
     console: Console,
     manager: TaskAgent,
     action: Optional[str] = None,
+    value: Optional[str] = None,
 ):
     """View, edit, or initialize the project strategy."""
+    if action == "cooldown":
+        if value is None:
+            hours = manager.strategy_cooldown_hours
+            if os.environ.get("TA_STRATEGY_COOLDOWN_HOURS") is not None:
+                source = "TA_STRATEGY_COOLDOWN_HOURS"
+            elif manager.get_strategy_meta().get("cooldown_hours") is not None:
+                source = "strategy/.meta.json"
+            else:
+                source = "default"
+            console.print(
+                f"Strategy cooldown: [bold]{hours:g}h[/bold] [dim]({source})[/dim]"
+            )
+            console.print(
+                "[dim]Set with: ta strategy cooldown <hours> (0 shows it every time)[/dim]"
+            )
+            return
+        try:
+            hours = float(value)
+        except ValueError:
+            console.print(
+                f"[red]Invalid cooldown value: {value!r} (expected hours)[/red]"
+            )
+            return
+        if hours < 0:
+            console.print("[red]Cooldown must be 0 or greater.[/red]")
+            return
+        manager.set_strategy_cooldown_hours(hours)
+        console.print(f"[bold green]Strategy cooldown set to {hours:g}h.[/bold green]")
+        return
+
     if action == "init":
         path = manager.init_strategy()
         console.print(f"[bold green]Strategy initialized:[/bold green] {path}")
@@ -501,23 +528,60 @@ def cmd_strategy(
     console.print(f"[dim]last shown: {last_shown} · ta strategy edit[/dim]")
 
 
-def cmd_next(console: Console, manager: TaskAgent):
+def cmd_next(console: Console, manager: TaskAgent, text_mode: bool = False):
     """Show the top issue."""
-    show_store_remote_status(console, manager)
-    maybe_show_strategy(console, manager)
-    next_issue = manager.get_next_issue()
-    if not next_issue:
-        console.print(f"[yellow]No issues found in {manager.mission_path}[/yellow]")
-        return
+    if text_mode:
+        show_store_remote_status(console, manager)
+        next_issue = manager.get_next_issue()
+        if not next_issue:
+            console.print(f"[yellow]No issues found in {manager.mission_path}[/yellow]")
+            return
 
-    issue_file = manager.find_issue_file(next_issue.slug)
+        issue_file = manager.find_issue_file(next_issue.slug)
 
-    if not issue_file:
-        console.print(f"[red]Issue file not found for slug: {next_issue.slug}[/red]")
-        sys.exit(1)
+        if not issue_file:
+            console.print(
+                f"[red]Issue file not found for slug: {next_issue.slug}[/red]"
+            )
+            sys.exit(1)
 
-    issues = manager.load_mission()
-    render_issue(console, next_issue, issue_file, issues, manager=manager)
+        issues = manager.load_mission()
+        render_issue(
+            console,
+            next_issue,
+            issue_file,
+            issues,
+            manager=manager,
+            use_pager=False,
+        )
+    else:
+        with console.pager(styles=True):
+            show_store_remote_status(console, manager)
+            maybe_show_strategy(console, manager)
+            next_issue = manager.get_next_issue()
+            if not next_issue:
+                console.print(
+                    f"[yellow]No issues found in {manager.mission_path}[/yellow]"
+                )
+                return
+
+            issue_file = manager.find_issue_file(next_issue.slug)
+
+            if not issue_file:
+                console.print(
+                    f"[red]Issue file not found for slug: {next_issue.slug}[/red]"
+                )
+                sys.exit(1)
+
+            issues = manager.load_mission()
+            render_issue(
+                console,
+                next_issue,
+                issue_file,
+                issues,
+                manager=manager,
+                use_pager=False,
+            )
 
 
 def normalize(s: str) -> str:
@@ -4799,6 +4863,115 @@ def cmd_triage(
 
         return rows
 
+    def find_slug_index(
+        target_slug: str, indexed: List[Tuple[Issue, int]]
+    ) -> Optional[int]:
+        for idx, (iss, _) in enumerate(indexed):
+            if iss.slug == target_slug:
+                return idx
+        return None
+
+    def get_subtree_indices(
+        indexed: List[Tuple[Issue, int]], idx: int
+    ) -> List[int]:
+        if idx < 0 or idx >= len(indexed):
+            return []
+        base_depth = indexed[idx][1]
+        res = [idx]
+        for j in range(idx + 1, len(indexed)):
+            if indexed[j][1] > base_depth:
+                res.append(j)
+            else:
+                break
+        return res
+
+    def move_triage_item(
+        manager: TaskAgent,
+        indexed: List[Tuple[Issue, int]],
+        idx: int,
+        direction: str,
+    ) -> Optional[str]:
+        if idx < 0 or idx >= len(indexed):
+            return None
+
+        target_issue, target_depth = indexed[idx]
+        target_subtask_of = target_issue.subtask_of
+        target_slug = target_issue.slug
+
+        moved_indices = get_subtree_indices(indexed, idx)
+        if not moved_indices:
+            return None
+
+        sibling_idx = None
+        if direction == "up":
+            j = idx - 1
+            while j >= 0:
+                if indexed[j][1] == target_depth:
+                    if indexed[j][0].subtask_of == target_subtask_of:
+                        sibling_idx = j
+                        break
+                    else:
+                        break
+                elif indexed[j][1] < target_depth:
+                    break
+                j -= 1
+        elif direction == "down":
+            next_start = max(moved_indices) + 1
+            j = next_start
+            while j < len(indexed):
+                if indexed[j][1] == target_depth:
+                    if indexed[j][0].subtask_of == target_subtask_of:
+                        sibling_idx = j
+                        break
+                    else:
+                        break
+                elif indexed[j][1] < target_depth:
+                    break
+                j += 1
+
+        if sibling_idx is None:
+            manager.prioritize_issue(target_slug, direction)
+            return target_slug
+
+        sibling_indices = get_subtree_indices(indexed, sibling_idx)
+        moved_slugs = [indexed[k][0].slug for k in moved_indices]
+        sibling_slugs = [indexed[k][0].slug for k in sibling_indices]
+
+        all_issues = manager.load_mission()
+        moved_set = set(moved_slugs)
+        moved_objs = [i for i in all_issues if i.slug in moved_set]
+        remaining = [i for i in all_issues if i.slug not in moved_set]
+
+        sibling_set = set(sibling_slugs)
+        ref_idx = -1
+        if direction == "up":
+            for r_i, item in enumerate(remaining):
+                if item.slug in sibling_set:
+                    ref_idx = r_i
+                    break
+        else:
+            for r_i, item in enumerate(remaining):
+                if item.slug in sibling_set:
+                    ref_idx = r_i
+
+        if ref_idx != -1:
+            if direction == "up":
+                new_issues = remaining[:ref_idx] + moved_objs + remaining[ref_idx:]
+            else:
+                new_issues = (
+                    remaining[: ref_idx + 1]
+                    + moved_objs
+                    + remaining[ref_idx + 1 :]
+                )
+            for i, issue in enumerate(new_issues, 1):
+                issue.priority = i
+            manager.save_mission(new_issues)
+            manager.sync_mission()
+        else:
+            manager.prioritize_issue(target_slug, direction)
+
+        return target_slug
+
     issues = get_display_issues(search_query, show_completed)
     if not issues and not search_query:
         console.print("[yellow]No issues to triage.[/yellow]")
@@ -4983,26 +5156,37 @@ def cmd_triage(
                         manager.init_project()
                         issues = get_display_issues(search_query, show_completed)
                         indexed_issues = build_hierarchy(issues)
+                        new_idx = find_slug_index(issue.slug, indexed_issues)
+                        if new_idx is not None:
+                            cursor = new_idx
                     except Exception as e:
                         console.print(f"[red]Error: {e}[/red]")
                         questionary.press_any_key_to_continue().ask()
                 live.start()
             elif key == "\x0b" and not show_completed:  # ctrl+k
-                slug = indexed_issues[cursor][0].slug
                 try:
-                    manager.prioritize_issue(slug, "up")
+                    target_slug = move_triage_item(
+                        manager, indexed_issues, cursor, "up"
+                    )
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
-                    cursor = max(0, cursor - 1)
+                    if target_slug:
+                        new_idx = find_slug_index(target_slug, indexed_issues)
+                        if new_idx is not None:
+                            cursor = new_idx
                 except Exception:
                     pass
             elif key == "\x0a" and not show_completed:  # ctrl+j (often \n)
-                slug = indexed_issues[cursor][0].slug
                 try:
-                    manager.prioritize_issue(slug, "down")
+                    target_slug = move_triage_item(
+                        manager, indexed_issues, cursor, "down"
+                    )
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
-                    cursor = min(len(indexed_issues) - 1, cursor + 1)
+                    if target_slug:
+                        new_idx = find_slug_index(target_slug, indexed_issues)
+                        if new_idx is not None:
+                            cursor = new_idx
                 except Exception:
                     pass
             elif key == "p" and not show_completed:  # promote
@@ -5012,6 +5196,9 @@ def cmd_triage(
                         manager.promote_issue(issue.slug)
                         issues = get_display_issues(search_query, show_completed)
                         indexed_issues = build_hierarchy(issues)
+                        new_idx = find_slug_index(issue.slug, indexed_issues)
+                        if new_idx is not None:
+                            cursor = new_idx
                     except Exception:
                         pass
             elif key == "d" and not show_completed:  # demote
@@ -5021,6 +5208,9 @@ def cmd_triage(
                         manager.demote_issue(issue.slug)
                         issues = get_display_issues(search_query, show_completed)
                         indexed_issues = build_hierarchy(issues)
+                        new_idx = find_slug_index(issue.slug, indexed_issues)
+                        if new_idx is not None:
+                            cursor = new_idx
                     except Exception:
                         pass
             elif key == "r" and show_completed:  # restore
@@ -5029,23 +5219,24 @@ def cmd_triage(
                     manager.restore_issue(target.slug, to_status="pending")
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
-                    cursor = min(len(indexed_issues) - 1, cursor)
+                    new_idx = find_slug_index(target.slug, indexed_issues)
+                    if new_idx is not None:
+                        cursor = new_idx
+                    else:
+                        cursor = min(len(indexed_issues) - 1, cursor)
                 except Exception:
                     pass
             elif key == "A" and not show_completed:  # active
-                live.stop()
                 issue = indexed_issues[cursor][0]
                 try:
                     manager.move_to_active(issue.slug)
-                    console.print(
-                        f"[bold green]Issue '{issue.slug}' is now active.[/bold green]"
-                    )
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
-                except Exception as e:
-                    console.print(f"[red]Error: {e}[/red]")
-                questionary.press_any_key_to_continue().ask()
-                live.start()
+                    new_idx = find_slug_index(issue.slug, indexed_issues)
+                    if new_idx is not None:
+                        cursor = new_idx
+                except Exception:
+                    pass
             elif key == "D" and not show_completed:  # done
                 live.stop()
                 issue = indexed_issues[cursor][0]
@@ -5054,6 +5245,7 @@ def cmd_triage(
                     cmd_done(console, manager, issue.slug, solution=solution or None)
                     issues = get_display_issues(search_query, show_completed)
                     indexed_issues = build_hierarchy(issues)
+                    cursor = min(len(indexed_issues) - 1, max(0, cursor))
                 except Exception as e:
                     console.print(f"[red]Error: {e}[/red]")
                     questionary.press_any_key_to_continue().ask()
@@ -5160,6 +5352,11 @@ def cmd_triage(
                                     search_query, show_completed
                                 )
                                 indexed_issues = build_hierarchy(issues)
+                                new_idx = find_slug_index(
+                                    current_issue.slug, indexed_issues
+                                )
+                                if new_idx is not None:
+                                    cursor = new_idx
                             except Exception as e:
                                 console.print(f"[red]Error: {e}[/red]")
                                 questionary.press_any_key_to_continue().ask()
@@ -5186,6 +5383,11 @@ def cmd_triage(
                         if updated:
                             issues = get_display_issues(search_query, show_completed)
                             indexed_issues = build_hierarchy(issues)
+                            new_idx = find_slug_index(
+                                current_issue.slug, indexed_issues
+                            )
+                            if new_idx is not None:
+                                cursor = new_idx
                     except Exception as e:
                         console.print(f"[red]Error: {e}[/red]")
                         questionary.press_any_key_to_continue().ask()
@@ -5242,7 +5444,7 @@ def display_overview(console: Console, manager: TaskAgent):
     table.add_column("Description", style="white")
 
     commands = [
-        ("next", "Show the highest priority task"),
+        ("next", "Show the highest priority task (try -t/--text)"),
         ("prior", "Interactively prioritize and promote tasks"),
         ("list", "List all tasks in the queue (try --json or --text)"),
         ("search", "Search for tasks by slug pattern"),
@@ -5300,7 +5502,13 @@ def main():
     parser.add_argument("-C", "--config-dir")
     subparsers = parser.add_subparsers(dest="command")
 
-    subparsers.add_parser("next")
+    next_parser = subparsers.add_parser("next", help="Show the top issue")
+    next_parser.add_argument(
+        "-t",
+        "--text",
+        action="store_true",
+        help="Output plain text without using a pager",
+    )
     subparsers.add_parser("init", help="Initialize or heal the project")
     triage_parser = subparsers.add_parser(
         "triage", help="Interactively prioritize and promote tasks"
@@ -5801,17 +6009,27 @@ and priorities. It is displayed periodically at the top of 'list', 'next', and
 'active' commands to keep all workers aligned.
 
 Usage:
-  ta strategy          View the current strategy
-  ta strategy edit     Open the strategy in your $EDITOR
-  ta strategy init     Create a starter strategy file
+  ta strategy                   View the current strategy
+  ta strategy edit              Open the strategy in your $EDITOR
+  ta strategy init              Create a starter strategy file
+  ta strategy cooldown          Show the display cooldown (hours)
+  ta strategy cooldown <hours>  Set the display cooldown (0 = every time)
+
+The cooldown can also be overridden per-shell with the
+TA_STRATEGY_COOLDOWN_HOURS environment variable.
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     strategy_parser.add_argument(
         "action",
         nargs="?",
-        choices=["edit", "init"],
+        choices=["edit", "init", "cooldown"],
         help="Action to perform (default: view)",
+    )
+    strategy_parser.add_argument(
+        "value",
+        nargs="?",
+        help="Hours for 'cooldown' (e.g. 0.5; 0 shows the strategy every time)",
     )
 
     # push
@@ -6298,7 +6516,7 @@ Usage:
             console.print(f"[red]Task '{args.slug}' not found.[/red]")
             sys.exit(1)
     elif args.command == "next":
-        cmd_next(console, manager)
+        cmd_next(console, manager, text_mode=getattr(args, "text", False))
     elif args.command == "init":
         cmd_init(console, manager)
     elif args.command == "triage":
@@ -6428,7 +6646,7 @@ Usage:
     elif args.command == "plan":
         cmd_plan(console, manager)
     elif args.command == "strategy":
-        cmd_strategy(console, manager, action=args.action)
+        cmd_strategy(console, manager, action=args.action, value=args.value)
     elif args.command == "commit":
         if args.target == "repo":
             cmd_commit(console, manager, message=args.message, should_push=args.push)

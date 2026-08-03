@@ -1461,6 +1461,9 @@ class TaskAgent:
         else:
             raise ValueError("Direction must be 'up' or 'down'.")
 
+        for i, issue in enumerate(issues, 1):
+            issue.priority = i
+
         self.save_mission(issues)
         self.sync_mission()
         return issues[idx]
@@ -2539,14 +2542,51 @@ class TaskAgent:
         with self.strategy_meta_file.open("w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
 
-    def should_show_strategy(self, cooldown_hours: float = 2.0) -> bool:
+    DEFAULT_STRATEGY_COOLDOWN_HOURS = 2.0
+
+    @property
+    def strategy_cooldown_hours(self) -> float:
+        """Resolve the strategy display cooldown in hours.
+
+        Precedence: ``TA_STRATEGY_COOLDOWN_HOURS`` env var, then
+        ``cooldown_hours`` in strategy/.meta.json, then the default (2.0).
+        A value of 0 shows the strategy on every eligible command.
+        """
+        env_val = os.environ.get("TA_STRATEGY_COOLDOWN_HOURS")
+        if env_val is not None:
+            try:
+                return max(0.0, float(env_val))
+            except ValueError:
+                pass
+        meta_val = self.get_strategy_meta().get("cooldown_hours")
+        if meta_val is not None:
+            try:
+                return max(0.0, float(meta_val))
+            except (ValueError, TypeError):
+                pass
+        return self.DEFAULT_STRATEGY_COOLDOWN_HOURS
+
+    def set_strategy_cooldown_hours(self, hours: float) -> None:
+        """Persist the strategy cooldown in strategy/.meta.json."""
+        self.strategy_dir.mkdir(parents=True, exist_ok=True)
+        meta = self.get_strategy_meta()
+        meta["cooldown_hours"] = hours
+        with self.strategy_meta_file.open("w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    def should_show_strategy(self, cooldown_hours: Optional[float] = None) -> bool:
         """Check if enough time has elapsed to display the strategy again.
 
         Returns True if:
         - A strategy file exists with content, AND
         - The strategy has never been shown, OR
         - At least `cooldown_hours` have passed since last shown.
+
+        When ``cooldown_hours`` is None, the configured value is used
+        (see ``strategy_cooldown_hours``).
         """
+        if cooldown_hours is None:
+            cooldown_hours = self.strategy_cooldown_hours
         content = self.get_strategy()
         if not content:
             return False

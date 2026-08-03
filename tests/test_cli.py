@@ -8,6 +8,7 @@ from taskagent.cli import (
     cmd_show,
     cmd_document,
     cmd_prompt,
+    cmd_strategy,
     get_project_version,
     main,
 )
@@ -168,6 +169,38 @@ def test_cmd_show_multi_and_children(manager, temp_issues_dir, capsys):
     assert "Child body" in child_out
     assert "Blocked body" in child_out
     assert "Other body" not in child_out
+
+
+def test_cmd_strategy_cooldown_view_default(manager, temp_issues_dir):
+    console = Console(force_terminal=False, record=True)
+    cmd_strategy(console, manager, action="cooldown")
+    out = console.export_text()
+    assert "2h" in out
+    assert "default" in out
+
+
+def test_cmd_strategy_cooldown_set_and_view(manager, temp_issues_dir):
+    console = Console(force_terminal=False, record=True)
+    cmd_strategy(console, manager, action="cooldown", value="0.5")
+    assert manager.strategy_cooldown_hours == 0.5
+
+    console2 = Console(force_terminal=False, record=True)
+    cmd_strategy(console2, manager, action="cooldown")
+    out = console2.export_text()
+    assert "0.5h" in out
+    assert "strategy/.meta.json" in out
+
+
+def test_cmd_strategy_cooldown_rejects_invalid(manager, temp_issues_dir):
+    console = Console(force_terminal=False, record=True)
+    cmd_strategy(console, manager, action="cooldown", value="soon")
+    assert "Invalid cooldown value" in console.export_text()
+    assert manager.get_strategy_meta().get("cooldown_hours") is None
+
+    console2 = Console(force_terminal=False, record=True)
+    cmd_strategy(console2, manager, action="cooldown", value="-1")
+    assert "0 or greater" in console2.export_text()
+    assert manager.get_strategy_meta().get("cooldown_hours") is None
 
 
 def test_cmd_show_children_completed_flag(manager, temp_issues_dir):
@@ -1060,6 +1093,182 @@ def test_cmd_triage_subtask_of(manager, monkeypatch):
     assert issue_t2_unlinked.subtask_of is None
 
 
+def test_cmd_triage_activate_task(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Task 1")
+    mock_console = MagicMock()
+
+    keys = ["A", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    mock_live_instance = MagicMock()
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live", return_value=mock_live_instance),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issue = manager.load_mission()[0]
+    assert issue.status == "active"
+    # Verify live.stop() was not called for activating task
+    mock_live_instance.stop.assert_not_called()
+
+
+def test_cmd_triage_move_priority_cursor_tracking(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Task 1")
+    manager.create_issue("Task 2")
+    manager.create_issue("Task 3")
+    mock_console = MagicMock()
+
+    # Move task 3 up using \x0b (ctrl+k) twice
+    keys = ["j", "j", "\x0b", "\x0b", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issues = manager.load_mission()
+    assert issues[0].slug == "task-3"
+
+
+def test_cmd_triage_move_group_above_group(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Parent 1")
+    manager.create_issue("Child 1")
+    manager.update_subtask_of("child-1", "parent-1")
+
+    manager.create_issue("Parent 2")
+    manager.create_issue("Child 2")
+    manager.update_subtask_of("child-2", "parent-2")
+
+    mock_console = MagicMock()
+
+    # Hierarchy initial:
+    # 0: parent-1
+    # 1:   child-1
+    # 2: parent-2
+    # 3:   child-2
+    # Move cursor to index 2 (parent-2), press ctrl+k (\x0b)
+    keys = ["j", "j", "\x0b", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issues = manager.load_mission()
+    slug_order = [i.slug for i in issues]
+    assert slug_order.index("parent-2") < slug_order.index("parent-1")
+    assert slug_order.index("child-2") < slug_order.index("parent-1")
+
+
+def test_cmd_triage_move_group_down_below_second_group(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    p1 = manager.create_issue("Parent 1")
+    c1 = manager.create_issue("Child 1")
+    manager.update_subtask_of(c1.slug, p1.slug)
+
+    p2 = manager.create_issue("Parent 2")
+    c2 = manager.create_issue("Child 2")
+    manager.update_subtask_of(c2.slug, p2.slug)
+
+    p3 = manager.create_issue("Parent 3")
+    c3 = manager.create_issue("Child 3")
+    manager.update_subtask_of(c3.slug, p3.slug)
+
+    mock_console = MagicMock()
+
+    # Hierarchy initial:
+    # 0: parent-1 (Group 1)
+    # 1:   child-1
+    # 2: parent-2 (Group 2)
+    # 3:   child-2
+    # 4: parent-3 (Group 3)
+    # 5:   child-3
+    # Cursor at index 0 (parent-1), press ctrl+j (\x0a) to move Group 1 down below Group 2
+    keys = ["\x0a", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issues = manager.load_mission()
+    slug_order = [i.slug for i in issues]
+
+    # Order should be: Group 2, then Group 1, then Group 3
+    assert slug_order.index("parent-2") < slug_order.index("parent-1")
+    assert slug_order.index("parent-1") < slug_order.index("parent-3")
+
+
+def test_cmd_triage_move_subtask_within_group(manager, monkeypatch):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    p1 = manager.create_issue("Parent 1")
+    c1 = manager.create_issue("Child 1 1")
+    manager.update_subtask_of(c1.slug, p1.slug)
+    c2 = manager.create_issue("Child 1 2")
+    manager.update_subtask_of(c2.slug, p1.slug)
+
+    mock_console = MagicMock()
+
+    # Hierarchy initial:
+    # 0: parent-1
+    # 1:   child-1-1
+    # 2:   child-1-2
+    # Move cursor to index 2 (child-1-2), press ctrl+k (\x0b)
+    keys = ["j", "j", "\x0b", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live"),
+    ):
+        cmd_triage(mock_console, manager)
+
+    issues = manager.load_mission()
+    slug_order = [i.slug for i in issues]
+    assert slug_order.index(c2.slug) < slug_order.index(c1.slug)
+
+
 # ---------------------------------------------------------------------------
 # ta prompt tests
 # ---------------------------------------------------------------------------
@@ -1277,3 +1486,50 @@ def test_cmd_rename(manager):
     assert manager.find_issue_file("original-slug-task") is None
     mock_console.print.assert_called_once()
     assert "renamed-slug-task" in mock_console.print.call_args[0][0]
+
+
+def test_cmd_next_pager_mode(manager):
+    """cmd_next in default mode uses console.pager."""
+    from taskagent.cli import cmd_next
+    from unittest.mock import MagicMock
+
+    manager.create_issue("Next Test Task")
+    mock_console = MagicMock()
+
+    cmd_next(mock_console, manager, text_mode=False)
+
+    # console.pager should have been invoked
+    mock_console.pager.assert_called_once()
+
+
+def test_cmd_next_text_mode(manager):
+    """cmd_next in text mode (-t/--text) does not use console.pager."""
+    from taskagent.cli import cmd_next
+    from unittest.mock import MagicMock
+
+    manager.create_issue("Next Text Task")
+    mock_console = MagicMock()
+
+    cmd_next(mock_console, manager, text_mode=True)
+
+    # console.pager should NOT have been invoked in text mode
+    mock_console.pager.assert_not_called()
+    # console.print should have been called to output details
+    assert mock_console.print.called
+
+
+def test_cli_next_text_flag(manager, monkeypatch):
+    """Test CLI invocation of ta next with -t and --text flags."""
+    from taskagent.cli import main
+    from unittest.mock import patch
+
+    manager.create_issue("Flag Task")
+
+    for flag in ["-t", "--text"]:
+        monkeypatch.setattr("sys.argv", ["ta", "next", flag])
+        with patch("taskagent.cli.cmd_next") as mock_cmd_next:
+            with patch("taskagent.cli.TaskAgent", return_value=manager):
+                main()
+                mock_cmd_next.assert_called_once()
+                # Check that text_mode=True was passed
+                assert mock_cmd_next.call_args[1].get("text_mode") is True
