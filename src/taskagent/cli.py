@@ -4871,9 +4871,7 @@ def cmd_triage(
                 return idx
         return None
 
-    def get_subtree_indices(
-        indexed: List[Tuple[Issue, int]], idx: int
-    ) -> List[int]:
+    def get_subtree_indices(indexed: List[Tuple[Issue, int]], idx: int) -> List[int]:
         if idx < 0 or idx >= len(indexed):
             return []
         base_depth = indexed[idx][1]
@@ -4959,9 +4957,7 @@ def cmd_triage(
                 new_issues = remaining[:ref_idx] + moved_objs + remaining[ref_idx:]
             else:
                 new_issues = (
-                    remaining[: ref_idx + 1]
-                    + moved_objs
-                    + remaining[ref_idx + 1 :]
+                    remaining[: ref_idx + 1] + moved_objs + remaining[ref_idx + 1 :]
                 )
             for i, issue in enumerate(new_issues, 1):
                 issue.priority = i
