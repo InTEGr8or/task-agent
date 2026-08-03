@@ -1,12 +1,14 @@
 from typing import List, Optional, Sequence, Tuple
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 import re
 import subprocess
 import os
 import shutil
 import stat
 import json
+import tempfile
 
 from taskagent.models.issue import Issue, USV_DELIM
 from taskagent.models.metric import SubtaskMetric
@@ -20,6 +22,160 @@ class TaskAgent:
         self.ensure_issues_dir()
         self.code_root = self._get_git_root(Path.cwd())
         self.mission_root = self._get_git_root(self.issues_root)
+
+    @contextmanager
+    def _atomic_store_operation(self):
+        """Context manager to ensure store-mutating operations are atomic.
+
+        Snapshots ``issues_root`` and ``mission_path`` (and git commit state).
+        If any exception occurs during the operation (or git commit fails),
+        the filesystem state is restored and any git commits in code_root / mission_root
+        are reset.
+        """
+        if getattr(self, "_in_atomic_op", False):
+            yield
+            return
+
+        if (
+            not hasattr(self, "issues_root")
+            or not self.issues_root
+            or not self.issues_root.exists()
+        ):
+            yield
+            return
+
+        self._in_atomic_op = True
+        backup_dir = Path(tempfile.mkdtemp(prefix="ta_store_backup_"))
+        pre_code_head = None
+        pre_mission_head = None
+
+        if self.code_root and (self.code_root / ".git").exists():
+            try:
+                pre_code_head = subprocess.check_output(
+                    ["git", "-C", str(self.code_root), "rev-parse", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    shell=(os.name == "nt"),
+                ).strip()
+            except Exception:
+                pass
+
+        if self.mission_root and (self.mission_root / ".git").exists():
+            try:
+                pre_mission_head = subprocess.check_output(
+                    ["git", "-C", str(self.mission_root), "rev-parse", "HEAD"],
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    shell=(os.name == "nt"),
+                ).strip()
+            except Exception:
+                pass
+
+        try:
+            backup_issues = backup_dir / "issues"
+            shutil.copytree(self.issues_root, backup_issues, symlinks=True)
+
+            backup_mission = None
+            if (
+                hasattr(self, "mission_path")
+                and self.mission_path
+                and self.mission_path.exists()
+            ):
+                backup_mission = backup_dir / "mission.usv"
+                shutil.copy2(self.mission_path, backup_mission)
+
+            try:
+                yield
+            except Exception:
+
+                def _make_writable_recursive(path: Path):
+                    if not path.exists():
+                        return
+                    if path.is_file():
+                        self._set_writable(path, True)
+                    else:
+                        for p in path.glob("**/*"):
+                            if p.is_file():
+                                self._set_writable(p, True)
+
+                if backup_issues.exists():
+                    if self.issues_root.exists():
+                        _make_writable_recursive(self.issues_root)
+                        shutil.rmtree(self.issues_root, ignore_errors=True)
+                    shutil.copytree(backup_issues, self.issues_root, symlinks=True)
+
+                if backup_mission and backup_mission.exists():
+                    self.mission_path.parent.mkdir(parents=True, exist_ok=True)
+                    if self.mission_path.exists():
+                        self._set_writable(self.mission_path, True)
+                        self.mission_path.unlink()
+                    shutil.copy2(backup_mission, self.mission_path)
+                elif (
+                    hasattr(self, "mission_path")
+                    and self.mission_path
+                    and self.mission_path.exists()
+                    and not backup_mission
+                ):
+                    self._set_writable(self.mission_path, True)
+                    self.mission_path.unlink()
+
+                if self.mission_root and (self.mission_root / ".git").exists():
+                    try:
+                        if pre_mission_head:
+                            subprocess.run(
+                                [
+                                    "git",
+                                    "-C",
+                                    str(self.mission_root),
+                                    "reset",
+                                    "--mixed",
+                                    pre_mission_head,
+                                ],
+                                capture_output=True,
+                                shell=(os.name == "nt"),
+                            )
+                        else:
+                            subprocess.run(
+                                ["git", "-C", str(self.mission_root), "reset", "HEAD"],
+                                capture_output=True,
+                                shell=(os.name == "nt"),
+                            )
+                    except Exception:
+                        pass
+
+                if (
+                    self.code_root
+                    and (self.code_root / ".git").exists()
+                    and pre_code_head
+                ):
+                    try:
+                        curr_code_head = subprocess.check_output(
+                            ["git", "-C", str(self.code_root), "rev-parse", "HEAD"],
+                            stderr=subprocess.DEVNULL,
+                            text=True,
+                            shell=(os.name == "nt"),
+                        ).strip()
+                        if curr_code_head != pre_code_head:
+                            subprocess.run(
+                                [
+                                    "git",
+                                    "-C",
+                                    str(self.code_root),
+                                    "reset",
+                                    "--mixed",
+                                    pre_code_head,
+                                ],
+                                capture_output=True,
+                                shell=(os.name == "nt"),
+                            )
+                    except Exception:
+                        pass
+
+                raise
+        finally:
+            self._in_atomic_op = False
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
 
     @staticmethod
     def _get_git_root(path: Path) -> Optional[Path]:
@@ -521,59 +677,62 @@ class TaskAgent:
 
     def restore_issue(self, slug: str, to_status: str = "pending") -> Issue:
         """Restore a completed issue back to a specified status."""
-        if to_status not in ["pending", "draft", "active"]:
-            raise ValueError(f"Invalid restoration status: {to_status}")
+        with self._atomic_store_operation():
+            if to_status not in ["pending", "draft", "active"]:
+                raise ValueError(f"Invalid restoration status: {to_status}")
 
-        issue_file = self.find_issue_file(slug, include_completed=True)
-        if not issue_file:
-            raise FileNotFoundError(f"Completed issue '{slug}' not found.")
+            issue_file = self.find_issue_file(slug, include_completed=True)
+            if not issue_file:
+                raise FileNotFoundError(f"Completed issue '{slug}' not found.")
 
-        # Ensure it's actually in completed/
-        if "completed" not in str(issue_file):
-            # Already not completed, just move it if needed?
-            # For now, if it's already in pending/draft/active, we just return it.
-            # But the user asked specifically to 'restore from completed'.
-            current_status = "unknown"
-            for s in ["pending", "draft", "active"]:
-                if s in str(issue_file):
-                    current_status = s
+            # Ensure it's actually in completed/
+            if "completed" not in str(issue_file):
+                # Already not completed, just move it if needed?
+                # For now, if it's already in pending/draft/active, we just return it.
+                # But the user asked specifically to 'restore from completed'.
+                current_status = "unknown"
+                for s in ["pending", "draft", "active"]:
+                    if s in str(issue_file):
+                        current_status = s
 
-            if current_status == to_status:
-                issues = self.load_mission()
-                for i in issues:
-                    if i.slug == slug:
-                        return i
+                if current_status == to_status:
+                    issues = self.load_mission()
+                    for i in issues:
+                        if i.slug == slug:
+                            return i
 
-        # Perform the move
-        is_dir_based = issue_file.name == "README.md"
-        source = issue_file.parent if is_dir_based else issue_file
-        dest = self.issues_root / to_status / source.name
+            # Perform the move
+            is_dir_based = issue_file.name == "README.md"
+            source = issue_file.parent if is_dir_based else issue_file
+            dest = self.issues_root / to_status / source.name
 
-        shutil.move(str(source), str(dest))
+            shutil.move(str(source), str(dest))
 
-        # Add back to mission USV
-        issues = self.load_mission()
-        # Remove if somehow already there (shouldn't be)
-        issues = [i for i in issues if i.slug != slug]
+            # Add back to mission USV
+            issues = self.load_mission()
+            # Remove if somehow already there (shouldn't be)
+            issues = [i for i in issues if i.slug != slug]
 
-        # Extract deps and name
-        final_file = dest / "README.md" if is_dir_based else dest
-        deps = self.extract_deps(final_file)
-        name = self.extract_title(final_file)
+            # Extract deps and name
+            final_file = dest / "README.md" if is_dir_based else dest
+            deps = self.extract_deps(final_file)
+            name = self.extract_title(final_file)
 
-        new_issue = Issue(
-            name=name,
-            slug=slug,
-            status=to_status,
-            priority=len(issues) + 1,
-            dependencies=deps,
-        )
-        issues.append(new_issue)
-        self.save_mission(issues)
-        self.sync_mission()
-        self._commit_task_store(f"task: restore {slug} → {to_status}")
+            new_issue = Issue(
+                name=name,
+                slug=slug,
+                status=to_status,
+                priority=len(issues) + 1,
+                dependencies=deps,
+            )
+            issues.append(new_issue)
+            self.save_mission(issues)
+            self.sync_mission()
+            res = self._commit_task_store(f"task: restore {slug} → {to_status}")
+            if res == "failed":
+                raise RuntimeError("Failed to commit changes to task store.")
 
-        return new_issue
+            return new_issue
 
     def load_mission(self) -> List[Issue]:
         # Check new location first (.task-agent/mission.usv)
@@ -841,112 +1000,127 @@ class TaskAgent:
         # Reload to get the issue with proper priority from mission.usv
         issues = self.load_mission()
         created = next(i for i in issues if i.slug == slug)
-        self._commit_task_store(f"task: create {created.slug}")
+        res = self._commit_task_store(f"task: create {created.slug}")
+        if res == "failed":
+            raise RuntimeError("Failed to commit changes to task store.")
         return created
 
     def promote_issue(self, slug: str) -> Issue:
         """Promote an issue from draft to pending. Also promotes any draft children."""
-        issues = self.load_mission()
-        target = next(
-            (i for i in issues if i.slug == slug and i.status == "draft"), None
-        )
-        if not target:
-            raise ValueError(f"Draft issue '{slug}' not found.")
+        with self._atomic_store_operation():
+            issues = self.load_mission()
+            target = next(
+                (i for i in issues if i.slug == slug and i.status == "draft"), None
+            )
+            if not target:
+                raise ValueError(f"Draft issue '{slug}' not found.")
 
-        promoted = [target.slug]
+            promoted = [target.slug]
 
-        def promote_single(s: str):
-            self.migrate_to_folder(s)
-            issue_file = self.find_issue_file(s)
-            if not issue_file:
-                return
-            is_dir_based = issue_file.name == "README.md"
-            source = issue_file.parent if is_dir_based else issue_file
-            dest = self.issues_root / "pending" / source.name
-            shutil.move(str(source), str(dest))
+            def promote_single(s: str):
+                self.migrate_to_folder(s)
+                issue_file = self.find_issue_file(s)
+                if not issue_file:
+                    return
+                is_dir_based = issue_file.name == "README.md"
+                source = issue_file.parent if is_dir_based else issue_file
+                dest = self.issues_root / "pending" / source.name
+                shutil.move(str(source), str(dest))
 
-        promote_single(target.slug)
+            promote_single(target.slug)
 
-        children = [
-            i.slug
-            for i in issues
-            if i.subtask_of == target.slug and i.status == "draft"
-        ]
-        for child_slug in children:
-            promote_single(child_slug)
-            promoted.append(child_slug)
+            children = [
+                i.slug
+                for i in issues
+                if i.subtask_of == target.slug and i.status == "draft"
+            ]
+            for child_slug in children:
+                promote_single(child_slug)
+                promoted.append(child_slug)
 
-        self.sync_mission()
-        target.status = "pending"
-        self._commit_task_store(f"task: promote {slug}")
-        return target
+            self.sync_mission()
+            target.status = "pending"
+            res = self._commit_task_store(f"task: promote {slug}")
+            if res == "failed":
+                raise RuntimeError("Failed to commit changes to task store.")
+            return target
 
     def demote_issue(self, slug: str) -> Issue:
         """Demote an issue: active -> pending -> draft. Also cascades children."""
-        issues = self.load_mission()
-        target = next(
-            (i for i in issues if i.slug == slug and i.status in ("pending", "active")),
-            None,
-        )
-        if not target:
-            raise ValueError(f"Pending or active issue '{slug}' not found.")
+        with self._atomic_store_operation():
+            issues = self.load_mission()
+            target = next(
+                (
+                    i
+                    for i in issues
+                    if i.slug == slug and i.status in ("pending", "active")
+                ),
+                None,
+            )
+            if not target:
+                raise ValueError(f"Pending or active issue '{slug}' not found.")
 
-        to_status = "pending" if target.status == "active" else "draft"
+            to_status = "pending" if target.status == "active" else "draft"
 
-        def demote_single(s: str):
-            self.migrate_to_folder(s)
-            issue_file = self.find_issue_file(s)
-            if not issue_file:
-                return
-            is_dir_based = issue_file.name == "README.md"
-            source = issue_file.parent if is_dir_based else issue_file
-            dest = self.issues_root / to_status / source.name
-            shutil.move(str(source), str(dest))
+            def demote_single(s: str):
+                self.migrate_to_folder(s)
+                issue_file = self.find_issue_file(s)
+                if not issue_file:
+                    return
+                is_dir_based = issue_file.name == "README.md"
+                source = issue_file.parent if is_dir_based else issue_file
+                dest = self.issues_root / to_status / source.name
+                shutil.move(str(source), str(dest))
 
-        demote_single(target.slug)
+            demote_single(target.slug)
 
-        children = [
-            i.slug
-            for i in issues
-            if i.subtask_of == target.slug and i.status == target.status
-        ]
-        for child_slug in children:
-            demote_single(child_slug)
+            children = [
+                i.slug
+                for i in issues
+                if i.subtask_of == target.slug and i.status == target.status
+            ]
+            for child_slug in children:
+                demote_single(child_slug)
 
-        self.sync_mission()
-        target.status = to_status
-        self._commit_task_store(f"task: demote {slug} → {to_status}")
-        return target
+            self.sync_mission()
+            target.status = to_status
+            res = self._commit_task_store(f"task: demote {slug} → {to_status}")
+            if res == "failed":
+                raise RuntimeError("Failed to commit changes to task store.")
+            return target
 
     def move_to_active(self, slug: str) -> Issue:
         """Move an issue to active status."""
-        issues = self.load_mission()
-        target = next((i for i in issues if i.slug == slug), None)
-        if not target:
-            raise ValueError(f"Issue '{slug}' not found.")
+        with self._atomic_store_operation():
+            issues = self.load_mission()
+            target = next((i for i in issues if i.slug == slug), None)
+            if not target:
+                raise ValueError(f"Issue '{slug}' not found.")
 
-        if target.status == "active":
+            if target.status == "active":
+                return target
+
+            if target.status not in ["pending", "draft"]:
+                raise ValueError(
+                    f"Issue '{slug}' cannot be marked as active from status '{target.status}'."
+                )
+
+            self.migrate_to_folder(target.slug)
+            issue_file = self.find_issue_file(target.slug)
+            if not issue_file:
+                raise FileNotFoundError(f"Issue file not found for '{target.slug}'.")
+
+            is_dir_based = issue_file.name == "README.md"
+            source = issue_file.parent if is_dir_based else issue_file
+            dest = self.issues_root / "active" / source.name
+
+            shutil.move(str(source), str(dest))
+            self.sync_mission()
+            target.status = "active"
+            res = self._commit_task_store(f"task: active {slug}")
+            if res == "failed":
+                raise RuntimeError("Failed to commit changes to task store.")
             return target
-
-        if target.status not in ["pending", "draft"]:
-            raise ValueError(
-                f"Issue '{slug}' cannot be marked as active from status '{target.status}'."
-            )
-
-        self.migrate_to_folder(target.slug)
-        issue_file = self.find_issue_file(target.slug)
-        if not issue_file:
-            raise FileNotFoundError(f"Issue file not found for '{target.slug}'.")
-
-        is_dir_based = issue_file.name == "README.md"
-        source = issue_file.parent if is_dir_based else issue_file
-        dest = self.issues_root / "active" / source.name
-
-        shutil.move(str(source), str(dest))
-        self.sync_mission()
-        target.status = "active"
-        self._commit_task_store(f"task: active {slug}")
-        return target
 
     def add_dependency(self, slug: str, blocked_by: str) -> Issue:
         """Add one or more blocked_by entries (comma-separated) without replacing others.
@@ -1257,121 +1431,101 @@ class TaskAgent:
                 f"Cannot complete task '{slug}' because it has open sub-tasks: {subtask_slugs}"
             )
 
-        self.migrate_to_folder(target_issue.slug)
-        issue_file = self.find_issue_file(target_issue.slug)
-        if not issue_file:
-            raise FileNotFoundError(
-                f"Issue file not found for slug: {target_issue.slug}"
-            )
+        with self._atomic_store_operation():
+            self.migrate_to_folder(target_issue.slug)
+            issue_file = self.find_issue_file(target_issue.slug)
+            if not issue_file:
+                raise FileNotFoundError(
+                    f"Issue file not found for slug: {target_issue.slug}"
+                )
 
-        # 1. Prepare Move
-        is_dir_based = issue_file.name == "README.md"
-        source_to_move = issue_file.parent if is_dir_based else issue_file
-
-        now = datetime.now()
-        completed_dir = (
-            self.issues_root / "completed" / str(now.year) / f"{now.month:02d}"
-        )
-        completed_dir.mkdir(parents=True, exist_ok=True)
-
-        dest_path = completed_dir / source_to_move.name
-
-        # 2. Add placeholder to content
-        with issue_file.open("r", encoding="utf-8") as f:
-            content = f.read()
-
-        if not content.endswith("\n"):
-            content += "\n"
-
-        if solution_explanation:
-            content += f"\n## Solution\n\n{solution_explanation}\n"
-
-        content += "\n---\n**Completed in commit:** `<pending-commit-id>`\n"
-
-        # 3. Execute Move and USV update (Mission Repo)
-        if is_dir_based:
-            if dest_path.exists():
-                shutil.rmtree(dest_path)
-            shutil.move(str(source_to_move), str(dest_path))
-            with (dest_path / "README.md").open("w", encoding="utf-8") as f:
-                f.write(content)
-            final_file = dest_path / "README.md"
-            task_dir: Optional[Path] = dest_path
-        else:
-            with dest_path.open("w", encoding="utf-8") as f:
-                f.write(content)
-            issue_file.unlink()
-            final_file = dest_path
-            task_dir = None
-
-        if metrics is not None and task_dir is not None:
-            self._write_completion_metrics(task_dir, target_issue.slug, metrics)
-
-        new_issues = [i for i in issues if i.slug != target_issue.slug]
-        self.save_mission(new_issues)
-
-        # 4. Commit Logic
-        code_hash = "unknown"
-        committed = False
-        if should_commit:
-            msg = commit_message or f"feat: complete {target_issue.slug}"
-
-            # A. Commit Code Changes (Main Repo)
-            if self.code_root:
-                code_hash = self._git_commit(self.code_root, msg, no_verify=no_verify)
-                if code_hash == "failed":
-                    raise RuntimeError("Failed to commit changes to code repository.")
-                if code_hash == "no_changes":
-                    code_hash = self.get_git_commit()
-                else:
-                    committed = True
-
-            # B. Commit Mission Changes (Mission Repo / centralized store)
-            if self.is_dual_repo and self.mission_root:
-                mission_msg = f"task: finalize {target_issue.slug}"
-                mission_hash = self._commit_task_store(mission_msg, no_verify=no_verify)
-                if mission_hash == "failed":
-                    raise RuntimeError(
-                        "Failed to commit changes to mission repository."
+            # 1. Commit Code Changes (Main Repo) first if needed
+            code_hash = "unknown"
+            if should_commit:
+                msg = commit_message or f"feat: complete {target_issue.slug}"
+                if self.code_root:
+                    code_hash = self._git_commit(
+                        self.code_root, msg, no_verify=no_verify
                     )
-                if mission_hash not in ("no_changes", "no_git"):
-                    committed = True
-            elif self.code_root and self.mission_root:
-                # Single-repo: force-include gitignored task paths before/with code
-                self._commit_task_store(
-                    f"task: finalize {target_issue.slug}", no_verify=no_verify
-                )
+                    if code_hash == "failed":
+                        raise RuntimeError(
+                            "Failed to commit changes to code repository."
+                        )
+                    if code_hash == "no_changes":
+                        code_hash = self.get_git_commit()
 
-        # 5. Update issue file with the code hash
-        # If we didn't commit, we use the current HEAD or 'pending'
-        if code_hash == "unknown":
-            code_hash = self.get_git_commit()
+            if code_hash == "unknown":
+                code_hash = self.get_git_commit()
 
-        file_text = final_file.read_text(encoding="utf-8")
-        file_text = file_text.replace("<pending-commit-id>", code_hash)
-        final_file.write_text(file_text, encoding="utf-8")
+            # 2. Prepare Move and format content directly with real code_hash
+            is_dir_based = issue_file.name == "README.md"
+            source_to_move = issue_file.parent if is_dir_based else issue_file
 
-        # 6. Amend the mission commit if in dual mode, or the code commit if single mode
-        if committed:
-            if self.is_dual_repo and self.mission_root:
-                res = self._git_commit(
-                    self.mission_root, "", amend=True, files=[str(final_file)]
-                )
-                if res == "failed":
-                    raise RuntimeError("Failed to amend mission commit.")
-            elif self.code_root:
-                res = self._git_commit(
-                    self.code_root, "", amend=True, files=[str(final_file)]
-                )
-                if res == "failed":
-                    raise RuntimeError("Failed to amend code commit.")
+            now = datetime.now()
+            completed_dir = (
+                self.issues_root / "completed" / str(now.year) / f"{now.month:02d}"
+            )
+            completed_dir.mkdir(parents=True, exist_ok=True)
 
-        # 7. Optional Push
-        if push_mission and self.mission_root:
-            self.push_mission_repo()
+            dest_path = completed_dir / source_to_move.name
 
-        target_issue.status = "completed"
-        return target_issue, code_hash
+            with issue_file.open("r", encoding="utf-8") as f:
+                content = f.read()
+
+            if not content.endswith("\n"):
+                content += "\n"
+
+            if solution_explanation:
+                content += f"\n## Solution\n\n{solution_explanation}\n"
+
+            content += f"\n---\n**Completed in commit:** `{code_hash}`\n"
+
+            # 3. Execute Move and USV update
+            if is_dir_based:
+                if dest_path.exists():
+                    shutil.rmtree(dest_path)
+                shutil.move(str(source_to_move), str(dest_path))
+                with (dest_path / "README.md").open("w", encoding="utf-8") as f:
+                    f.write(content)
+                task_dir: Optional[Path] = dest_path
+            else:
+                with dest_path.open("w", encoding="utf-8") as f:
+                    f.write(content)
+                issue_file.unlink()
+                task_dir = None
+
+            if metrics is not None and task_dir is not None:
+                self._write_completion_metrics(task_dir, target_issue.slug, metrics)
+
+            new_issues = [i for i in issues if i.slug != target_issue.slug]
+            self.save_mission(new_issues)
+
+            # 4. Commit Mission / Task Store
+            if should_commit:
+                if self.is_dual_repo and self.mission_root:
+                    mission_msg = f"task: finalize {target_issue.slug}"
+                    mission_hash = self._commit_task_store(
+                        mission_msg, no_verify=no_verify
+                    )
+                    if mission_hash == "failed":
+                        raise RuntimeError(
+                            "Failed to commit changes to mission repository."
+                        )
+                elif self.code_root and self.mission_root:
+                    res = self._commit_task_store(
+                        f"task: finalize {target_issue.slug}", no_verify=no_verify
+                    )
+                    if res == "failed":
+                        raise RuntimeError(
+                            "Failed to commit changes to mission repository."
+                        )
+
+            # 5. Optional Push
+            if push_mission and self.mission_root:
+                self.push_mission_repo()
+
+            target_issue.status = "completed"
+            return target_issue, code_hash
 
     def _write_completion_metrics(
         self, task_dir: Path, slug: str, metrics: SubtaskMetric
@@ -1407,37 +1561,40 @@ class TaskAgent:
         if not target:
             raise ValueError(f"Issue '{slug}' not found.")
 
-        self.migrate_to_folder(target.slug)
-        issue_file = self.find_issue_file(target.slug)
-        if not issue_file:
-            raise FileNotFoundError(f"Issue file not found for slug: {target.slug}")
+        with self._atomic_store_operation():
+            self.migrate_to_folder(target.slug)
+            issue_file = self.find_issue_file(target.slug)
+            if not issue_file:
+                raise FileNotFoundError(f"Issue file not found for slug: {target.slug}")
 
-        # 1. Create deleted/ directory
-        deleted_dir = self.issues_root / "deleted"
-        deleted_dir.mkdir(parents=True, exist_ok=True)
+            # 1. Create deleted/ directory
+            deleted_dir = self.issues_root / "deleted"
+            deleted_dir.mkdir(parents=True, exist_ok=True)
 
-        # 2. Move the task file/folder
-        is_dir_based = issue_file.name == "README.md"
-        source_to_move = issue_file.parent if is_dir_based else issue_file
-        dest_path = deleted_dir / source_to_move.name
-        if dest_path.exists():
-            shutil.rmtree(str(dest_path)) if dest_path.is_dir() else dest_path.unlink()
-        shutil.move(str(source_to_move), str(dest_path))
+            # 2. Move the task file/folder
+            is_dir_based = issue_file.name == "README.md"
+            source_to_move = issue_file.parent if is_dir_based else issue_file
+            dest_path = deleted_dir / source_to_move.name
+            if dest_path.exists():
+                shutil.rmtree(
+                    str(dest_path)
+                ) if dest_path.is_dir() else dest_path.unlink()
+            shutil.move(str(source_to_move), str(dest_path))
 
-        # 3. Append to deleted.usv with timestamp and original status
-        deleted_usv = deleted_dir / "deleted.usv"
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        deps_str = ",".join(target.dependencies)
-        line = f"{target.name}\x1f{target.slug}\x1f{deps_str}\x1f{target.status}\x1f{timestamp}\n"
-        with deleted_usv.open("a", encoding="utf-8", newline="\n") as f:
-            f.write(line)
+            # 3. Append to deleted.usv with timestamp and original status
+            deleted_usv = deleted_dir / "deleted.usv"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            deps_str = ",".join(target.dependencies)
+            line = f"{target.name}\x1f{target.slug}\x1f{deps_str}\x1f{target.status}\x1f{timestamp}\n"
+            with deleted_usv.open("a", encoding="utf-8", newline="\n") as f:
+                f.write(line)
 
-        # 4. Remove from mission.usv
-        new_issues = [i for i in issues if i.slug != slug]
-        self.save_mission(new_issues)
+            # 4. Remove from mission.usv
+            new_issues = [i for i in issues if i.slug != slug]
+            self.save_mission(new_issues)
 
-        target.status = "deleted"
-        return target
+            target.status = "deleted"
+            return target
 
     def prioritize_issue(self, slug: str, direction: str) -> Issue:
         """Move an issue up or down in priority."""
@@ -1787,136 +1944,143 @@ class TaskAgent:
         if not new_title or not new_title.strip():
             raise ValueError("New title cannot be empty.")
 
-        issue_file = self.find_issue_file(old_slug, include_completed=True)
-        if not issue_file or not issue_file.exists():
-            raise FileNotFoundError(f"Issue '{old_slug}' not found.")
+        with self._atomic_store_operation():
+            issue_file = self.find_issue_file(old_slug, include_completed=True)
+            if not issue_file or not issue_file.exists():
+                raise FileNotFoundError(f"Issue '{old_slug}' not found.")
 
-        # Determine actual old slug
-        if issue_file.name == "README.md":
-            actual_old_slug = self.slugify(issue_file.parent.name)
-        else:
-            actual_old_slug = self.slugify(issue_file.stem)
-
-        new_slug = self.slugify(new_title)
-        if not new_slug:
-            raise ValueError("New title results in an empty slug.")
-
-        # If slug changes, check for collisions
-        if new_slug != actual_old_slug:
-            existing_file = self.find_issue_file(new_slug, include_completed=True)
-            if existing_file and existing_file.exists():
-                raise ValueError(f"Task with slug '{new_slug}' already exists.")
-
-            # Make old path writable
+            # Determine actual old slug
             if issue_file.name == "README.md":
-                old_dir = issue_file.parent
-                self._set_writable(old_dir, True)
-                self._set_writable(issue_file, True)
-                new_dir = old_dir.parent / new_slug
-                old_dir.rename(new_dir)
-                target_file = new_dir / "README.md"
+                actual_old_slug = self.slugify(issue_file.parent.name)
             else:
-                self._set_writable(issue_file, True)
-                new_file = issue_file.parent / f"{new_slug}.md"
-                issue_file.rename(new_file)
-                target_file = new_file
-        else:
-            target_file = issue_file
-            self._set_writable(target_file, True)
+                actual_old_slug = self.slugify(issue_file.stem)
 
-        # Update H1 Title in target_file
-        content = target_file.read_text(encoding="utf-8")
-        lines = content.splitlines()
-        h1_found = False
-        new_lines = []
-        for line in lines:
-            if not h1_found and line.strip().startswith("# "):
-                new_lines.append(f"# {new_title.strip()}")
-                h1_found = True
+            new_slug = self.slugify(new_title)
+            if not new_slug:
+                raise ValueError("New title results in an empty slug.")
+
+            # If slug changes, check for collisions
+            if new_slug != actual_old_slug:
+                existing_file = self.find_issue_file(new_slug, include_completed=True)
+                if existing_file and existing_file.exists():
+                    raise ValueError(f"Task with slug '{new_slug}' already exists.")
+
+                # Make old path writable
+                if issue_file.name == "README.md":
+                    old_dir = issue_file.parent
+                    self._set_writable(old_dir, True)
+                    self._set_writable(issue_file, True)
+                    new_dir = old_dir.parent / new_slug
+                    old_dir.rename(new_dir)
+                    target_file = new_dir / "README.md"
+                else:
+                    self._set_writable(issue_file, True)
+                    new_file = issue_file.parent / f"{new_slug}.md"
+                    issue_file.rename(new_file)
+                    target_file = new_file
             else:
-                new_lines.append(line)
+                target_file = issue_file
+                self._set_writable(target_file, True)
 
-        if not h1_found:
-            fm_text, body = TaskAgent._parse_frontmatter(content)
-            if fm_text is not None:
-                fields = TaskAgent._parse_frontmatter_dict(fm_text)
-                fm_block = TaskAgent._serialize_frontmatter(fields)
-                content = fm_block + f"\n\n# {new_title.strip()}\n" + body.lstrip("\n")
-            else:
-                content = f"# {new_title.strip()}\n\n" + content
-        else:
-            content = "\n".join(new_lines)
-            if content and not content.endswith("\n"):
-                content += "\n"
+            # Update H1 Title in target_file
+            content = target_file.read_text(encoding="utf-8")
+            lines = content.splitlines()
+            h1_found = False
+            new_lines = []
+            for line in lines:
+                if not h1_found and line.strip().startswith("# "):
+                    new_lines.append(f"# {new_title.strip()}")
+                    h1_found = True
+                else:
+                    new_lines.append(line)
 
-        target_file.write_text(content, encoding="utf-8")
-
-        # Rewrite references in other tasks if slug changed
-        if new_slug != actual_old_slug:
-            for task_file in self._find_all_task_files():
-                if task_file == target_file or not task_file.exists():
-                    continue
-                file_content = task_file.read_text(encoding="utf-8")
-                blocked_by, subtask_of = TaskAgent.extract_relations(task_file)
-                needs_update = False
-                new_blocked_by = None
-                new_subtask_of = None
-
-                if actual_old_slug in blocked_by:
-                    new_blocked_by = [
-                        new_slug if b == actual_old_slug else b for b in blocked_by
-                    ]
-                    needs_update = True
-                if subtask_of == actual_old_slug:
-                    new_subtask_of = new_slug
-                    needs_update = True
-
-                if needs_update:
-                    self._set_writable(task_file, True)
-                    updated_content = TaskAgent._write_frontmatter_edges(
-                        file_content,
-                        blocked_by=new_blocked_by
-                        if actual_old_slug in blocked_by
-                        else None,
-                        subtask_of=new_subtask_of
-                        if subtask_of == actual_old_slug
-                        else None,
+            if not h1_found:
+                fm_text, body = TaskAgent._parse_frontmatter(content)
+                if fm_text is not None:
+                    fields = TaskAgent._parse_frontmatter_dict(fm_text)
+                    fm_block = TaskAgent._serialize_frontmatter(fields)
+                    content = (
+                        fm_block + f"\n\n# {new_title.strip()}\n" + body.lstrip("\n")
                     )
-                    task_file.write_text(updated_content, encoding="utf-8")
+                else:
+                    content = f"# {new_title.strip()}\n\n" + content
+            else:
+                content = "\n".join(new_lines)
+                if content and not content.endswith("\n"):
+                    content += "\n"
 
-        # Update mission USV and in-memory list
-        issues = self.load_mission()
-        for i in issues:
-            if i.slug == actual_old_slug:
-                i.slug = new_slug
-                i.name = new_title.strip()
-            if actual_old_slug in i.blocked_by:
-                i.blocked_by = [
-                    new_slug if b == actual_old_slug else b for b in i.blocked_by
-                ]
-            if i.subtask_of == actual_old_slug:
-                i.subtask_of = new_slug
+            target_file.write_text(content, encoding="utf-8")
 
-        self.save_mission(issues)
-        self._commit_task_store(f"task: rename {actual_old_slug} to {new_slug}")
+            # Rewrite references in other tasks if slug changed
+            if new_slug != actual_old_slug:
+                for task_file in self._find_all_task_files():
+                    if task_file == target_file or not task_file.exists():
+                        continue
+                    file_content = task_file.read_text(encoding="utf-8")
+                    blocked_by, subtask_of = TaskAgent.extract_relations(task_file)
+                    needs_update = False
+                    new_blocked_by = None
+                    new_subtask_of = None
 
-        for i in issues:
-            if i.slug == new_slug:
-                return i
+                    if actual_old_slug in blocked_by:
+                        new_blocked_by = [
+                            new_slug if b == actual_old_slug else b for b in blocked_by
+                        ]
+                        needs_update = True
+                    if subtask_of == actual_old_slug:
+                        new_subtask_of = new_slug
+                        needs_update = True
 
-        status = "pending"
-        if "completed" in str(target_file):
-            status = "completed"
-        elif "active" in str(target_file):
-            status = "active"
-        elif "draft" in str(target_file):
-            status = "draft"
+                    if needs_update:
+                        self._set_writable(task_file, True)
+                        updated_content = TaskAgent._write_frontmatter_edges(
+                            file_content,
+                            blocked_by=new_blocked_by
+                            if actual_old_slug in blocked_by
+                            else None,
+                            subtask_of=new_subtask_of
+                            if subtask_of == actual_old_slug
+                            else None,
+                        )
+                        task_file.write_text(updated_content, encoding="utf-8")
 
-        return Issue(
-            name=new_title.strip(),
-            slug=new_slug,
-            status=status,
-        )
+            # Update mission USV and in-memory list
+            issues = self.load_mission()
+            for i in issues:
+                if i.slug == actual_old_slug:
+                    i.slug = new_slug
+                    i.name = new_title.strip()
+                if actual_old_slug in i.blocked_by:
+                    i.blocked_by = [
+                        new_slug if b == actual_old_slug else b for b in i.blocked_by
+                    ]
+                if i.subtask_of == actual_old_slug:
+                    i.subtask_of = new_slug
+
+            self.save_mission(issues)
+            res = self._commit_task_store(
+                f"task: rename {actual_old_slug} to {new_slug}"
+            )
+            if res == "failed":
+                raise RuntimeError("Failed to commit changes to task store.")
+
+            for i in issues:
+                if i.slug == new_slug:
+                    return i
+
+            status = "pending"
+            if "completed" in str(target_file):
+                status = "completed"
+            elif "active" in str(target_file):
+                status = "active"
+            elif "draft" in str(target_file):
+                status = "draft"
+
+            return Issue(
+                name=new_title.strip(),
+                slug=new_slug,
+                status=status,
+            )
 
     # --- Secondary task documents (siblings of README.md) ---
 
