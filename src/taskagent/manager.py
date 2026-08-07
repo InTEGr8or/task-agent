@@ -1503,24 +1503,13 @@ class TaskAgent:
             self.save_mission(new_issues)
 
             # 4. Commit Mission / Task Store
-            if should_commit:
-                if self.is_dual_repo and self.mission_root:
-                    mission_msg = f"task: finalize {target_issue.slug}"
-                    mission_hash = self._commit_task_store(
-                        mission_msg, no_verify=no_verify
+            if should_commit and self.mission_root:
+                mission_msg = f"task: finalize {target_issue.slug}"
+                mission_hash = self._commit_task_store(mission_msg, no_verify=no_verify)
+                if mission_hash == "failed":
+                    raise RuntimeError(
+                        "Failed to commit changes to mission repository."
                     )
-                    if mission_hash == "failed":
-                        raise RuntimeError(
-                            "Failed to commit changes to mission repository."
-                        )
-                elif self.code_root and self.mission_root:
-                    res = self._commit_task_store(
-                        f"task: finalize {target_issue.slug}", no_verify=no_verify
-                    )
-                    if res == "failed":
-                        raise RuntimeError(
-                            "Failed to commit changes to mission repository."
-                        )
 
             # 5. Optional Push
             if push_mission and self.mission_root:
