@@ -1503,7 +1503,7 @@ class TaskAgent:
             self.save_mission(new_issues)
 
             # 4. Commit Mission / Task Store
-            if should_commit and self.mission_root:
+            if should_commit:
                 mission_msg = f"task: finalize {target_issue.slug}"
                 mission_hash = self._commit_task_store(mission_msg, no_verify=no_verify)
                 if mission_hash == "failed":
