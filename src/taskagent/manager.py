@@ -12,6 +12,7 @@ import tempfile
 
 from taskagent.models.issue import Issue, USV_DELIM
 from taskagent.models.metric import SubtaskMetric
+from taskagent.perf import perf_timer
 
 
 class TaskAgent:
@@ -842,24 +843,25 @@ class TaskAgent:
 
     def sync_mission(self, ingest: bool = True) -> List[Issue]:
         """Load, sort by status groups, and save back."""
-        if ingest:
-            self.ingest_issues(sync=False)
-        issues = self.load_mission()
-        if not issues:
-            return []
+        with perf_timer("sync_mission", issues_root=self.issues_root):
+            if ingest:
+                self.ingest_issues(sync=False)
+            issues = self.load_mission()
+            if not issues:
+                return []
 
-        # Sort: active -> pending -> draft -> unknown/others
-        status_order = {"active": 0, "pending": 1, "draft": 2}
-        sorted_issues = sorted(
-            issues, key=lambda x: (status_order.get(x.status, 99), x.priority)
-        )
+            # Sort: active -> pending -> draft -> unknown/others
+            status_order = {"active": 0, "pending": 1, "draft": 2}
+            sorted_issues = sorted(
+                issues, key=lambda x: (status_order.get(x.status, 99), x.priority)
+            )
 
-        # Re-assign priority based on new order
-        for i, issue in enumerate(sorted_issues, 1):
-            issue.priority = i
+            # Re-assign priority based on new order
+            for i, issue in enumerate(sorted_issues, 1):
+                issue.priority = i
 
-        self.save_mission(sorted_issues)
-        return sorted_issues
+            self.save_mission(sorted_issues)
+            return sorted_issues
 
     def get_next_issue(self) -> Optional[Issue]:
         """Get the top prioritized issue."""

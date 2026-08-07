@@ -82,6 +82,12 @@ Displays and manages the target project's version.
   - `promote [major|minor|patch]`: Bumps the project version and syncs lockfiles.
   - `tag`: Tags the current commit with the project version.
 
+### `ta perf`
+Manage performance monitoring logging.
+- **Actions**: `status` (default), `on` / `enable`, `off` / `disable`, `log`
+- **Environment Variable**: `TA_PERF_LOG=1` (or `0`)
+- **Notification**: Displays a notice when performance logging is active.
+
 ### `ta self-up`
 Upgrades the `task-agent` tool itself via `uv`.
 

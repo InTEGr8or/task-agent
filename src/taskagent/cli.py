@@ -42,6 +42,7 @@ from taskagent.models.metric import SubtaskMetric
 from taskagent.manager import TaskAgent
 from taskagent.discovery import discover, get_task_agent_project_root
 from taskagent import agent
+from taskagent.perf import notify_perf_logging_if_enabled
 
 
 import verkit  # type: ignore[import-untyped]
@@ -4354,6 +4355,72 @@ def cmd_version(
         sys.exit(1)
 
 
+def cmd_perf(console: Console, manager: TaskAgent, action: Optional[str] = "status"):
+    """Handle performance monitoring logging control and log display."""
+    from taskagent.perf import (
+        is_perf_logging_enabled,
+        set_perf_logging_enabled,
+        get_perf_logger,
+        ENV_VAR_PERF_LOG,
+    )
+
+    action = (action or "status").lower()
+
+    if action in ("on", "enable"):
+        set_perf_logging_enabled(True)
+        console.print(
+            f"[bold green]✓ Performance monitoring logging ENABLED[/bold green] ({ENV_VAR_PERF_LOG}=1)"
+        )
+    elif action in ("off", "disable"):
+        set_perf_logging_enabled(False)
+        console.print(
+            f"[bold yellow]✓ Performance monitoring logging DISABLED[/bold yellow] ({ENV_VAR_PERF_LOG}=0)"
+        )
+
+    logger = get_perf_logger(manager.issues_root)
+    enabled = is_perf_logging_enabled()
+    status_str = (
+        "[bold green]ACTIVE[/bold green]"
+        if enabled
+        else "[dim yellow]INACTIVE[/dim yellow]"
+    )
+
+    console.print(
+        Panel(
+            f"[bold]Performance Monitoring Logging[/bold]\n\n"
+            f"Status: {status_str}\n"
+            f"Environment Variable: [cyan]{ENV_VAR_PERF_LOG}={os.environ.get(ENV_VAR_PERF_LOG, '0')}[/cyan]\n"
+            f"Log Directory: [dim]{logger.log_dir}[/dim]",
+            expand=False,
+            box=theme.panel_box,
+        )
+    )
+
+    metrics = logger.get_recent_metrics(limit=25)
+    if metrics:
+        table = Table(
+            title="Recent Performance Metrics",
+            box=theme.table_box,
+            header_style=theme.header_style,
+            padding=theme.table_padding,
+        )
+        table.add_column("Timestamp", style="dim")
+        table.add_column("Operation", style="cyan")
+        table.add_column("Duration (ms)", justify="right", style="magenta")
+        table.add_column("Status", style="bold")
+
+        for m in metrics:
+            ts = m.get("timestamp", "")[:19].replace("T", " ")
+            op = m.get("operation", "unknown")
+            dur = f"{m.get('duration_ms', 0):.2f}"
+            succ = "[green]✓[/green]" if m.get("success", True) else "[red]✗[/red]"
+            table.add_row(ts, op, dur, succ)
+
+        console.print(table)
+    else:
+        console.print("[dim]No performance metric logs recorded yet.[/dim]")
+
+
 def promote_version(console: Console, manager: TaskAgent):
     """Deprecated auto-promote path (no longer called from ``ta done``).
 
@@ -6475,6 +6542,18 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
     )
     release_parser.set_defaults(push=True, push_branch=True)
 
+    perf_parser = subparsers.add_parser(
+        "perf",
+        help="Manage performance monitoring logging (status, enable, disable, log)",
+    )
+    perf_parser.add_argument(
+        "action",
+        nargs="?",
+        choices=["status", "on", "off", "enable", "disable", "log", "logs"],
+        default="status",
+        help="Action: status (default), on/enable, off/disable, or log/logs",
+    )
+
     args = parser.parse_args()
     console = Console()
     if args.version:
@@ -6495,8 +6574,10 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         "self-up",
         "init-mcp",
         "prompt",
+        "perf",
     ):
         maybe_show_inbox_banner(console, manager)
+        notify_perf_logging_if_enabled(console, manager.issues_root)
 
     if args.command == "prompt":
         cmd_prompt(
@@ -6563,6 +6644,8 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         cmd_mcp_api(console)
     elif args.command == "self-up":
         cmd_self_up(console)
+    elif args.command == "perf":
+        cmd_perf(console, manager, action=args.action)
     elif args.command == "up":
         cmd_prioritize(console, manager, args.slug, "up")
     elif args.command == "down":
