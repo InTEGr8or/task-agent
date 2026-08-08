@@ -1249,6 +1249,36 @@ def create_tasks(
     return "\n\n".join(report)
 
 
+@mcp.tool()
+def import_agent_tasks(
+    slug: Optional[str] = None,
+    agent_type: str = "antigravity",
+    raw_content: Optional[str] = None,
+    file_path: Optional[str] = None,
+    repo: Optional[str] = None,
+) -> str:
+    """Import tasks from an external AI agent into docs/tasks/.../<slug>/imports/{agent}_tasks.json.
+
+    Args:
+        slug: Slug or title of the target working task. If omitted, resolves current active working task.
+        agent_type: Agent system moniker ('antigravity', 'claude-code', 'generic').
+        raw_content: Optional inline JSON or Markdown string payload to import.
+        file_path: Optional path to local agent task file.
+        repo: Optional store moniker.
+    """
+    manager = get_manager_for_repo(repo)
+    res = manager.import_agent_tasks(
+        slug=slug,
+        agent_type=agent_type,
+        raw_content=raw_content,
+        file_path=file_path,
+    )
+    return (
+        f"Successfully imported {res['count']} tasks from '{res['agent_type']}' "
+        f"into task '{res['slug']}'.\nSaved to: {res['path']}"
+    )
+
+
 def run_mcp_server():
     """Main entry point to run the MCP server."""
     mcp.run()

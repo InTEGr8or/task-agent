@@ -63,7 +63,7 @@ def test_plugin_skills(plugin_dir):
     skills_dir = plugin_dir / "skills"
     assert skills_dir.is_dir()
 
-    expected_skills = ["next-task", "complete-task", "mission-workflow"]
+    expected_skills = ["next-task", "complete-task", "mission-workflow", "agent-import"]
     for skill_name in expected_skills:
         skill_file = skills_dir / skill_name / "SKILL.md"
         assert skill_file.is_file()

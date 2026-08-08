@@ -605,6 +605,7 @@ EXPECTED_TOOLS = {
     "list_inbox",
     "send_inbox_message",
     "ack_inbox",
+    "import_agent_tasks",
 }
 
 

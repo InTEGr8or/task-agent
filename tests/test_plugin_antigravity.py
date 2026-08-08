@@ -13,6 +13,7 @@ def test_antigravity_plugin_structure():
     assert (plugin_dir / "scripts" / "statusline.sh").is_file()
     assert (plugin_dir / "skills" / "next-task" / "SKILL.md").is_file()
     assert (plugin_dir / "skills" / "complete-task" / "SKILL.md").is_file()
+    assert (plugin_dir / "skills" / "agent-import" / "SKILL.md").is_file()
 
 
 def test_cmd_init_plugin_agy(tmp_path, monkeypatch):

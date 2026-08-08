@@ -4313,6 +4313,38 @@ def cmd_agents_list(
     console.print(table)
 
 
+def cmd_agent_import(
+    console: Console,
+    manager: TaskAgent,
+    slug: Optional[str] = None,
+    agent_type: str = "antigravity",
+    file_path: Optional[str] = None,
+    json_format: bool = False,
+) -> None:
+    """Handler for 'ta agent import' subcommand."""
+    try:
+        res = manager.import_agent_tasks(
+            slug=slug,
+            agent_type=agent_type,
+            file_path=file_path,
+        )
+        if json_format:
+            print(json.dumps(res, indent=2))
+        else:
+            console.print(
+                f"[green]✔ Successfully imported {res['count']} tasks from '{res['agent_type']}' "
+                f"into working task '{res['slug']}'.[/green]\n"
+                f"[dim]Saved to: {res['path']}[/dim]"
+            )
+    except Exception as e:
+        if json_format:
+            print(json.dumps({"error": str(e)}, indent=2))
+            sys.exit(1)
+        else:
+            console.print(f"[red]Error importing agent tasks: {e}[/red]")
+            sys.exit(1)
+
+
 def cmd_version(
     console: Console,
     promote: Optional[str] = None,
@@ -6057,6 +6089,39 @@ Start working on a task. This command automates the following workflow:
         help="Output inspection data as JSON",
     )
 
+    # agent
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="Agent management and task integration",
+    )
+    agent_sub = agent_parser.add_subparsers(
+        dest="agent_subcommand", help="Agent subcommand"
+    )
+    agent_import_p = agent_sub.add_parser(
+        "import",
+        help="Import tasks from external AI agent task runners into working task",
+    )
+    agent_import_p.add_argument(
+        "--slug",
+        default=None,
+        help="Target working task slug (resolves active working task if omitted)",
+    )
+    agent_import_p.add_argument(
+        "--agent",
+        default="antigravity",
+        help="Agent system moniker (e.g. antigravity, claude-code, generic)",
+    )
+    agent_import_p.add_argument(
+        "--file",
+        default=None,
+        help="Path to agent task state file to import",
+    )
+    agent_import_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output result as JSON",
+    )
+
     # plan
     subparsers.add_parser("plan", help="View or edit the project plan")
 
@@ -6720,6 +6785,20 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         )
     elif args.command == "agents":
         cmd_agents_list(console, agent_id=args.agent_name, json_format=args.json)
+    elif args.command == "agent":
+        if args.agent_subcommand == "import":
+            cmd_agent_import(
+                console,
+                manager,
+                slug=args.slug,
+                agent_type=args.agent,
+                file_path=args.file,
+                json_format=args.json,
+            )
+        else:
+            console.print(
+                "[yellow]Unknown agent subcommand. Use 'ta agent import'.[/yellow]"
+            )
     elif args.command == "push":
         cmd_push(console, manager)
     elif args.command == "plan":

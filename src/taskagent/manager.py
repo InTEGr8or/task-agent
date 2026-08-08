@@ -1,6 +1,6 @@
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple, Dict, Any
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 import re
 import subprocess
@@ -253,6 +253,9 @@ class TaskAgent:
         import sys
 
         is_linux = sys.platform.startswith("linux")
+
+        if writable and os.access(path, os.W_OK):
+            return
 
         # First handle chattr (immutable attribute) on Linux
         if writable and is_linux:
@@ -1516,6 +1519,7 @@ class TaskAgent:
                 self.push_mission_repo()
 
             target_issue.status = "completed"
+            self.release_lease(target_issue.slug)
             return target_issue, code_hash
 
     def _write_completion_metrics(
@@ -2769,3 +2773,211 @@ class TaskAgent:
                 encoding="utf-8",
             )
         return self.strategy_file
+
+    def resolve_working_task(self, slug: Optional[str] = None) -> str:
+        """Resolve the working task slug.
+
+        If slug is provided, verify it exists.
+        If slug is omitted, check for active working tasks.
+        If ambiguous (0 or >1 active working tasks), raise ValueError requiring --slug.
+        """
+        if slug:
+            resolved = self.resolve_issue_slug(slug)
+            if resolved:
+                return resolved
+            raise FileNotFoundError(f"Specified task '{slug}' not found.")
+
+        active_issues = [
+            i for i in self.sync_mission(ingest=False) if i.status == "active"
+        ]
+        if len(active_issues) == 1:
+            return active_issues[0].slug
+        elif len(active_issues) == 0:
+            raise ValueError(
+                "No active working task found. Please specify --slug <slug>."
+            )
+        else:
+            active_slugs = ", ".join(f"'{i.slug}'" for i in active_issues)
+            raise ValueError(
+                f"Multiple active working tasks found ({active_slugs}). "
+                "Task resolution is ambiguous; please specify --slug <slug>."
+            )
+
+    def import_agent_tasks(
+        self,
+        *,
+        slug: Optional[str] = None,
+        agent_type: str = "antigravity",
+        raw_content: Optional[str] = None,
+        file_path: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Import agent tasks into docs/tasks/.../<slug>/imports/{agent}_tasks.json.
+
+        Returns a summary dict with slug, path, count, agent_type, and source.
+        """
+        from taskagent.importers import get_importer
+
+        target_slug = self.resolve_working_task(slug)
+        issue_file = self.find_issue_file(target_slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Task '{target_slug}' not found.")
+
+        # Ensure folder layout
+        if issue_file.name != "README.md":
+            migrated = self.migrate_to_folder(target_slug)
+            if not migrated:
+                raise RuntimeError(
+                    f"Could not migrate task '{target_slug}' to folder layout."
+                )
+            issue_file = migrated
+
+        importer = get_importer(agent_type)
+
+        if raw_content is not None:
+            import_res = importer.parse(raw_content, source="raw_content")
+        elif file_path is not None:
+            path = Path(file_path)
+            if not path.exists():
+                raise FileNotFoundError(f"Import file '{file_path}' not found.")
+            content = path.read_text(encoding="utf-8")
+            import_res = importer.parse(content, source=str(path))
+        else:
+            discovered = importer.discover_and_extract()
+            if not discovered:
+                raise ValueError(
+                    f"No task state found automatically for agent '{agent_type}'. "
+                    "Provide raw content or specify --file <path>."
+                )
+            import_res = discovered
+
+        # Save to imports/{agent}_tasks.json inside task folder
+        self._set_writable(issue_file.parent, True)
+        imports_dir = issue_file.parent / "imports"
+        imports_dir.mkdir(parents=True, exist_ok=True)
+        self._set_writable(imports_dir, True)
+
+        normalized_agent = (agent_type or "agent").lower().replace("-", "_")
+        dest = imports_dir / f"{normalized_agent}_tasks.json"
+        self._set_writable(dest, True)
+
+        data_dict = import_res.to_dict()
+        dest.write_text(json.dumps(data_dict, indent=2), encoding="utf-8")
+
+        self._commit_task_store(
+            f"task: import {normalized_agent} tasks for {target_slug}"
+        )
+
+        return {
+            "slug": target_slug,
+            "path": str(dest),
+            "count": len(import_res.tasks),
+            "agent_type": import_res.agent_type,
+            "source": import_res.source,
+        }
+
+    def get_lease(self, slug: str) -> Optional[Dict[str, Any]]:
+        """Get the current TTL lease for a task, returning None if no lease exists."""
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            return None
+
+        lease_file = issue_file.parent / "lease.json"
+        if not lease_file.exists():
+            return None
+
+        try:
+            data = json.loads(lease_file.read_text(encoding="utf-8"))
+            expires_at_str = data.get("expires_at")
+            if expires_at_str:
+                exp_dt = datetime.fromisoformat(expires_at_str)
+                now_dt = datetime.now(timezone.utc)
+
+                is_expired = now_dt > exp_dt
+                data["is_expired"] = is_expired
+                if is_expired:
+                    data["status"] = "expired"
+            else:
+                data["is_expired"] = False
+
+            return data
+        except Exception:
+            return None
+
+    def acquire_lease(
+        self,
+        slug: str,
+        ttl_seconds: int = 3600,
+        worker_id: Optional[str] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Acquire a TTL lease lock for a working-task.
+
+        Prevents concurrent worker double-assignment unless force=True or lease has expired.
+        """
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            raise FileNotFoundError(f"Task '{slug}' not found.")
+
+        # Ensure folder layout
+        if issue_file.name != "README.md":
+            migrated = self.migrate_to_folder(slug)
+            if not migrated:
+                raise RuntimeError(
+                    f"Could not migrate task '{slug}' to folder layout."
+                )
+            issue_file = migrated
+
+        existing = self.get_lease(slug)
+        worker = worker_id or f"pid-{os.getpid()}"
+
+        if (
+            existing
+            and not existing.get("is_expired")
+            and existing.get("status") == "active"
+        ):
+            if existing.get("worker_id") != worker and not force:
+                raise ValueError(
+                    f"Task '{slug}' is currently leased by worker '{existing.get('worker_id')}' "
+                    f"until {existing.get('expires_at')}. Pass force=True to override."
+                )
+
+        now_dt = datetime.now(timezone.utc)
+        exp_dt = now_dt + timedelta(seconds=ttl_seconds)
+
+        lease_data = {
+            "slug": slug,
+            "worker_id": worker,
+            "worktree_path": f".gwt/{slug}",
+            "acquired_at": now_dt.isoformat(),
+            "ttl_seconds": ttl_seconds,
+            "expires_at": exp_dt.isoformat(),
+            "status": "active",
+        }
+
+        lease_file = issue_file.parent / "lease.json"
+        self._set_writable(issue_file.parent, True)
+        self._set_writable(lease_file, True)
+        lease_file.write_text(json.dumps(lease_data, indent=2), encoding="utf-8")
+
+        self._commit_task_store(f"task: acquire lease on {slug} for {worker}")
+        lease_data["is_expired"] = False
+        return lease_data
+
+    def release_lease(self, slug: str, worker_id: Optional[str] = None) -> bool:
+        """Release or remove a TTL lease for a task."""
+        issue_file = self.find_issue_file(slug, include_completed=True)
+        if not issue_file:
+            return False
+
+        lease_file = issue_file.parent / "lease.json"
+        if not lease_file.exists():
+            return False
+
+        try:
+            self._set_writable(issue_file.parent, True)
+            self._set_writable(lease_file, True)
+            lease_file.unlink()
+            self._commit_task_store(f"task: release lease on {slug}")
+            return True
+        except Exception:
+            return False
