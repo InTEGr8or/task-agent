@@ -2922,9 +2922,7 @@ class TaskAgent:
         if issue_file.name != "README.md":
             migrated = self.migrate_to_folder(slug)
             if not migrated:
-                raise RuntimeError(
-                    f"Could not migrate task '{slug}' to folder layout."
-                )
+                raise RuntimeError(f"Could not migrate task '{slug}' to folder layout.")
             issue_file = migrated
 
         existing = self.get_lease(slug)
