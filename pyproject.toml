@@ -1,6 +1,6 @@
 [project]
 name = "task-agent"
-version = "1.0.42"
+version = "1.0.43"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -17,6 +17,7 @@ dependencies = [
     "rich>=13.9.4",
     "githubkit>=0.15.5",
     "verkit>=0.1.4",
+    "transitions>=0.9.2",
 ]
 
 [project.scripts]

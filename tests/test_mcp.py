@@ -539,6 +539,28 @@ def test_mcp_bulk_set_task_parent(monkeypatch):
     assert "OK: a" in result
 
 
+def test_mcp_start_task(mock_manager):
+    mock_manager.slugify.return_value = "task-slug"
+    mock_manager.start_issue.return_value = {
+        "slug": "task-slug",
+        "status": "active",
+        "lease": {"expires_at": "2026-08-08T00:00:00Z"},
+        "worktree": ".gwt/task-slug",
+    }
+    res = mcp.start_task("Task Slug", agent="antigravity", model="gemini-3.6-flash")
+    assert "Task 'task-slug' is now active." in res
+    assert "Acquired TTL lease" in res
+    assert "Agent harness: antigravity" in res
+    assert "Model: gemini-3.6-flash" in res
+    mock_manager.start_issue.assert_called_once_with(
+        "task-slug",
+        agent_name="antigravity",
+        model="gemini-3.6-flash",
+        ttl_seconds=3600,
+        force=False,
+    )
+
+
 def test_mcp_get_strategy(mock_manager):
     mock_manager.get_strategy.return_value = None
     assert mcp.get_strategy() == "No strategy defined yet."
@@ -606,6 +628,8 @@ EXPECTED_TOOLS = {
     "send_inbox_message",
     "ack_inbox",
     "import_agent_tasks",
+    "start_task",
+    "run_task",
 }
 
 

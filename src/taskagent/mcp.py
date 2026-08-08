@@ -552,6 +552,103 @@ def mark_task_active(name: str) -> str:
 
 
 @mcp.tool()
+def start_task(
+    name: str,
+    agent: Optional[str] = None,
+    model: Optional[str] = None,
+    ttl_seconds: int = 3600,
+    force: bool = False,
+    repo: Optional[str] = None,
+) -> str:
+    """Start work on a task: move to active status, acquire TTL lease lock, and configure agent/model context.
+
+    Args:
+        name: The title or partial name of the task.
+        agent: Agent system moniker or template name (e.g. 'antigravity', 'claude-code', 'generic', 'agy-cli').
+        model: Optional LLM model selection (e.g. 'gemini-3.6-flash').
+        ttl_seconds: Duration for the working-task TTL lease lock in seconds (default 3600 = 1 hour).
+        force: Force acquisition of the lease even if another worker currently holds an unexpired lease.
+        repo: Optional store moniker.
+    """
+    manager = get_manager_for_repo(repo)
+    slug = _resolve_slug(manager, name)
+
+    try:
+        res = manager.start_issue(
+            slug,
+            agent_name=agent,
+            model=model,
+            ttl_seconds=ttl_seconds,
+            force=force,
+        )
+        res_lines = [
+            f"Task '{res['slug']}' is now active.",
+            f"Acquired TTL lease (expires: {res['lease']['expires_at']}).",
+        ]
+        if res.get("worktree"):
+            res_lines.append(f"Git worktree: {res['worktree']}")
+        if res.get("agent_user"):
+            res_lines.append(f"Per-task agent user: {res['agent_user']}")
+        if agent:
+            res_lines.append(f"Agent harness: {agent}")
+        if model:
+            res_lines.append(f"Model: {model}")
+
+        return "\n".join(res_lines)
+    except Exception as e:
+        return f"Error starting task '{slug}': {e}"
+
+
+@mcp.tool()
+def run_task(
+    name: str,
+    agent: Optional[str] = None,
+    model: Optional[str] = None,
+    ttl_seconds: int = 3600,
+    repo: Optional[str] = None,
+) -> str:
+    """Run an active task using the TaskWorktreeRunner FSM engine in its worktree.
+
+    Args:
+        name: The title or partial name of the task.
+        agent: Agent system moniker or template name (e.g. 'antigravity', 'claude-code', 'generic').
+        model: Optional LLM model selection (e.g. 'gemini-3.6-flash').
+        ttl_seconds: Duration for the working-task TTL lease lock in seconds.
+        repo: Optional store moniker.
+    """
+    manager = get_manager_for_repo(repo)
+    slug = _resolve_slug(manager, name)
+
+    try:
+        from taskagent.runner import TaskWorktreeRunner
+
+        runner = TaskWorktreeRunner(
+            manager,
+            slug,
+            agent_name=agent,
+            model_name=model,
+            ttl_seconds=ttl_seconds,
+        )
+        runner.start()
+        rec = runner.get_state_record()
+
+        res_lines = [
+            f"Runner started for task '{slug}'.",
+            f"State: {rec.state}",
+            f"Worktree: {rec.worktree_path or '.gwt/' + slug}",
+            f"Lease expires: {rec.expires_at}",
+        ]
+        if agent:
+            res_lines.append(f"Agent harness: {agent}")
+        if model:
+            res_lines.append(f"Model: {model}")
+
+        return "\n".join(res_lines)
+    except Exception as e:
+        return f"Error running task '{slug}': {e}"
+
+
+@mcp.tool()
 def complete_task(
     name: str,
     solution: str,

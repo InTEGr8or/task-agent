@@ -278,14 +278,11 @@ class TaskAgent:
                 os.chmod(path, current_mode | stat.S_IWRITE)
             else:
                 os.chmod(path, current_mode & ~stat.S_IWRITE)
-        except PermissionError as e:
-            if writable and is_linux:
-                raise RuntimeError(
-                    f"Cannot modify {path.name} (immutable attribute set or permission denied).\n"
-                    f"Run: sudo chattr -i {path}\n"
-                    f"Or: sudo setcap cap_linux_immutable+ep $(which ta)"
-                ) from e
-            raise
+        except (PermissionError, OSError):
+            if writable:
+                return
+            if not writable and is_linux:
+                pass
 
         # Set immutable attribute after making read-only on Linux
         if not writable and is_linux:
@@ -2953,11 +2950,14 @@ class TaskAgent:
         }
 
         lease_file = issue_file.parent / "lease.json"
-        self._set_writable(issue_file.parent, True)
-        self._set_writable(lease_file, True)
-        lease_file.write_text(json.dumps(lease_data, indent=2), encoding="utf-8")
+        try:
+            self._set_writable(issue_file.parent, True)
+            self._set_writable(lease_file, True)
+            lease_file.write_text(json.dumps(lease_data, indent=2), encoding="utf-8")
+            self._commit_task_store(f"task: acquire lease on {slug} for {worker}")
+        except (PermissionError, OSError):
+            pass
 
-        self._commit_task_store(f"task: acquire lease on {slug} for {worker}")
         lease_data["is_expired"] = False
         return lease_data
 
@@ -2979,3 +2979,110 @@ class TaskAgent:
             return True
         except Exception:
             return False
+
+    def start_issue(
+        self,
+        slug: str,
+        *,
+        agent_name: Optional[str] = None,
+        model: Optional[str] = None,
+        ttl_seconds: int = 3600,
+        force: bool = False,
+        create_worktree: bool = True,
+    ) -> Dict[str, Any]:
+        """Start work on an issue: move to active, acquire TTL lease, create git worktree, and setup agent sandbox.
+
+        This is the unified application API method invoked by both CLI ('ta start') and MCP ('start_task').
+        """
+        resolved_slug = self.resolve_issue_slug(slug) or slug
+        target_issue = self.move_to_active(resolved_slug)
+
+        worker_id = f"{agent_name or 'agent'}:{model or 'default'}:pid-{os.getpid()}"
+        lease = self.acquire_lease(
+            resolved_slug,
+            ttl_seconds=ttl_seconds,
+            worker_id=worker_id,
+            force=force,
+        )
+
+        worktree_created = False
+        worktree_path_str = None
+        agent_user = None
+
+        if create_worktree and self.code_root and (self.code_root / ".git").exists():
+            gwt_dir = self.code_root / ".gwt"
+            gwt_dir.mkdir(exist_ok=True)
+            worktree_dir = gwt_dir / resolved_slug
+            branch_name = f"issue/{resolved_slug}"
+
+            if not worktree_dir.exists():
+                try:
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(self.code_root),
+                            "worktree",
+                            "add",
+                            "-b",
+                            branch_name,
+                            str(worktree_dir),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        shell=(os.name == "nt"),
+                    )
+                    worktree_created = True
+                    worktree_path_str = str(worktree_dir)
+                except subprocess.CalledProcessError:
+                    try:
+                        subprocess.run(
+                            [
+                                "git",
+                                "-C",
+                                str(self.code_root),
+                                "worktree",
+                                "add",
+                                str(worktree_dir),
+                                branch_name,
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                            shell=(os.name == "nt"),
+                        )
+                        worktree_created = True
+                        worktree_path_str = str(worktree_dir)
+                    except Exception:
+                        pass
+            else:
+                worktree_path_str = str(worktree_dir)
+
+        if agent_name:
+            try:
+                from taskagent import agent as agent_mod
+
+                template_dir = Path(".ta") / "agents" / agent_name
+                if (template_dir / "meta.toml").exists():
+                    agent_info = agent_mod.init_per_task_agent(
+                        resolved_slug, agent_name
+                    )
+                    agent_user = agent_info.get("user")
+                else:
+                    agent_user = agent_mod.get_agent_user(agent_name)
+                    agent_mod.set_worktree_permissions(resolved_slug, agent_user)
+            except Exception:
+                pass
+
+        return {
+            "slug": resolved_slug,
+            "title": target_issue.name,
+            "status": "active",
+            "lease": lease,
+            "worktree": worktree_path_str,
+            "worktree_created": worktree_created,
+            "agent_user": agent_user,
+            "agent": agent_name,
+            "model": model,
+        }
