@@ -2,7 +2,7 @@ import functools
 import os
 import subprocess
 from datetime import datetime
-from typing import Callable, Optional, TypeVar
+from typing import Callable, List, Optional, TypeVar
 
 from mcp.server.fastmcp import FastMCP
 
@@ -646,6 +646,27 @@ def run_task(
         return "\n".join(res_lines)
     except Exception as e:
         return f"Error running task '{slug}': {e}"
+
+
+@mcp.tool()
+def get_store_log(
+    repo: Optional[str] = None,
+    limit: int = 10,
+    args: Optional[List[str]] = None,
+) -> str:
+    """Inspect git commit history for a task station store path, passing extra args straight to git log.
+
+    Args:
+        repo: Optional store moniker or repository path.
+        limit: Number of commit log entries to fetch if no explicit limit is in args (default 10).
+        args: Extra flags and arguments forwarded directly to git log (e.g. ['--oneline', '--stat']).
+    """
+    manager = get_manager_for_repo(repo)
+    extra = list(args) if args else []
+    if not any(a.startswith("-n") or a.isdigit() for a in extra):
+        extra.extend(["-n", str(limit)])
+
+    return manager.get_store_log(repo=repo, extra_args=extra)
 
 
 @mcp.tool()

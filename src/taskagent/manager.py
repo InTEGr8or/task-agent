@@ -3086,3 +3086,50 @@ class TaskAgent:
             "agent": agent_name,
             "model": model,
         }
+
+    def get_store_log(
+        self,
+        repo: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+    ) -> str:
+        """Inspect git commit history for a task station store path, passing extra args straight to git log.
+
+        Args:
+            repo: Optional store moniker or repository path.
+            extra_args: List of command-line flags and arguments to pass to git log (e.g. ['-n', '10', '--oneline']).
+        """
+        store_path = self.issues_root
+        if repo:
+            try:
+                from taskagent.store_registry import get_store_registry
+
+                reg = get_store_registry()
+                resolved = reg.get_store_path(repo)
+                if resolved:
+                    store_path = resolved
+            except Exception:
+                pass
+
+        if not store_path:
+            return "Error: Could not resolve task station store path."
+
+        git_cwd = store_path
+        if not (git_cwd / ".git").exists() and (git_cwd.parent / ".git").exists():
+            git_cwd = git_cwd.parent
+
+        cmd = ["git", "-C", str(git_cwd), "log"]
+        if extra_args:
+            cmd.extend(extra_args)
+
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return res.stdout
+        except subprocess.CalledProcessError as e:
+            return e.stderr or f"git log failed with returncode {e.returncode}"
+        except Exception as e:
+            return f"Error executing git log: {e}"

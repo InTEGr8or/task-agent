@@ -4377,14 +4377,23 @@ def cmd_version(
             return
 
         if tag:
-            tag_name = tag_project_version(console, push=push, push_branch=push_branch)
-            console.print(
-                f"[dim]Tag {tag_name} is bound to the version in HEAD's project file.[/dim]"
-            )
-            return
+            tag_project_version(console, push=push, push_branch=push_branch)
+    except SystemExit:
+        raise
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"[red]Error during version operation: {e}[/red]")
         sys.exit(1)
+
+
+def cmd_log(
+    console: Console,
+    manager: TaskAgent,
+    extra_args: Optional[List[str]] = None,
+    repo: Optional[str] = None,
+) -> None:
+    """Pass-through CLI handler for git log against task station store paths."""
+    output = manager.get_store_log(repo=repo, extra_args=extra_args)
+    console.print(output)
 
 
 def cmd_perf(console: Console, manager: TaskAgent, action: Optional[str] = "status"):
@@ -6619,7 +6628,22 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         help="Action: status (default), on/enable, off/disable, or log/logs",
     )
 
-    args = parser.parse_args()
+    log_parser = subparsers.add_parser(
+        "log",
+        help="Inspect git log history for task station store path",
+    )
+    log_parser.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match for task station store path",
+    )
+    log_parser.add_argument(
+        "extra_args",
+        nargs=argparse.REMAINDER,
+        help="Flags and arguments forwarded directly to git log",
+    )
+
+    args, unknown_args = parser.parse_known_args()
     console = Console()
     if args.version:
         display_version_info(console)
@@ -6783,6 +6807,9 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
             agy=args.agy,
             scope=args.scope,
         )
+    elif args.command == "log":
+        extra = unknown_args + (args.extra_args if hasattr(args, "extra_args") else [])
+        cmd_log(console, manager, extra_args=extra, repo=args.repo)
     elif args.command == "agents":
         cmd_agents_list(console, agent_id=args.agent_name, json_format=args.json)
     elif args.command == "agent":

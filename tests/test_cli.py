@@ -1533,3 +1533,19 @@ def test_cli_next_text_flag(manager, monkeypatch):
                 mock_cmd_next.assert_called_once()
                 # Check that text_mode=True was passed
                 assert mock_cmd_next.call_args[1].get("text_mode") is True
+
+
+def test_cli_log(manager, monkeypatch):
+    """Test CLI invocation of ta log passing flags straight through to git log."""
+    from taskagent.cli import main
+    from unittest.mock import patch
+
+    monkeypatch.setattr("sys.argv", ["ta", "log", "--oneline", "-n", "2"])
+    with patch("taskagent.cli.cmd_log") as mock_cmd_log:
+        with patch("taskagent.cli.TaskAgent", return_value=manager):
+            main()
+            mock_cmd_log.assert_called_once()
+            extra_args = mock_cmd_log.call_args[1].get("extra_args")
+            assert "--oneline" in extra_args
+            assert "-n" in extra_args
+            assert "2" in extra_args

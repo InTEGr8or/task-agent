@@ -561,6 +561,15 @@ def test_mcp_start_task(mock_manager):
     )
 
 
+def test_mcp_get_store_log(mock_manager):
+    mock_manager.get_store_log.return_value = "commit 12345\n  task commit"
+    res = mcp.get_store_log(limit=5, args=["--oneline"])
+    assert "commit 12345" in res
+    mock_manager.get_store_log.assert_called_once_with(
+        repo=None, extra_args=["--oneline", "-n", "5"]
+    )
+
+
 def test_mcp_get_strategy(mock_manager):
     mock_manager.get_strategy.return_value = None
     assert mcp.get_strategy() == "No strategy defined yet."
@@ -630,6 +639,7 @@ EXPECTED_TOOLS = {
     "import_agent_tasks",
     "start_task",
     "run_task",
+    "get_store_log",
 }
 
 
