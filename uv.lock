@@ -1144,7 +1144,7 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "1.0.45"
+version = "1.0.46"
 source = { editable = "." }
 dependencies = [
     { name = "githubkit" },
