@@ -3101,12 +3101,11 @@ class TaskAgent:
         store_path = self.issues_root
         if repo:
             try:
-                from taskagent.store_registry import get_store_registry
+                from taskagent.store_registry import resolve_repo_query
 
-                reg = get_store_registry()
-                resolved = reg.get_store_path(repo)
-                if resolved:
-                    store_path = resolved
+                resolved = resolve_repo_query(repo)
+                if resolved and resolved.store_path:
+                    store_path = resolved.store_path
             except Exception:
                 pass
 

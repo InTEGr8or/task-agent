@@ -4385,15 +4385,53 @@ def cmd_version(
         sys.exit(1)
 
 
+def format_git_log_rich(raw_log: str) -> str:
+    """Highlight git commit log with Rich markup for hashes, authors, dates, and diff stats."""
+    lines = raw_log.splitlines()
+    formatted_lines = []
+    for line in lines:
+        if line.startswith("commit "):
+            parts = line.split(" ", 1)
+            formatted_lines.append(
+                f"[bold yellow]commit[/bold yellow] [yellow]{parts[1]}[/yellow]"
+            )
+        elif line.startswith("Author: "):
+            parts = line.split(": ", 1)
+            formatted_lines.append(
+                f"[bold cyan]Author:[/bold cyan] [cyan]{parts[1]}[/cyan]"
+            )
+        elif line.startswith("Date: "):
+            formatted_lines.append(f"[dim]{line}[/dim]")
+        elif " | " in line and ("+" in line or "-" in line):
+            formatted_lines.append(f"[dim green]{line}[/dim green]")
+        elif "insertions(+)" in line or "deletions(-)" in line or "changed" in line:
+            formatted_lines.append(f"[bold blue]{line}[/bold blue]")
+        elif line.startswith("    "):
+            formatted_lines.append(f"  [bold white]{line.strip()}[/bold white]")
+        else:
+            formatted_lines.append(line)
+    return "\n".join(formatted_lines)
+
+
 def cmd_log(
     console: Console,
     manager: TaskAgent,
     extra_args: Optional[List[str]] = None,
     repo: Optional[str] = None,
 ) -> None:
-    """Pass-through CLI handler for git log against task station store paths."""
+    """Pass-through CLI handler for git log with Rich styling and interactive less paging."""
     output = manager.get_store_log(repo=repo, extra_args=extra_args)
-    console.print(output)
+    if not output.strip():
+        console.print("[dim]No git log history found.[/dim]")
+        return
+
+    formatted_output = format_git_log_rich(output)
+
+    if console.is_terminal:
+        with console.pager(styles=True):
+            console.print(formatted_output)
+    else:
+        console.print(formatted_output)
 
 
 def cmd_perf(console: Console, manager: TaskAgent, action: Optional[str] = "status"):

@@ -1549,3 +1549,26 @@ def test_cli_log(manager, monkeypatch):
             assert "--oneline" in extra_args
             assert "-n" in extra_args
             assert "2" in extra_args
+
+
+def test_format_git_log_rich():
+    from taskagent.cli import format_git_log_rich
+
+    sample = (
+        "commit abcdef1234567890\n"
+        "Author: Jane Doe <jane@example.com>\n"
+        "Date:   Sun Aug 9 17:00:00 2026\n"
+        "\n"
+        "    feat: add awesome feature\n"
+        "\n"
+        " file.py | 2 +-\n"
+        " 1 file changed, 1 insertion(+), 1 deletion(-)\n"
+    )
+    formatted = format_git_log_rich(sample)
+    assert "[yellow]abcdef1234567890[/yellow]" in formatted
+    assert "[cyan]Jane Doe <jane@example.com>[/cyan]" in formatted
+    assert "[dim green] file.py | 2 +-[/dim green]" in formatted
+    assert (
+        "[bold blue] 1 file changed, 1 insertion(+), 1 deletion(-)[/bold blue]"
+        in formatted
+    )
