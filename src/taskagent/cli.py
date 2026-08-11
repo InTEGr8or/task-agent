@@ -4022,7 +4022,7 @@ def cmd_init_mcp(
     Uses ``uv run --project <root> ta mcp`` so the server can be spawned
     without the project's virtualenv being active in the calling shell.
     """
-    if opencode:
+    if opencode or agent == "opencode":
         agent = "opencode"
 
     project_root = Path.cwd().resolve()
@@ -4046,7 +4046,7 @@ def cmd_init_mcp(
         console.print(json.dumps(mcp_config, indent=2))
         return
 
-    if claude:
+    if claude or agent == "claude":
         console.print("[blue]Registering Task Agent MCP with Claude Code...[/blue]")
         try:
             command = [
@@ -4075,7 +4075,7 @@ def cmd_init_mcp(
             )
         return
 
-    if copilot:
+    if copilot or agent == "copilot":
         console.print(
             "[blue]Registering Task Agent MCP with GitHub Copilot globally...[/blue]"
         )
@@ -4103,7 +4103,7 @@ def cmd_init_mcp(
             )
         return
 
-    if agy:
+    if agy or agent == "agy":
         # --agy defaults to user-global CLI config (HOME). Pass --scope project
         # for workspace .agents/mcp_config.json. When callers omit --scope,
         # main() maps agy → user (see init-mcp dispatch).
@@ -4186,26 +4186,36 @@ def cmd_init_plugin(
     console: Console,
     claude: bool = False,
     agy: bool = False,
+    opencode: bool = False,
+    copilot: bool = False,
+    grok: bool = False,
+    codex: bool = False,
     scope: str = "user",
 ) -> None:
     """Scaffold and register task-agent plugin, skills, and MCP server for host agent CLIs."""
-    from taskagent.agent_registry import inspect_all_agent_clis
+    from taskagent.agent_registry import get_agent_cli_registry, inspect_all_agent_clis
 
     repo_root = Path(__file__).parent.parent.parent
-    claude_plugin_src = repo_root / "plugins" / "claude-code"
-    agy_plugin_src = repo_root / "plugins" / "antigravity"
+    registry = get_agent_cli_registry()
 
     targets: List[str] = []
     if claude:
         targets.append("claude")
     if agy:
         targets.append("agy")
+    if opencode:
+        targets.append("opencode")
+    if copilot:
+        targets.append("copilot")
+    if grok:
+        targets.append("grok")
+    if codex:
+        targets.append("codex")
 
     if not targets:
-        # Auto-detect installed CLIs
         installed = inspect_all_agent_clis()
         for item in installed:
-            if item["installed"] and item["id"] in ("claude", "agy", "opencode"):
+            if item["installed"] and item["plugin_support"]:
                 targets.append(item["id"])
 
     if not targets:
@@ -4214,66 +4224,57 @@ def cmd_init_plugin(
         )
         return
 
-    for target in targets:
-        if target == "claude":
-            dest = Path.home() / ".claude" / "plugins" / "task-agent"
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if claude_plugin_src.is_dir():
-                import shutil
+    import shutil
 
+    skills_src = repo_root / "skills"
+
+    for target in sorted(set(targets)):
+        if target not in registry:
+            continue
+        info = registry[target]
+
+        # 1. Install Plugin Bundle
+        if info.plugin_path:
+            dest = info.plugin_path / "task-agent"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            tmpl_name = info.plugin_template or "antigravity"
+            tmpl_dir = repo_root / "plugins" / tmpl_name
+            if not tmpl_dir.is_dir():
+                tmpl_dir = repo_root / "plugins" / "antigravity"
+            if not tmpl_dir.is_dir():
+                tmpl_dir = repo_root / "plugins" / "claude-code"
+
+            if tmpl_dir.is_dir():
                 if dest.exists():
                     shutil.rmtree(dest)
-                shutil.copytree(claude_plugin_src, dest)
+                shutil.copytree(tmpl_dir, dest)
                 console.print(
-                    f"[bold green]Successfully installed Claude Code plugin at {dest}![/bold green]"
+                    f"[bold green]Successfully installed {info.name} plugin at {dest}![/bold green]"
                 )
-                # Sync skills to Claude Code commands (~/.claude/commands/)
-                claude_commands_dest = Path.home() / ".claude" / "commands"
-                claude_skills_src = repo_root / "skills"
-                if claude_skills_src.is_dir():
-                    claude_commands_dest.mkdir(parents=True, exist_ok=True)
-                    for sdir in claude_skills_src.iterdir():
-                        if sdir.is_dir() and (sdir / "SKILL.md").exists():
+
+        # 2. Sync Custom Skills / Slash Commands
+        if info.skills_path:
+            info.skills_path.mkdir(parents=True, exist_ok=True)
+            if skills_src.is_dir():
+                for sdir in skills_src.iterdir():
+                    if sdir.is_dir() and (sdir / "SKILL.md").exists():
+                        if "commands" in str(info.skills_path):
                             shutil.copy2(
                                 sdir / "SKILL.md",
-                                claude_commands_dest / f"{sdir.name}.md",
+                                info.skills_path / f"{sdir.name}.md",
                             )
-                    console.print(
-                        f"[bold green]Successfully synced Task Agent slash commands to {claude_commands_dest}![/bold green]"
-                    )
-            cmd_init_mcp(console, claude=True, scope=scope)
-
-        elif target == "agy":
-            dest = (
-                Path.home() / ".gemini" / "antigravity-cli" / "plugins" / "task-agent"
-            )
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            src_dir = agy_plugin_src if agy_plugin_src.is_dir() else claude_plugin_src
-            if src_dir.is_dir():
-                import shutil
-
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(src_dir, dest)
-                console.print(
-                    f"[bold green]Successfully installed Antigravity plugin at {dest}![/bold green]"
-                )
-                # Sync skills to global Antigravity config (~/.gemini/config/skills/)
-                agy_skills_dest = Path.home() / ".gemini" / "config" / "skills"
-                agy_skills_src = repo_root / "skills"
-                if agy_skills_src.is_dir():
-                    for sdir in agy_skills_src.iterdir():
-                        if sdir.is_dir() and (sdir / "SKILL.md").exists():
-                            target_sdir = agy_skills_dest / sdir.name
+                        else:
+                            target_sdir = info.skills_path / sdir.name
                             target_sdir.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(sdir / "SKILL.md", target_sdir / "SKILL.md")
-                    console.print(
-                        f"[bold green]Successfully synced Task Agent skills to {agy_skills_dest}![/bold green]"
-                    )
-            cmd_init_mcp(console, agy=True, scope=scope)
+                console.print(
+                    f"[bold green]Successfully synced Task Agent skills to {info.skills_path}![/bold green]"
+                )
 
-        elif target == "opencode":
-            cmd_init_mcp(console, opencode=True, scope=scope)
+        # 3. Register MCP Server
+        if info.mcp_support:
+            cmd_init_mcp(console, agent=target, scope=scope)
 
 
 def cmd_agents_list(

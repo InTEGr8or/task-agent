@@ -21,6 +21,8 @@ class AgentCLIInfo:
     mcp_command_example: str = ""
     plugin_support: bool = False
     plugin_path: Optional[Path] = None
+    skills_path: Optional[Path] = None
+    plugin_template: str = ""
 
 
 def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
@@ -36,6 +38,8 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_command_example="ta init-mcp --claude",
             plugin_support=True,
             plugin_path=home / ".claude" / "plugins",
+            skills_path=home / ".claude" / "commands",
+            plugin_template="claude-code",
         ),
         "agy": AgentCLIInfo(
             id="agy",
@@ -47,6 +51,8 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_command_example="ta init-mcp --agy",
             plugin_support=True,
             plugin_path=home / ".gemini" / "antigravity-cli" / "plugins",
+            skills_path=home / ".gemini" / "config" / "skills",
+            plugin_template="antigravity",
         ),
         "opencode": AgentCLIInfo(
             id="opencode",
@@ -58,6 +64,8 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_command_example="ta init-mcp --opencode",
             plugin_support=True,
             plugin_path=home / ".config" / "opencode" / "plugins",
+            skills_path=home / ".config" / "opencode" / "skills",
+            plugin_template="opencode",
         ),
         "copilot": AgentCLIInfo(
             id="copilot",
@@ -69,6 +77,8 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_command_example="ta init-mcp --copilot",
             plugin_support=True,
             plugin_path=home / ".config" / "github-copilot" / "plugins",
+            skills_path=home / ".config" / "github-copilot" / "skills",
+            plugin_template="copilot",
         ),
         "grok": AgentCLIInfo(
             id="grok",
@@ -79,6 +89,9 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_support=True,
             mcp_command_example="ta init-mcp --agent grok",
             plugin_support=True,
+            plugin_path=home / ".config" / "grok" / "plugins",
+            skills_path=home / ".config" / "grok" / "skills",
+            plugin_template="grok",
         ),
         "cursor": AgentCLIInfo(
             id="cursor",
@@ -92,6 +105,9 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_support=True,
             mcp_command_example="ta init-mcp --print",
             plugin_support=True,
+            plugin_path=home / ".cursor" / "plugins",
+            skills_path=home / ".cursor" / "skills",
+            plugin_template="cursor",
         ),
         "windsurf": AgentCLIInfo(
             id="windsurf",
@@ -102,6 +118,9 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             mcp_support=True,
             mcp_command_example="ta init-mcp --print",
             plugin_support=True,
+            plugin_path=home / ".codeium" / "windsurf" / "plugins",
+            skills_path=home / ".codeium" / "windsurf" / "skills",
+            plugin_template="windsurf",
         ),
         "aider": AgentCLIInfo(
             id="aider",
@@ -119,7 +138,10 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             description="OpenAI Codex CLI harness",
             config_paths=[home / ".codex" / "config.json"],
             mcp_support=True,
-            plugin_support=False,
+            plugin_support=True,
+            plugin_path=home / ".codex" / "plugins",
+            skills_path=home / ".codex" / "skills",
+            plugin_template="codex",
         ),
         "continue": AgentCLIInfo(
             id="continue",
@@ -129,6 +151,9 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             config_paths=[home / ".continue" / "config.json"],
             mcp_support=True,
             plugin_support=True,
+            plugin_path=home / ".continue" / "plugins",
+            skills_path=home / ".continue" / "skills",
+            plugin_template="continue",
         ),
         "cline": AgentCLIInfo(
             id="cline",
