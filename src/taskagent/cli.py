@@ -4192,8 +4192,11 @@ def cmd_init_plugin(
     codex: bool = False,
     scope: str = "user",
 ) -> None:
-    """Scaffold and register task-agent plugin, skills, and MCP server for host agent CLIs."""
-    from taskagent.agent_registry import get_agent_cli_registry, inspect_all_agent_clis
+    from taskagent.agent_registry import (
+        get_agent_cli_registry,
+        get_disabled_agent_plugins,
+        inspect_all_agent_clis,
+    )
 
     repo_root = Path(__file__).parent.parent.parent
     registry = get_agent_cli_registry()
@@ -4217,6 +4220,9 @@ def cmd_init_plugin(
         for item in installed:
             if item["installed"] and item["plugin_support"]:
                 targets.append(item["id"])
+
+    disabled = get_disabled_agent_plugins()
+    targets = [t for t in targets if t not in disabled]
 
     if not targets:
         console.print(

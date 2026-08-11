@@ -43,3 +43,26 @@ def test_inspect_all_agent_clis():
     ids = [item["id"] for item in all_results]
     assert "claude" in ids
     assert "opencode" in ids
+
+
+def test_agent_plugin_enable_disable_config(tmp_path, monkeypatch):
+    from taskagent.agent_registry import (
+        get_disabled_agent_plugins,
+        is_agent_plugin_enabled,
+        set_agent_plugin_enabled,
+    )
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    assert is_agent_plugin_enabled("grok") is True
+    assert get_disabled_agent_plugins() == []
+
+    set_agent_plugin_enabled("grok", enabled=False)
+    assert is_agent_plugin_enabled("grok") is False
+    assert "grok" in get_disabled_agent_plugins()
+
+    set_agent_plugin_enabled("grok", enabled=True)
+    assert is_agent_plugin_enabled("grok") is True
+    assert get_disabled_agent_plugins() == []
