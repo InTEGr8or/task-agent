@@ -2478,165 +2478,6 @@ def cmd_store(console: Console, args) -> None:
     console.print(f"[red]Unknown store command: {sub}[/red]")
 
 
-def cmd_eject_mission(console: Console, manager: TaskAgent, public: bool = False):
-    """Deprecated: move docs/tasks to a separate in-repo eject location.
-
-    Prefer ``ta store migrate`` to centralize under the machine data root.
-    This command remains for compatibility and still ejects into
-    ``.task-agent/tasks`` (then you can migrate).
-    """
-    refuse_if_native_windows_store_ops(console, "ta eject-mission")
-    console.print(
-        "[yellow]Deprecated:[/yellow] [bold]ta eject-mission[/bold] is superseded by "
-        "[bold]ta store migrate[/bold] (machine data root).\n"
-        "[dim]Continuing with legacy in-repo eject for compatibility…[/dim]\n"
-    )
-    source_dir = manager.issues_root
-    if source_dir.is_symlink():
-        console.print(
-            "[yellow]docs/tasks is already a symlink. "
-            "If it points at a legacy path, run [bold]ta store migrate[/bold].[/yellow]"
-        )
-        return
-
-    if not source_dir.exists():
-        console.print(f"[red]Source directory {source_dir} not found.[/red]")
-        return
-
-    # Determine names
-    project_root = Path.cwd()
-    target_path = project_root / ".task-agent" / "tasks"
-
-    if target_path.exists():
-        console.print(f"[red]Target path {target_path} already exists. Aborting.[/red]")
-        return
-
-    console.print(f"[blue]Ejecting mission to [bold]{target_path}[/bold]...[/blue]")
-
-    try:
-        # 1. Verify GH CLI
-        subprocess.run(
-            ["gh", "--version"],
-            check=True,
-            capture_output=True,
-            shell=(os.name == "nt"),
-        )
-
-        # 2. Create target and move files
-        target_path.mkdir(parents=True)
-        for item in source_dir.iterdir():
-            shutil.move(str(item), str(target_path / item.name))
-
-        # 3. Git Init and Create Repo
-        subprocess.run(
-            ["git", "-C", str(target_path), "init"], check=True, shell=(os.name == "nt")
-        )
-
-        # Calculate relative path for git operations and gitignore
-        project_root = Path.cwd()
-        git_rel_path = source_dir.absolute().relative_to(project_root.absolute())
-
-        # Add everything to new repo
-        subprocess.run(
-            ["git", "-C", str(target_path), "add", "."],
-            check=True,
-            shell=(os.name == "nt"),
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(target_path),
-                "commit",
-                "-m",
-                "chore: initial mission control commit",
-            ],
-            check=True,
-            shell=(os.name == "nt"),
-        )
-
-        # gh repo create
-        visibility = "--public" if public else "--private"
-        console.print(
-            f"[blue]Creating GitHub repository [bold]{target_path.name}[/bold] ({visibility})...[/blue]"
-        )
-        subprocess.run(
-            [
-                "gh",
-                "repo",
-                "create",
-                target_path.name,
-                visibility,
-                "--source=.",
-                "--remote=origin",
-                "--push",
-            ],
-            cwd=str(target_path),
-            check=True,
-            shell=(os.name == "nt"),
-        )
-
-        # 4. Remove old dir and Symlink
-        # First remove from git if tracked
-        subprocess.run(
-            ["git", "rm", "-r", "--cached", str(git_rel_path)],
-            check=False,
-            capture_output=True,
-            shell=(os.name == "nt"),
-        )
-        shutil.rmtree(str(source_dir))
-
-        # Use an absolute symlink for maximum local robustness
-        os.symlink(str(target_path.absolute()), str(source_dir))
-
-        # 5. Update .gitignore
-        gitignore = project_root / ".gitignore"
-        ignore_line = f"\n{git_rel_path}\n"
-
-        if gitignore.exists():
-            content = gitignore.read_text()
-            if str(git_rel_path) not in content:
-                with gitignore.open("a") as f:
-                    f.write(ignore_line)
-        else:
-            gitignore.write_text(ignore_line)
-
-        # 6. Update .env
-        env_file = project_root / ".env"
-        env_lines = [
-            "\nTA_EJECT_TASKS=true\n",
-            f"TA_EJECTED_TASKS_PATH={target_path.absolute()}\n",
-        ]
-        if env_file.exists():
-            content = env_file.read_text()
-            with env_file.open("a") as f:
-                if "TA_EJECT_TASKS" not in content:
-                    f.write(env_lines[0])
-                if "TA_EJECTED_TASKS_PATH" not in content:
-                    f.write(env_lines[1])
-        else:
-            env_file.write_text("".join(env_lines))
-
-        console.print(
-            "[bold green]Successfully ejected mission repository![/bold green]"
-        )
-        console.print(f"Mission Repo: [cyan]{target_path.absolute()}[/cyan]")
-        console.print(
-            f"Symlink: [cyan]{source_dir}[/cyan] -> [cyan]{target_path.absolute()}[/cyan]"
-        )
-        console.print("\n[bold green]Environment updated:[/bold green]")
-        console.print(f"  - Added [cyan]{git_rel_path}[/cyan] to .gitignore")
-        console.print("  - Configured [cyan]TA_EJECTED_TASKS_PATH[/cyan] in .env")
-        console.print("\n[dim]The symlink will now 'auto-heal' in new worktrees.[/dim]")
-
-    except subprocess.CalledProcessError as e:
-        console.print(f"[red]Command failed: {e}[/red]")
-        if e.stderr:
-            console.print(f"[dim]{e.stderr.decode()}[/dim]")
-    except Exception as e:
-        console.print(f"[red]An error occurred: {e}[/red]")
-
-
 def cmd_mr_list(console: Console, manager: TaskAgent):
     """List pending merge requests from workers."""
     mr_dir = manager.issues_root / "mr"
@@ -6278,15 +6119,6 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         "--push", action="store_true", help="Push mission repo after merge"
     )
 
-    # eject-mission (deprecated — prefer ta store migrate)
-    eject_parser = subparsers.add_parser(
-        "eject-mission",
-        help="Deprecated: legacy eject into .task-agent/tasks (prefer ta store migrate)",
-    )
-    eject_parser.add_argument(
-        "--public", action="store_true", help="Make the new mission repo public"
-    )
-
     # store — machine data root / moniker / registry (Phase 1: no migration)
     store_parser = subparsers.add_parser(
         "store",
@@ -6915,8 +6747,6 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
             console.print("[yellow]Unknown mr command. Use 'ta mr list'.[/yellow]")
     elif args.command == "merge":
         cmd_merge(console, manager, args.slug, message=args.message, push=args.push)
-    elif args.command == "eject-mission":
-        cmd_eject_mission(console, manager, public=args.public)
     elif args.command == "store":
         cmd_store(console, args)
     elif args.command == "done":

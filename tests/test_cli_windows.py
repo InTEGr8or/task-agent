@@ -86,23 +86,6 @@ def test_cmd_store_data_root_not_refused_on_native_windows(monkeypatch):
     assert "Refused" not in printed
 
 
-def test_cmd_eject_mission_refuses_native_windows(monkeypatch):
-    monkeypatch.setattr(cli, "is_native_windows", lambda: True)
-    console = MagicMock()
-    manager = MagicMock()
-    # Would be consulted if refuse did not fire
-    manager.issues_root = MagicMock()
-    manager.issues_root.is_symlink.return_value = False
-
-    with pytest.raises(SystemExit) as exc_info:
-        cli.cmd_eject_mission(console, manager)
-    assert exc_info.value.code == 1
-    printed = " ".join(str(c.args[0]) for c in console.print.call_args_list)
-    assert "ta eject-mission" in printed
-    assert "native Windows" in printed
-    manager.issues_root.is_symlink.assert_not_called()
-
-
 def test_get_key_windows_arrow_up(monkeypatch):
     # Mock HAS_MSVCRT to True and HAS_TERMIOS to False
     monkeypatch.setattr(cli, "HAS_MSVCRT", True, raising=False)
