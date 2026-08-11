@@ -4227,6 +4227,20 @@ def cmd_init_plugin(
                 console.print(
                     f"[bold green]Successfully installed Claude Code plugin at {dest}![/bold green]"
                 )
+                # Sync skills to Claude Code commands (~/.claude/commands/)
+                claude_commands_dest = Path.home() / ".claude" / "commands"
+                claude_skills_src = repo_root / "skills"
+                if claude_skills_src.is_dir():
+                    claude_commands_dest.mkdir(parents=True, exist_ok=True)
+                    for sdir in claude_skills_src.iterdir():
+                        if sdir.is_dir() and (sdir / "SKILL.md").exists():
+                            shutil.copy2(
+                                sdir / "SKILL.md",
+                                claude_commands_dest / f"{sdir.name}.md",
+                            )
+                    console.print(
+                        f"[bold green]Successfully synced Task Agent slash commands to {claude_commands_dest}![/bold green]"
+                    )
             cmd_init_mcp(console, claude=True, scope=scope)
 
         elif target == "agy":
@@ -4244,6 +4258,18 @@ def cmd_init_plugin(
                 console.print(
                     f"[bold green]Successfully installed Antigravity plugin at {dest}![/bold green]"
                 )
+                # Sync skills to global Antigravity config (~/.gemini/config/skills/)
+                agy_skills_dest = Path.home() / ".gemini" / "config" / "skills"
+                agy_skills_src = repo_root / "skills"
+                if agy_skills_src.is_dir():
+                    for sdir in agy_skills_src.iterdir():
+                        if sdir.is_dir() and (sdir / "SKILL.md").exists():
+                            target_sdir = agy_skills_dest / sdir.name
+                            target_sdir.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(sdir / "SKILL.md", target_sdir / "SKILL.md")
+                    console.print(
+                        f"[bold green]Successfully synced Task Agent skills to {agy_skills_dest}![/bold green]"
+                    )
             cmd_init_mcp(console, agy=True, scope=scope)
 
         elif target == "opencode":

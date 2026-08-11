@@ -2154,23 +2154,70 @@ class TaskAgent:
         secondary = self.list_secondary_documents(
             slug, include_completed=include_completed
         )
-        if not secondary:
+        imported_summary = self.format_imported_tasks_summary(issue_file.parent)
+
+        if not secondary and not imported_summary:
             return primary
 
-        parts = [
-            primary.rstrip(),
-            "",
-            "---",
-            "",
-            "## Secondary documents",
-            "",
-        ]
-        for doc in secondary:
-            parts.append(f"### {doc.name}")
-            parts.append("")
-            parts.append(doc.read_text(encoding="utf-8").rstrip())
-            parts.append("")
+        parts = [primary.rstrip()]
+
+        if secondary:
+            parts.extend(["", "---", "", "## Secondary documents", ""])
+            for doc in secondary:
+                parts.append(f"### {doc.name}")
+                parts.append("")
+                parts.append(doc.read_text(encoding="utf-8").rstrip())
+                parts.append("")
+
+        if imported_summary:
+            parts.extend(["", "---", "", imported_summary])
+
         return "\n".join(parts).rstrip() + "\n"
+
+    def format_imported_tasks_summary(self, task_dir: Path) -> str:
+        """Format any imported agent task files (.json) inside task_dir/imports/."""
+        imports_dir = task_dir / "imports"
+        if not imports_dir.is_dir():
+            return ""
+
+        json_files = list(imports_dir.glob("*.json"))
+        if not json_files:
+            return ""
+
+        sections = []
+        for jf in sorted(json_files):
+            try:
+                data = json.loads(jf.read_text(encoding="utf-8"))
+                agent_name = jf.stem.replace("_tasks", "")
+                sections.append(f"### Imported Agent Tasks ({agent_name})")
+                sections.append(f"Source file: `imports/{jf.name}`")
+                sections.append("")
+
+                tasks_list = data if isinstance(data, list) else data.get("tasks", [])
+                if isinstance(tasks_list, list):
+                    for item in tasks_list:
+                        if isinstance(item, dict):
+                            title = item.get("title") or item.get("name") or str(item)
+                            status = str(item.get("status", "")).lower()
+                            checked = (
+                                "x"
+                                if status in ("completed", "done", "true", "1")
+                                else " "
+                            )
+                            sections.append(f"- [{checked}] {title}")
+                        else:
+                            sections.append(f"- [ ] {item}")
+                elif isinstance(data, dict):
+                    for k, v in data.items():
+                        sections.append(f"- **{k}**: {v}")
+                sections.append("")
+            except Exception:
+                pass
+
+        if not sections:
+            return ""
+
+        return "## 📥 Imported Agent Tasks\n\n" + "\n".join(sections).rstrip()
 
     def load_completed_issues(self) -> List[Issue]:
         """Load completed tasks from disk with relations extracted from frontmatter."""
