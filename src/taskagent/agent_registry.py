@@ -23,6 +23,8 @@ class AgentCLIInfo:
     plugin_path: Optional[Path] = None
     skills_path: Optional[Path] = None
     plugin_template: str = ""
+    chat_log_patterns: List[str] = field(default_factory=list)
+    chat_parser_type: str = "json"
 
 
 def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
@@ -40,6 +42,11 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             plugin_path=home / ".claude" / "plugins",
             skills_path=home / ".claude" / "commands",
             plugin_template="claude-code",
+            chat_log_patterns=[
+                "~/.claude/projects/**/*.jsonl",
+                "~/.claude/history.jsonl",
+            ],
+            chat_parser_type="jsonl",
         ),
         "agy": AgentCLIInfo(
             id="agy",
@@ -53,6 +60,12 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             plugin_path=home / ".gemini" / "antigravity-cli" / "plugins",
             skills_path=home / ".gemini" / "config" / "skills",
             plugin_template="antigravity",
+            chat_log_patterns=[
+                "~/.gemini/tmp/**/chats/session-*.json",
+                "~/.gemini/antigravity-cli/brain/**/transcript.jsonl",
+                "~/.gemini/antigravity-cli/brain/**/transcript_full.jsonl",
+            ],
+            chat_parser_type="json",
         ),
         "opencode": AgentCLIInfo(
             id="opencode",
@@ -66,6 +79,12 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             plugin_path=home / ".config" / "opencode" / "plugins",
             skills_path=home / ".config" / "opencode" / "skills",
             plugin_template="opencode",
+            chat_log_patterns=[
+                "~/.local/share/opencode/storage/**/*.json",
+                "~/.local/share/opencode/sessions/*.json",
+                "~/.config/opencode/chats/*.json",
+            ],
+            chat_parser_type="json",
         ),
         "copilot": AgentCLIInfo(
             id="copilot",
@@ -130,6 +149,11 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             config_paths=[home / ".aider.conf.yml"],
             mcp_support=False,
             plugin_support=False,
+            chat_log_patterns=[
+                "**/.aider.chat.history.md",
+                "~/.aider.chat.history.md",
+            ],
+            chat_parser_type="markdown",
         ),
         "codex": AgentCLIInfo(
             id="codex",
@@ -163,6 +187,11 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             config_paths=[home / ".cline" / "mcp_settings.json"],
             mcp_support=True,
             plugin_support=True,
+            chat_log_patterns=[
+                "~/.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json",
+                "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/*/ui_messages.json",
+            ],
+            chat_parser_type="json",
         ),
         "roo": AgentCLIInfo(
             id="roo",
@@ -172,6 +201,13 @@ def get_agent_cli_registry() -> Dict[str, AgentCLIInfo]:
             config_paths=[home / ".roo" / "mcp_settings.json"],
             mcp_support=True,
             plugin_support=True,
+            chat_log_patterns=[
+                "~/.vscode-server/data/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json",
+                "~/.vscode-server-insiders/data/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json",
+                "~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json",
+                "~/.config/Code - Insiders/User/globalStorage/rooveterinaryinc.roo-cline/tasks/*/ui_messages.json",
+            ],
+            chat_parser_type="json",
         ),
         "goose": AgentCLIInfo(
             id="goose",
@@ -242,6 +278,8 @@ def inspect_agent_cli(agent_id: str) -> dict:
         "plugin_support": info.plugin_support,
         "plugin_installed": plugin_installed,
         "mcp_command_example": info.mcp_command_example,
+        "chat_log_patterns": info.chat_log_patterns,
+        "chat_parser_type": info.chat_parser_type,
     }
 
 
