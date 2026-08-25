@@ -17,6 +17,7 @@ dependencies = [
     "rich>=13.9.4",
     "githubkit>=0.15.5",
     "verkit>=0.1.4",
+    "agent-registry @ file:///home/mstouffer/repos/agent-registry",
     "transitions>=0.9.2",
     "boto3>=1.34.0",
     "google-genai>=0.1.0",
@@ -30,6 +31,9 @@ ta = "taskagent.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/taskagent"]
