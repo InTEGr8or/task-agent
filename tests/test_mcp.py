@@ -636,6 +636,7 @@ EXPECTED_TOOLS = {
     "list_inbox",
     "send_inbox_message",
     "ack_inbox",
+    "watch_inbox_mcp",
     "import_agent_tasks",
     "start_task",
     "run_task",

@@ -585,4 +585,3 @@ def watch_inbox(
             sleep_time = poll_interval
 
         time.sleep(sleep_time)
-

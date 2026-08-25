@@ -88,7 +88,9 @@ def test_discover_agent_chats_repo_scoping_with_gwt(tmp_path: Path):
     assert history_file.resolve() in found_paths
 
 
-def test_discover_agent_chats_home_expansion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_discover_agent_chats_home_expansion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))

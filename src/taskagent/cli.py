@@ -1246,6 +1246,7 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
 
     if action == "watch":
         from taskagent.inbox import watch_inbox
+
         thread = getattr(args, "thread", None) or None
         timeout = getattr(args, "timeout", None)
         msgs = watch_inbox(store, thread=thread, timeout_seconds=timeout)

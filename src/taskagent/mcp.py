@@ -235,9 +235,7 @@ def watch_inbox_mcp(
     except ValueError as e:
         return f"Error resolving repo: {e}"
     thr = thread.strip() or None
-    msgs = watch_inbox(
-        manager.issues_root, thread=thr, timeout_seconds=timeout_seconds
-    )
+    msgs = watch_inbox(manager.issues_root, thread=thr, timeout_seconds=timeout_seconds)
     moniker = moniker_for_store(manager.issues_root) or str(manager.issues_root)
     if not msgs:
         return (
