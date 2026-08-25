@@ -64,6 +64,12 @@ orient (strategy + active + next)
 - Follow **complete-task** skill
 - Report model/tokens/harness when available (cost optimization)
 
+### Inter-Agent Inbox Messaging & Watching
+
+- **Cross-Repo Messaging**: Send messages to target agent stores via `send_inbox_message(to_repo="target", body="...")` or `ta inbox send --repo target`.
+- **Zero-CPU Inotify Watch**: Use `watch_inbox_mcp` or `ta inbox watch` to block with zero CPU overhead until a message arrives, triggering instant reactive wakeups for collaborative agent workflows.
+- **Acknowledge Receipts**: Always acknowledge processed messages via `ack_inbox(message_id=...)` or `ta inbox ack <id>`.
+
 ## Anti-patterns
 
 | Avoid | Prefer |

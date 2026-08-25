@@ -1244,6 +1244,18 @@ def cmd_inbox(console: Console, manager: TaskAgent, args) -> None:
     store = manager.issues_root
     moniker = moniker_for_store(store) if store else None
 
+    if action == "watch":
+        from taskagent.inbox import watch_inbox
+        thread = getattr(args, "thread", None) or None
+        timeout = getattr(args, "timeout", None)
+        msgs = watch_inbox(store, thread=thread, timeout_seconds=timeout)
+        if not msgs:
+            console.print("[dim]Timed out waiting for inbox messages.[/dim]")
+            return
+        for m in msgs:
+            console.print(f"  {m.summary_line()}")
+        return
+
     if action == "list":
         thread = getattr(args, "thread", None)
         msgs = list_unread(store, thread=thread)

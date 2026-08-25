@@ -216,6 +216,42 @@ def list_inbox(thread: str = "", repo: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+def watch_inbox_mcp(
+    thread: str = "",
+    timeout_seconds: Optional[float] = 30.0,
+    repo: Optional[str] = None,
+) -> str:
+    """Block until unread messages arrive in the store's inbox (using zero-CPU Linux inotify).
+
+    Args:
+        thread: Optional task slug filter.
+        timeout_seconds: Maximum wall-clock seconds to wait (default 30.0s).
+        repo: Optional moniker fragment for target store (default: current project).
+    """
+    from taskagent.inbox import moniker_for_store, watch_inbox
+
+    try:
+        manager = get_manager_for_repo(repo)
+    except ValueError as e:
+        return f"Error resolving repo: {e}"
+    thr = thread.strip() or None
+    msgs = watch_inbox(
+        manager.issues_root, thread=thr, timeout_seconds=timeout_seconds
+    )
+    moniker = moniker_for_store(manager.issues_root) or str(manager.issues_root)
+    if not msgs:
+        return (
+            f"Timed out waiting for inbox messages on {moniker} after "
+            f"{timeout_seconds}s."
+        )
+    lines = [f"Received {len(msgs)} inbox message(s) on {moniker}:"]
+    for m in msgs:
+        lines.append(f"  {m.summary_line()}")
+    lines.append("Ack with ack_inbox(id=...) when processed.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def send_inbox_message(
     to_repo: str,
     body: str,

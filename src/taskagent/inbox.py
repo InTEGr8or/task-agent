@@ -17,7 +17,9 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import select
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -493,3 +495,94 @@ def send_to_repo(
         task_snapshot=task_snapshot,
     )
     return msg, resolved
+
+
+def watch_inbox(
+    store_path: Path,
+    *,
+    thread: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
+    poll_interval: float = 0.5,
+) -> List[InboxMessage]:
+    """Block until unread messages arrive in the store's inbox unread/ directory.
+
+    If unread messages already exist, returns them immediately.
+    Uses Linux inotify for zero-CPU blocking event notifications when available,
+    falling back to polling on non-Linux OSes or if inotify is unavailable.
+
+    Args:
+        store_path: Path to target task-agent store root.
+        thread: Optional task slug filter.
+        timeout_seconds: Maximum wall-clock seconds to wait. None means wait indefinitely.
+        poll_interval: Fallback sleep interval when inotify is unavailable.
+
+    Returns:
+        List of unread `InboxMessage` instances.
+    """
+    msgs = list_unread(store_path, thread=thread)
+    if msgs:
+        return msgs
+
+    udir = unread_dir(store_path)
+    udir.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.monotonic()
+
+    # Try Linux inotify first
+    if hasattr(os, "name") and os.name == "posix":
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            if hasattr(libc, "inotify_init1") and hasattr(libc, "inotify_add_watch"):
+                IN_CREATE = 0x00000100
+                IN_MOVED_TO = 0x00000080
+                IN_NONBLOCK = 0x00080000
+                fd = libc.inotify_init1(IN_NONBLOCK)
+                if fd >= 0:
+                    try:
+                        wd = libc.inotify_add_watch(
+                            fd, str(udir).encode("utf-8"), IN_CREATE | IN_MOVED_TO
+                        )
+                        if wd >= 0:
+                            while True:
+                                msgs = list_unread(store_path, thread=thread)
+                                if msgs:
+                                    return msgs
+
+                                if timeout_seconds is not None:
+                                    elapsed = time.monotonic() - start_time
+                                    remaining = timeout_seconds - elapsed
+                                    if remaining <= 0:
+                                        return []
+                                    wait_sec = min(remaining, 1.0)
+                                else:
+                                    wait_sec = 1.0
+
+                                r, _, _ = select.select([fd], [], [], wait_sec)
+                                if r:
+                                    try:
+                                        os.read(fd, 4096)
+                                    except OSError:
+                                        pass
+                    finally:
+                        os.close(fd)
+        except Exception:
+            pass
+
+    # Fallback to polling loop
+    while True:
+        msgs = list_unread(store_path, thread=thread)
+        if msgs:
+            return msgs
+
+        if timeout_seconds is not None:
+            elapsed = time.monotonic() - start_time
+            if elapsed >= timeout_seconds:
+                return []
+            sleep_time = min(poll_interval, timeout_seconds - elapsed)
+        else:
+            sleep_time = poll_interval
+
+        time.sleep(sleep_time)
+
