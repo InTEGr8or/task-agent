@@ -1,0 +1,200 @@
+"""Module for discovering and extracting last-active agent session info."""
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+from agent_registry import (
+    AgentCLIInfo,
+    DiscoveredChat,
+    discover_agent_chats,
+    get_agent_cli_registry,
+)
+from taskagent.store_registry import project_host_root
+
+
+@dataclass
+class AgentLastUsedInfo:
+    """Information on the last active session for an agent CLI in a repository."""
+
+    agent_id: str
+    agent_name: str
+    description: str
+    last_active: datetime
+    last_user_comment: str
+    log_path: Path
+
+
+def _parse_last_user_comment_and_timestamp(
+    discovered: DiscoveredChat,
+) -> Tuple[datetime, str]:
+    """Extract timestamp and first 200 chars of last user comment from chat log file."""
+    path = discovered.path
+    file_mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    user_comment = ""
+
+    if not path.is_file():
+        return file_mtime, user_comment
+
+    try:
+        if discovered.parser_type == "jsonl":
+            text_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for line in reversed(text_lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict):
+                        role = (
+                            data.get("type")
+                            or data.get("role")
+                            or data.get("source")
+                        )
+                        if role in (
+                            "user",
+                            "USER_INPUT",
+                            "USER_EXPLICIT",
+                            "human",
+                        ):
+                            content = (
+                                data.get("content")
+                                or data.get("text")
+                                or data.get("message")
+                            )
+                            if isinstance(content, list):
+                                text_parts = []
+                                for part in content:
+                                    if (
+                                        isinstance(part, dict)
+                                        and part.get("type") == "text"
+                                    ):
+                                        text_parts.append(part.get("text", ""))
+                                    elif isinstance(part, str):
+                                        text_parts.append(part)
+                                content = " ".join(text_parts)
+                            if isinstance(content, str) and content.strip():
+                                user_comment = content.strip()
+                                break
+                except Exception:
+                    continue
+
+        elif discovered.parser_type == "json":
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+            data = json.loads(raw_text)
+            messages = []
+            if isinstance(data, list):
+                messages = data
+            elif isinstance(data, dict):
+                messages = (
+                    data.get("messages")
+                    or data.get("steps")
+                    or data.get("history")
+                    or []
+                )
+
+            if isinstance(messages, list):
+                for msg in reversed(messages):
+                    if isinstance(msg, dict):
+                        role = (
+                            msg.get("say")
+                            or msg.get("role")
+                            or msg.get("type")
+                            or msg.get("source")
+                        )
+                        if role in (
+                            "user",
+                            "say",
+                            "user_feedback",
+                            "USER_INPUT",
+                            "human",
+                        ):
+                            content = (
+                                msg.get("text")
+                                or msg.get("content")
+                                or msg.get("message")
+                            )
+                            if isinstance(content, str) and content.strip():
+                                user_comment = content.strip()
+                                break
+
+        elif discovered.parser_type == "markdown":
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+            text_lines = raw_text.splitlines()
+            user_blocks = []
+            current_block = []
+            in_user = False
+            for line in text_lines:
+                if line.startswith("#") or line.startswith("> "):
+                    if in_user and current_block:
+                        user_blocks.append("\n".join(current_block).strip())
+                        current_block = []
+                    in_user = ("user" in line.lower() or "human" in line.lower())
+                elif in_user:
+                    current_block.append(line)
+            if in_user and current_block:
+                user_blocks.append("\n".join(current_block).strip())
+            if user_blocks:
+                user_comment = user_blocks[-1]
+
+    except Exception:
+        pass
+
+    user_comment = " ".join(user_comment.split())
+
+    if len(user_comment) > 200:
+        user_comment = user_comment[:197] + "..."
+
+    return file_mtime, user_comment
+
+
+def get_last_active_agents(
+    project_dir: Optional[Path] = None,
+    limit: int = 5,
+) -> List[AgentLastUsedInfo]:
+    """Find and rank most recently active AI agent CLIs in a project repository."""
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    host_root = project_host_root(project_dir)
+    discovered_chats = discover_agent_chats(project_dir=host_root)
+    registry = get_agent_cli_registry()
+
+    agent_chats_map: dict[str, List[DiscoveredChat]] = {}
+    for chat in discovered_chats:
+        agent_chats_map.setdefault(chat.agent_id, []).append(chat)
+
+    results: List[AgentLastUsedInfo] = []
+
+    for agent_id, chats in agent_chats_map.items():
+        agent_info: Optional[AgentCLIInfo] = registry.get(agent_id)
+        name = agent_info.name if agent_info else agent_id.capitalize()
+        description = agent_info.description if agent_info else ""
+
+        newest_mtime: Optional[datetime] = None
+        newest_comment: str = ""
+        newest_path: Optional[Path] = None
+
+        for chat in chats:
+            mtime, comment = _parse_last_user_comment_and_timestamp(chat)
+            if newest_mtime is None or mtime > newest_mtime:
+                newest_mtime = mtime
+                newest_comment = comment
+                newest_path = chat.path
+
+        if newest_mtime is not None and newest_path is not None:
+            results.append(
+                AgentLastUsedInfo(
+                    agent_id=agent_id,
+                    agent_name=name,
+                    description=description,
+                    last_active=newest_mtime,
+                    last_user_comment=newest_comment,
+                    log_path=newest_path,
+                )
+            )
+
+    results.sort(key=lambda item: item.last_active, reverse=True)
+    return results[:limit]

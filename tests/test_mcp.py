@@ -638,6 +638,7 @@ EXPECTED_TOOLS = {
     "ack_inbox",
     "watch_inbox_mcp",
     "import_agent_tasks",
+    "get_last_active_agent",
     "start_task",
     "run_task",
     "get_store_log",

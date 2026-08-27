@@ -4232,6 +4232,65 @@ def cmd_agent_import(
             sys.exit(1)
 
 
+def cmd_agent_last_used(
+    console: Console,
+    path_arg: Optional[str] = None,
+    limit: int = 5,
+    json_format: bool = False,
+) -> None:
+    """Handler for 'ta agent last-used' subcommand."""
+    from rich import box
+    from taskagent.chat.last_used import get_last_active_agents
+
+    target_path = Path(path_arg).resolve() if path_arg else Path.cwd()
+    results = get_last_active_agents(project_dir=target_path, limit=limit)
+
+    if json_format:
+        output = [
+            {
+                "agent_id": item.agent_id,
+                "agent_name": item.agent_name,
+                "description": item.description,
+                "last_active": item.last_active.isoformat(),
+                "last_user_comment": item.last_user_comment,
+                "log_path": str(item.log_path),
+            }
+            for item in results
+        ]
+        print(json.dumps(output, indent=2))
+        return
+
+    if not results:
+        console.print(
+            f"[yellow]No agent chat sessions found for repository at [bold]{target_path}[/bold].[/yellow]"
+        )
+        return
+
+    console.print(
+        f"\n[bold green]🤖 Recently Active AI Agents[/bold green] [dim]({target_path})[/dim]\n"
+    )
+
+    table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Agent CLI", style="bold yellow")
+    table.add_column("Description", style="white")
+    table.add_column("Last Active", style="green")
+    table.add_column("Last Comment Snippet", style="dim white")
+
+    for idx, item in enumerate(results, start=1):
+        rel_time = item.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
+        comment_snippet = item.last_user_comment if item.last_user_comment else "[dim](no prompt comment logged)[/dim]"
+        table.add_row(
+            str(idx),
+            item.agent_name,
+            item.description,
+            rel_time,
+            comment_snippet,
+        )
+
+    console.print(table)
+
+
 def cmd_version(
     console: Console,
     promote: Optional[str] = None,
@@ -6055,6 +6114,27 @@ Start working on a task. This command automates the following workflow:
         action="store_true",
         help="Output result as JSON",
     )
+    agent_last_used_p = agent_sub.add_parser(
+        "last-used",
+        help="List AI coding agents recently active in this repository",
+    )
+    agent_last_used_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Target repository directory (defaults to cwd)",
+    )
+    agent_last_used_p.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Maximum number of active agents to return (default: 5)",
+    )
+    agent_last_used_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output result as JSON",
+    )
 
     # plan
     subparsers.add_parser("plan", help="View or edit the project plan")
@@ -6738,9 +6818,16 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
                 file_path=args.file,
                 json_format=args.json,
             )
+        elif args.agent_subcommand == "last-used":
+            cmd_agent_last_used(
+                console,
+                path_arg=args.path,
+                limit=args.limit,
+                json_format=args.json,
+            )
         else:
             console.print(
-                "[yellow]Unknown agent subcommand. Use 'ta agent import'.[/yellow]"
+                "[yellow]Unknown agent subcommand. Use 'ta agent import' or 'ta agent last-used'.[/yellow]"
             )
     elif args.command == "push":
         cmd_push(console, manager)

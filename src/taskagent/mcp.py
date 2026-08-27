@@ -1431,6 +1431,47 @@ def import_agent_tasks(
     )
 
 
+@mcp.tool()
+def get_last_active_agent(
+    path: str = "",
+    limit: int = 5,
+) -> str:
+    """Find and rank most recently active AI coding agent CLIs in a project repository.
+
+    Args:
+        path: Target repository directory path (defaults to working directory if empty).
+        limit: Maximum number of active agents to return (default: 5).
+
+    Returns:
+        Formatted summary list of recently active AI agent CLIs, sorted descending by last active date,
+        including description and first 200 characters of the last user comment.
+    """
+    from pathlib import Path
+    from taskagent.chat.last_used import get_last_active_agents
+
+    target_path = Path(path).resolve() if path and path.strip() else Path.cwd()
+    results = get_last_active_agents(project_dir=target_path, limit=limit)
+
+    if not results:
+        return f"No agent chat sessions found for repository at {target_path}."
+
+    lines = [f"### 🤖 Recently Active AI Agents ({target_path})\n"]
+    for idx, item in enumerate(results, start=1):
+        rel_time = item.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
+        comment_snippet = (
+            item.last_user_comment
+            if item.last_user_comment
+            else "(no prompt comment logged)"
+        )
+        lines.append(f"{idx}. **{item.agent_name}** (`{item.agent_id}`)")
+        lines.append(f"   - **Description**: {item.description}")
+        lines.append(f"   - **Last Active**: {rel_time}")
+        lines.append(f"   - **Last Comment Snippet**: {comment_snippet}")
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 def run_mcp_server():
     """Main entry point to run the MCP server."""
     mcp.run()
