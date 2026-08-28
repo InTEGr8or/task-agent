@@ -4273,7 +4273,6 @@ def cmd_agent_last_used(
     table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
     table.add_column("#", style="dim", width=3)
     table.add_column("Agent CLI", style="bold yellow")
-    table.add_column("Description", style="white")
     table.add_column("Last Active", style="green")
     table.add_column("Last Comment Snippet", style="dim white")
 
@@ -4283,7 +4282,6 @@ def cmd_agent_last_used(
         table.add_row(
             str(idx),
             item.agent_name,
-            item.description,
             rel_time,
             comment_snippet,
         )

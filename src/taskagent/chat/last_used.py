@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from agent_registry import (
     AgentCLIInfo,
@@ -25,6 +25,30 @@ class AgentLastUsedInfo:
     last_active: datetime
     last_user_comment: str
     log_path: Path
+
+
+def _extract_text(node: Any) -> str:
+    """Recursively extract string content from dicts, lists, or primitive strings."""
+    if isinstance(node, str):
+        return node
+    elif isinstance(node, dict):
+        if "text" in node and isinstance(node["text"], str):
+            return node["text"]
+        if "content" in node:
+            return _extract_text(node["content"])
+        if "message" in node:
+            return _extract_text(node["message"])
+    elif isinstance(node, list):
+        parts = [_extract_text(item) for item in node]
+        return " ".join(p for p in parts if p)
+    return ""
+
+
+def _is_user_role(role_val: Any) -> bool:
+    if isinstance(role_val, str):
+        r = role_val.lower()
+        return r in ("user", "say", "user_input", "user_explicit", "human", "user_feedback")
+    return False
 
 
 def _parse_last_user_comment_and_timestamp(
@@ -48,35 +72,21 @@ def _parse_last_user_comment_and_timestamp(
                 try:
                     data = json.loads(line)
                     if isinstance(data, dict):
+                        msg = data.get("message")
                         role = (
                             data.get("type")
                             or data.get("role")
                             or data.get("source")
+                            or (msg.get("role") if isinstance(msg, dict) else None)
                         )
-                        if role in (
-                            "user",
-                            "USER_INPUT",
-                            "USER_EXPLICIT",
-                            "human",
-                        ):
-                            content = (
-                                data.get("content")
-                                or data.get("text")
-                                or data.get("message")
-                            )
-                            if isinstance(content, list):
-                                text_parts = []
-                                for part in content:
-                                    if (
-                                        isinstance(part, dict)
-                                        and part.get("type") == "text"
-                                    ):
-                                        text_parts.append(part.get("text", ""))
-                                    elif isinstance(part, str):
-                                        text_parts.append(part)
-                                content = " ".join(text_parts)
-                            if isinstance(content, str) and content.strip():
-                                user_comment = content.strip()
+                        if _is_user_role(role):
+                            raw_comment = _extract_text(msg if msg else data).strip()
+                            if (
+                                raw_comment
+                                and not raw_comment.startswith("<local-command-")
+                                and not raw_comment.startswith("<command-name>")
+                            ):
+                                user_comment = raw_comment
                                 break
                 except Exception:
                     continue
@@ -104,20 +114,10 @@ def _parse_last_user_comment_and_timestamp(
                             or msg.get("type")
                             or msg.get("source")
                         )
-                        if role in (
-                            "user",
-                            "say",
-                            "user_feedback",
-                            "USER_INPUT",
-                            "human",
-                        ):
-                            content = (
-                                msg.get("text")
-                                or msg.get("content")
-                                or msg.get("message")
-                            )
-                            if isinstance(content, str) and content.strip():
-                                user_comment = content.strip()
+                        if _is_user_role(role):
+                            raw_comment = _extract_text(msg).strip()
+                            if raw_comment:
+                                user_comment = raw_comment
                                 break
 
         elif discovered.parser_type == "markdown":
