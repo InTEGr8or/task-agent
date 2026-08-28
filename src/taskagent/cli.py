@@ -6112,23 +6112,24 @@ Start working on a task. This command automates the following workflow:
         action="store_true",
         help="Output result as JSON",
     )
-    agent_last_used_p = agent_sub.add_parser(
-        "last-used",
+    agent_recent_p = agent_sub.add_parser(
+        "recent",
+        aliases=["last-used"],
         help="List AI coding agents recently active in this repository",
     )
-    agent_last_used_p.add_argument(
+    agent_recent_p.add_argument(
         "path",
         nargs="?",
         default=None,
         help="Target repository directory (defaults to cwd)",
     )
-    agent_last_used_p.add_argument(
+    agent_recent_p.add_argument(
         "--limit",
         type=int,
         default=5,
         help="Maximum number of active agents to return (default: 5)",
     )
-    agent_last_used_p.add_argument(
+    agent_recent_p.add_argument(
         "--json",
         action="store_true",
         help="Output result as JSON",
@@ -6816,7 +6817,7 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
                 file_path=args.file,
                 json_format=args.json,
             )
-        elif args.agent_subcommand == "last-used":
+        elif args.agent_subcommand in ("recent", "last-used"):
             cmd_agent_last_used(
                 console,
                 path_arg=args.path,
@@ -6825,7 +6826,7 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
             )
         else:
             console.print(
-                "[yellow]Unknown agent subcommand. Use 'ta agent import' or 'ta agent last-used'.[/yellow]"
+                "[yellow]Unknown agent subcommand. Use 'ta agent import' or 'ta agent recent'.[/yellow]"
             )
     elif args.command == "push":
         cmd_push(console, manager)
