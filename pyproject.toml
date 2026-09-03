@@ -1,6 +1,6 @@
 [project]
 name = "task-agent"
-version = "1.3.3"
+version = "1.3.4"
 description = "A prioritized, file-based task queue for autonomous agentic workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,6 +8,28 @@ authors = [
     { name = "Mark Stouffer", email = "1802850+InTEGr8or@users.noreply.github.com" }
 ]
 license = { text = "MIT" }
+keywords = [
+    "task-agent",
+    "ai-agent",
+    "multi-agent",
+    "mcp",
+    "model-context-protocol",
+    "agentic-workflow",
+    "claude-code",
+    "antigravity",
+    "opencode",
+    "grok",
+    "matrix-bridge",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+
 dependencies = [
     "mcp>=1.26.0,<2.0.0",
     "pydantic>=2.10.6",
@@ -17,12 +39,18 @@ dependencies = [
     "rich>=13.9.4",
     "githubkit>=0.15.5",
     "verkit>=0.1.4",
-    "agent-cli-registry>=0.1.1",
+    "multi-agent-registry>=0.1.0",
     "transitions>=0.9.2",
     "boto3>=1.34.0",
     "google-genai>=0.1.0",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/InTEGr8or/task-agent"
+Repository = "https://github.com/InTEGr8or/task-agent.git"
+Issues = "https://github.com/InTEGr8or/task-agent/issues"
+Documentation = "https://github.com/InTEGr8or/task-agent/blob/main/README.md"
 
 
 [project.scripts]
@@ -66,5 +94,6 @@ testpaths = ["tests"]
 
 [tool.uv.sources]
 verkit = { path = "/home/mstouffer/repos/verkit" }
+multi-agent-registry = { path = "/home/mstouffer/repos/multi-agent-registry" }
 
 

@@ -37,6 +37,27 @@ The `ta` tool automates the transition of issues through the queue and manages t
 4. **Execute**: (Planned) The agent (Gemini CLI) processes the task in its isolated worktree via `ta run <slug>`.
 5. **Finalize**: Once verified, `ta done` moves the task to the finished state.
 
-## 🤖 Gemini CLI Integration
+## 🤖 Multi-Agent CLI Portfolio (`multi-agent-registry`)
 
-By utilizing the Gemini CLI's headless mode, this system can orchestrate multiple agents simultaneously without requiring manual terminal management, significantly improving portability and scalability between Windows and WSL environments.
+`task-agent` integrates with [`multi-agent-registry`](https://github.com/InTEGr8or/multi-agent-registry) (`multi_agent_registry`) to automatically detect, configure, and inspect AI agent CLIs across your developer workstation:
+
+- **Supported Agent CLIs**: Claude Code (`claude`), Antigravity CLI (`agy`), OpenCode (`opencode`), Grok Build (`grok`), GitHub Copilot CLI (`copilot`), Cursor (`cursor`), Windsurf (`windsurf`), Aider (`aider`), Continue (`continue`), Cline (`cline`), Roo Code (`roo`).
+- **Features**: Automatic CLI detection, MCP configuration generation (`ta init-mcp`), session discovery, recent agent activity tracking (`ta agent recent`), and plugin management.
+
+---
+
+## 💬 Matrix Messaging Integration & Sidecar Daemon
+
+`task-agent` includes a zero-dependency Matrix sidecar bridge daemon ([`sidecars/matrix-bridge/`](file:///home/mstouffer/repos/task-agent/sidecars/matrix-bridge/)) for real-time remote notification and task chat bridging:
+
+- **Global Space & Store Binding**:
+  ```bash
+  # Configure machine-wide Matrix Space link
+  ta store matrix space set 'https://matrix.to/#/!space_id:matrix.org'
+
+  # Configure secret token reference (1Password op://, Linux keyring secret-tool://, or pass://)
+  ta store matrix token set 'op://Private/6pcab3dt5sml3sslfh6xffqit4/Saved on account.matrix.org/access-token'
+  ```
+- **Automated Space & Child Room Provisioning**:
+  When launched, the sidecar daemon (`python3 sidecars/matrix-bridge/matrix_bridge.py`) auto-discovers or provisions unencrypted child rooms inside your Space for each repository store and delivers real-time inbox comments.
+

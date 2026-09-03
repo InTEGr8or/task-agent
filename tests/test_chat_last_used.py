@@ -1,6 +1,6 @@
 import json
 
-from agent_registry.models import DiscoveredChat
+from multi_agent_registry import DiscoveredChat
 from taskagent.chat.last_used import (
     AgentLastUsedInfo,
     _parse_last_user_comment_and_timestamp,
@@ -14,7 +14,12 @@ def test_parse_last_user_comment_jsonl(tmp_path):
         json.dumps({"type": "system", "content": "Init"}),
         json.dumps({"type": "user", "content": "First prompt from user"}),
         json.dumps({"type": "assistant", "content": "AI response"}),
-        json.dumps({"type": "user", "content": "Please refactor the database connector for production"}),
+        json.dumps(
+            {
+                "type": "user",
+                "content": "Please refactor the database connector for production",
+            }
+        ),
     ]
     log_file.write_text("\n".join(lines))
 

@@ -9,18 +9,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agent-cli-registry"
-version = "0.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "verkit" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/08/11/4918ee225221b748670c368712ecfeedd75b26869b11ae06a6288a81ffa9/agent_cli_registry-0.1.1.tar.gz", hash = "sha256:c8a386635ae3041e0f6cb4c124de6b84e51d47ad09c41ad2170fc98e7e836f7b", size = 7241, upload-time = "2026-08-25T18:03:26.845Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/11/b413dac689e283b8fed74015cc2131fb7b1a1e99ce6dd4e33d5b829bcce2/agent_cli_registry-0.1.1-py3-none-any.whl", hash = "sha256:0f220b45e5ab8f17e0db5f8ffe98877536d2c5d520e3664c9ab04999e856241a", size = 6297, upload-time = "2026-08-25T18:03:25.639Z" },
-]
-
-[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -801,6 +789,21 @@ wheels = [
 ]
 
 [[package]]
+name = "multi-agent-registry"
+version = "0.3.0"
+source = { directory = "/home/mstouffer/repos/multi-agent-registry" }
+dependencies = [
+    { name = "rich" },
+    { name = "verkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "rich", specifier = ">=13.9.4" },
+    { name = "verkit", specifier = ">=0.1.4" },
+]
+
+[[package]]
 name = "mypy"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1441,14 +1444,14 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "1.3.3"
+version = "1.3.4"
 source = { editable = "." }
 dependencies = [
-    { name = "agent-cli-registry" },
     { name = "boto3" },
     { name = "githubkit" },
     { name = "google-genai" },
     { name = "mcp" },
+    { name = "multi-agent-registry" },
     { name = "pydantic" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
@@ -1470,11 +1473,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agent-cli-registry", specifier = ">=0.1.1" },
     { name = "boto3", specifier = ">=1.34.0" },
     { name = "githubkit", specifier = ">=0.15.5" },
     { name = "google-genai", specifier = ">=0.1.0" },
     { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
+    { name = "multi-agent-registry", directory = "/home/mstouffer/repos/multi-agent-registry" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },

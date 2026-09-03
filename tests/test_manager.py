@@ -1289,3 +1289,24 @@ def test_rename_issue_validation(manager):
     # Empty title fails
     with pytest.raises(ValueError, match="empty"):
         manager.rename_issue("task-one", "")
+
+
+def test_create_task_with_file_extension_suffix_does_not_break_store(manager):
+    """Regression test: Task titles containing .md / .json substrings should not create directory slugs ending in .md or crash store-wide task creation."""
+    # Create task with a title containing .md / .json substrings
+    title = "Investigate website.md and task.json"
+    issue1 = manager.create_issue(title, body="Testing extension-like title")
+    assert not issue1.slug.endswith(".md")
+    assert not issue1.slug.endswith(".json")
+
+    # Manually create a directory ending in .md to test resilience against pre-existing bad directories
+    bad_dir = manager.issues_root / "draft" / "bad-legacy-task.md"
+    bad_dir.mkdir(parents=True, exist_ok=True)
+    (bad_dir / "README.md").write_text(
+        "---\ncreated_at: 2026-08-30\n---\n# Bad Legacy Task\n", encoding="utf-8"
+    )
+
+    # Creating another unrelated task must succeed without IsADirectoryError
+    issue2 = manager.create_issue("Unrelated Task Two", body="Should work cleanly")
+    assert issue2.slug == "unrelated-task-two"
+    assert issue2.status == "pending"

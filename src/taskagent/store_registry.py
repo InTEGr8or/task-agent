@@ -58,6 +58,82 @@ def get_stores_dir(data_root: Optional[Path] = None) -> Path:
     return root / "stores"
 
 
+def get_global_matrix_space(data_root: Optional[Path] = None) -> Optional[str]:
+    """Return machine-wide default Matrix Space ID if configured."""
+    root = data_root if data_root is not None else get_data_root()
+    cfg_file = root / "matrix.json"
+    if not cfg_file.is_file():
+        return None
+    try:
+        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        return data.get("matrix_space_id")
+    except Exception:
+        return None
+
+
+def set_global_matrix_space(
+    space_id: Optional[str], data_root: Optional[Path] = None
+) -> Path:
+    """Save machine-wide default Matrix Space ID."""
+    root = data_root if data_root is not None else get_data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    cfg_file = root / "matrix.json"
+    data: Dict[str, Any] = {}
+    if cfg_file.is_file():
+        try:
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    if space_id:
+        data["matrix_space_id"] = space_id
+    else:
+        data.pop("matrix_space_id", None)
+    tmp = cfg_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(cfg_file)
+    return cfg_file
+
+
+def get_global_matrix_token(data_root: Optional[Path] = None) -> Optional[str]:
+    """Return machine-wide Matrix access token or secret reference if configured."""
+    root = data_root if data_root is not None else get_data_root()
+    cfg_file = root / "matrix.json"
+    if not cfg_file.is_file():
+        return None
+    try:
+        data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        return data.get("matrix_access_token")
+    except Exception:
+        return None
+
+
+def set_global_matrix_token(
+    token_ref: Optional[str], data_root: Optional[Path] = None
+) -> Path:
+    """Save machine-wide Matrix access token or 1Password secret reference."""
+    root = data_root if data_root is not None else get_data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    cfg_file = root / "matrix.json"
+    data: Dict[str, Any] = {}
+    if cfg_file.is_file():
+        try:
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    if token_ref:
+        data["matrix_access_token"] = token_ref
+    else:
+        data.pop("matrix_access_token", None)
+    tmp = cfg_file.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(cfg_file)
+    try:
+        os.chmod(cfg_file, 0o600)
+    except Exception:
+        pass
+    return cfg_file
+
+
 def moniker_from_remote(url: str) -> str:
     """Derive a stable moniker from a git remote URL.
 
@@ -370,8 +446,10 @@ def write_store_meta(
 ) -> Path:
     """Write store identity metadata inside the store (source for registry rebuild)."""
     meta_path = store_path / STORE_META_REL
+    existing = read_store_meta(store_path) or {}
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     payload: Dict[str, Any] = {
+        **existing,
         "version": REGISTRY_VERSION,
         "moniker": moniker,
     }
@@ -397,6 +475,8 @@ class StoreEntry:
     host_paths: List[str] = field(default_factory=list)
     remote: Optional[str] = None
     registered_at: Optional[str] = None
+    keet_room_uri: Optional[str] = None
+    matrix_room_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -411,6 +491,8 @@ class StoreEntry:
             host_paths=list(data.get("host_paths") or []),
             remote=data.get("remote"),
             registered_at=data.get("registered_at"),
+            keet_room_uri=data.get("keet_room_uri"),
+            matrix_room_id=data.get("matrix_room_id"),
         )
 
 
@@ -557,12 +639,20 @@ class MachineRegistry:
 
                 assert moniker is not None
                 prev = previous.get(moniker)
+                keet_uri = (meta.get("keet_room_uri") if meta else None) or (
+                    prev.keet_room_uri if prev else None
+                )
+                matrix_id = (meta.get("matrix_room_id") if meta else None) or (
+                    prev.matrix_room_id if prev else None
+                )
                 rebuilt[moniker] = StoreEntry(
                     moniker=moniker,
                     store_path=str(child.resolve()),
                     host_paths=list(prev.host_paths) if prev else [],
                     remote=remote or (prev.remote if prev else None),
                     registered_at=prev.registered_at if prev else None,
+                    keet_room_uri=keet_uri,
+                    matrix_room_id=matrix_id,
                 )
 
         self.save(rebuilt)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from agent_registry import (
+from multi_agent_registry import (
     AgentCLIInfo,
     DiscoveredChat,
     discover_agent_chats,
@@ -47,7 +47,14 @@ def _extract_text(node: Any) -> str:
 def _is_user_role(role_val: Any) -> bool:
     if isinstance(role_val, str):
         r = role_val.lower()
-        return r in ("user", "say", "user_input", "user_explicit", "human", "user_feedback")
+        return r in (
+            "user",
+            "say",
+            "user_input",
+            "user_explicit",
+            "human",
+            "user_feedback",
+        )
     return False
 
 
@@ -131,7 +138,7 @@ def _parse_last_user_comment_and_timestamp(
                     if in_user and current_block:
                         user_blocks.append("\n".join(current_block).strip())
                         current_block = []
-                    in_user = ("user" in line.lower() or "human" in line.lower())
+                    in_user = "user" in line.lower() or "human" in line.lower()
                 elif in_user:
                     current_block.append(line)
             if in_user and current_block:
@@ -150,6 +157,44 @@ def _parse_last_user_comment_and_timestamp(
     return file_mtime, user_comment
 
 
+def get_chat_workspace(chat: DiscoveredChat) -> Optional[Path]:
+    """Best-effort resolution of which project/repo a discovered chat log belongs to."""
+    try:
+        if chat.parser_type == "jsonl":
+            with open(chat.path, "r", encoding="utf-8", errors="replace") as f:
+                for idx, line in enumerate(f):
+                    if idx > 200:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if isinstance(data, dict):
+                            cwd = (
+                                data.get("cwd")
+                                or data.get("workspace")
+                                or data.get("project")
+                            )
+                            if cwd:
+                                return Path(cwd)
+                    except Exception:
+                        continue
+        elif chat.parser_type == "markdown":
+            return chat.path.parent
+        elif chat.parser_type == "json":
+            with open(chat.path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read(10000)
+            import re
+
+            match = re.search(r"Current Workspace Directory \((.*?)\)", content)
+            if match:
+                return Path(match.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def get_last_active_agents(
     project_dir: Optional[Path] = None,
     limit: int = 5,
@@ -164,6 +209,26 @@ def get_last_active_agents(
 
     agent_chats_map: dict[str, List[DiscoveredChat]] = {}
     for chat in discovered_chats:
+        is_global_log = str(chat.path).startswith(str(Path.home())) and not str(
+            chat.path
+        ).startswith(str(host_root))
+        ws = get_chat_workspace(chat)
+        if is_global_log:
+            if ws is None:
+                continue
+            try:
+                chat_host = project_host_root(ws)
+                if chat_host != host_root and str(chat_host) != str(host_root):
+                    continue
+            except Exception:
+                continue
+        elif ws is not None:
+            try:
+                chat_host = project_host_root(ws)
+                if chat_host != host_root and str(chat_host) != str(host_root):
+                    continue
+            except Exception:
+                pass
         agent_chats_map.setdefault(chat.agent_id, []).append(chat)
 
     results: List[AgentLastUsedInfo] = []

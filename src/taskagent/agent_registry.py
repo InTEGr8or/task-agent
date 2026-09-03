@@ -1,6 +1,6 @@
 """Agent CLI Detection Registry for Task Agent.
 
-Re-exports core agent definitions from the standalone `agent_registry` package
+Re-exports core agent definitions from the standalone `multi_agent_registry` package
 while maintaining task-agent specific user plugin configuration helpers.
 """
 
@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-from agent_registry import (
+from multi_agent_registry import (
     AgentCLIInfo,
     DiscoveredChat,
     discover_agent_chats,

@@ -2422,6 +2422,234 @@ def cmd_store(console: Console, args) -> None:
         )
         return
 
+    if sub == "keet":
+        from taskagent.store_registry import (
+            STORE_META_REL,
+            MachineRegistry,
+            inspect_host,
+            read_store_meta,
+            write_store_meta,
+        )
+
+        host = _store_host_from_args(console, args)
+        report = inspect_host(host)
+        store_path = Path(report["canonical_store_path"])
+        moniker = report["moniker"]
+        action = getattr(args, "action", "show") or "show"
+        uri_arg = getattr(args, "uri", None)
+
+        registry = MachineRegistry()
+        entry = registry.get(moniker)
+
+        if action == "show":
+            meta = read_store_meta(store_path) or {}
+            keet_uri = meta.get("keet_room_uri") or (
+                entry.keet_room_uri if entry else None
+            )
+            console.print(f"[bold]Store Moniker[/bold]: {moniker}")
+            console.print(f"[bold]Store Path[/bold]:    {store_path}")
+            if keet_uri:
+                console.print(f"[bold]Keet Room URI[/bold]: [green]{keet_uri}[/green]")
+            else:
+                console.print(
+                    "[bold]Keet Room URI[/bold]: [yellow]none (not configured)[/yellow]"
+                )
+                console.print(
+                    "[dim]Set with: ta store keet set <keet://chat/...>[/dim]"
+                )
+            return
+
+        if action == "set":
+            if not uri_arg:
+                console.print(
+                    "[red]Error: Keet room URI is required for 'ta store keet set <uri>'.[/red]"
+                )
+                raise SystemExit(1)
+            write_store_meta(
+                store_path, moniker=moniker, extra={"keet_room_uri": uri_arg}
+            )
+            if entry:
+                entry.keet_room_uri = uri_arg
+                registry.upsert(entry)
+            console.print(
+                f"[green]✓ Configured secret Keet room URI for store [bold]{moniker}[/bold].[/green]"
+            )
+            console.print(f"[dim]Saved to {store_path / STORE_META_REL}[/dim]")
+            return
+
+        if action == "unset":
+            meta = read_store_meta(store_path) or {}
+            meta.pop("keet_room_uri", None)
+            write_store_meta(store_path, moniker=moniker, extra=meta)
+            if entry:
+                entry.keet_room_uri = None
+                registry.upsert(entry)
+            console.print(
+                f"[yellow]Cleared Keet room URI for store [bold]{moniker}[/bold].[/yellow]"
+            )
+            return
+
+    if sub == "matrix":
+        from taskagent.store_registry import (
+            STORE_META_REL,
+            MachineRegistry,
+            get_global_matrix_space,
+            inspect_host,
+            read_store_meta,
+            set_global_matrix_space,
+            write_store_meta,
+        )
+
+        host = _store_host_from_args(console, args)
+        report = inspect_host(host)
+        store_path = Path(report["canonical_store_path"])
+        moniker = report["moniker"]
+        action = getattr(args, "action", "show") or "show"
+        room_arg = getattr(args, "room_id", None)
+
+        registry = MachineRegistry()
+        entry = registry.get(moniker)
+
+        if action == "space":
+            space_cmd = getattr(args, "room_id", None) or "show"
+            space_arg = getattr(args, "extra_arg", None)
+            if space_cmd in ("set", "set-space"):
+                val = space_arg or getattr(args, "room_id", None)
+                if not val or val == "set":
+                    console.print(
+                        "[red]Error: Matrix Space link or ID is required: ta store matrix space set '<link>'[/red]"
+                    )
+                    raise SystemExit(1)
+                p = set_global_matrix_space(val)
+                console.print(
+                    "[green]✓ Configured global machine Matrix Space link.[/green]"
+                )
+                console.print(f"[dim]Saved to {p}[/dim]")
+                return
+            if space_cmd == "unset":
+                set_global_matrix_space(None)
+                console.print(
+                    "[yellow]Cleared global machine Matrix Space link.[/yellow]"
+                )
+                return
+            # show
+            g_space = get_global_matrix_space()
+            if g_space:
+                console.print(
+                    f"[bold]Global Matrix Space Link[/bold]: [green]{g_space}[/green]"
+                )
+            else:
+                console.print(
+                    "[bold]Global Matrix Space Link[/bold]: [yellow]none (not configured)[/yellow]"
+                )
+                console.print(
+                    "[dim]Set with: ta store matrix space set '<https://matrix.to/#/!space_id...>'[/dim]"
+                )
+        if action == "token":
+            from taskagent.store_registry import (
+                get_global_matrix_token,
+                set_global_matrix_token,
+            )
+
+            token_cmd = getattr(args, "room_id", None) or "show"
+            token_val = getattr(args, "extra_arg", None)
+            if token_cmd in ("set", "set-token"):
+                val = token_val or getattr(args, "room_id", None)
+                if not val or val == "set":
+                    console.print(
+                        "[red]Error: Token reference is required: ta store matrix token set 'op://Private/Matrix/access-token'[/red]"
+                    )
+                    raise SystemExit(1)
+                p = set_global_matrix_token(val)
+                console.print(
+                    "[green]✓ Configured global Matrix token reference.[/green]"
+                )
+                console.print(f"[dim]Saved to {p} (mode 0600)[/dim]")
+                return
+            if token_cmd == "unset":
+                set_global_matrix_token(None)
+                console.print("[yellow]Cleared global Matrix token reference.[/yellow]")
+                return
+            g_token = get_global_matrix_token()
+            if g_token:
+                disp = (
+                    g_token
+                    if g_token.startswith("op://")
+                    else (g_token[:8] + "..." + g_token[-4:])
+                )
+                console.print(
+                    f"[bold]Global Matrix Token Reference[/bold]: [green]{disp}[/green]"
+                )
+            else:
+                console.print(
+                    "[bold]Global Matrix Token Reference[/bold]: [yellow]none (not configured)[/yellow]"
+                )
+                console.print(
+                    "[dim]Set with: ta store matrix token set 'op://Private/Matrix/access-token'[/dim]"
+                )
+            return
+
+        if action == "show":
+            meta = read_store_meta(store_path) or {}
+            matrix_id = meta.get("matrix_room_id") or (
+                entry.matrix_room_id if entry else None
+            )
+            global_space = get_global_matrix_space()
+            console.print(f"[bold]Store Moniker[/bold]: {moniker}")
+            console.print(f"[bold]Store Path[/bold]:    {store_path}")
+            if matrix_id:
+                console.print(
+                    f"[bold]Matrix Room ID[/bold]: [green]{matrix_id}[/green]"
+                )
+            elif global_space:
+                console.print(
+                    f"[bold]Matrix Room ID[/bold]: [cyan]{global_space}[/cyan] [dim](global machine default Space)[/dim]"
+                )
+            else:
+                console.print(
+                    "[bold]Matrix Room ID[/bold]: [yellow]none (not configured)[/yellow]"
+                )
+                console.print(
+                    "[dim]Set with: ta store matrix set '<room_or_space_link>'[/dim]"
+                )
+            return
+
+        if action == "set":
+            if not room_arg:
+                console.print(
+                    "[red]Error: Matrix Room or Space link is required for 'ta store matrix set <link>'.[/red]"
+                )
+                raise SystemExit(1)
+            # If a space link is passed to ta store matrix set, auto-configure global space
+            if "matrix.to/#/!" in room_arg or "space" in room_arg.lower():
+                set_global_matrix_space(room_arg)
+                console.print(
+                    "[green]✓ Configured global machine Matrix Space link.[/green]"
+                )
+            write_store_meta(
+                store_path, moniker=moniker, extra={"matrix_room_id": room_arg}
+            )
+            if entry:
+                entry.matrix_room_id = room_arg
+                registry.upsert(entry)
+            console.print(
+                f"[green]✓ Configured Matrix Room/Space ID for store [bold]{moniker}[/bold].[/green]"
+            )
+            console.print(f"[dim]Saved to {store_path / STORE_META_REL}[/dim]")
+            return
+
+        if action == "unset":
+            meta = read_store_meta(store_path) or {}
+            meta.pop("matrix_room_id", None)
+            write_store_meta(store_path, moniker=moniker, extra=meta)
+            if entry:
+                entry.matrix_room_id = None
+                registry.upsert(entry)
+            console.print(
+                f"[yellow]Cleared Matrix Room ID for store [bold]{moniker}[/bold].[/yellow]"
+            )
+            return
+
     if sub == "rebind":
         from taskagent.store_registry import rebind_store_moniker
 
@@ -4239,7 +4467,6 @@ def cmd_agent_last_used(
     json_format: bool = False,
 ) -> None:
     """Handler for 'ta agent last-used' subcommand."""
-    from rich import box
     from taskagent.chat.last_used import get_last_active_agents
 
     target_path = Path(path_arg).resolve() if path_arg else Path.cwd()
@@ -4270,7 +4497,12 @@ def cmd_agent_last_used(
         f"\n[bold green]🤖 Recently Active AI Agents[/bold green] [dim]({target_path})[/dim]\n"
     )
 
-    table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan")
+    table = Table(
+        box=None,
+        padding=(0, 2, 0, 0),
+        show_header=True,
+        header_style="bold cyan",
+    )
     table.add_column("#", style="dim", width=3)
     table.add_column("Agent CLI", style="bold yellow")
     table.add_column("Last Active", style="green")
@@ -4278,7 +4510,11 @@ def cmd_agent_last_used(
 
     for idx, item in enumerate(results, start=1):
         rel_time = item.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
-        comment_snippet = item.last_user_comment if item.last_user_comment else "[dim](no prompt comment logged)[/dim]"
+        comment_snippet = (
+            item.last_user_comment
+            if item.last_user_comment
+            else "[dim](no prompt comment logged)[/dim]"
+        )
         table.add_row(
             str(idx),
             item.agent_name,
@@ -6472,6 +6708,56 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         "--path",
         default=None,
         help="Host project path (default: cwd)",
+    )
+    keet_p = store_sub.add_parser(
+        "keet",
+        help="Manage secret Keet P2P room URI binding for a task store",
+    )
+    keet_p.add_argument(
+        "action",
+        nargs="?",
+        choices=["show", "set", "unset"],
+        default="show",
+        help="Action: show (default), set <uri>, or unset",
+    )
+    keet_p.add_argument(
+        "uri",
+        nargs="?",
+        default=None,
+        help="Keet room URI (keet://chat/...) when setting",
+    )
+    keet_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. InTEGr8or/task-agent)",
+    )
+    matrix_p = store_sub.add_parser(
+        "matrix",
+        help="Manage secret Matrix Room or Space ID binding for a task store",
+    )
+    matrix_p.add_argument(
+        "action",
+        nargs="?",
+        choices=["show", "set", "unset", "space", "token"],
+        default="show",
+        help="Action: show (default), set <room_id>, unset, space, or token",
+    )
+    matrix_p.add_argument(
+        "room_id",
+        nargs="?",
+        default=None,
+        help="Matrix Room or Space ID when setting",
+    )
+    matrix_p.add_argument(
+        "extra_arg",
+        nargs="?",
+        default=None,
+        help="Space link argument (e.g. ta store matrix space set '<link>')",
+    )
+    matrix_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. InTEGr8or/task-agent)",
     )
 
     delete_parser = subparsers.add_parser(

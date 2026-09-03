@@ -448,7 +448,12 @@ class TaskAgent:
         text = re.sub(r"[\s_]+", "-", text)
         # Collapse multiple hyphens
         text = re.sub(r"[-]+", "-", text)
-        return text.strip("-")
+        slug = text.strip("-")
+        # Strip trailing extension-like suffixes (.md, .json, .txt, .html, etc.) to prevent directory names ending in extensions
+        slug = re.sub(
+            r"\.(md|json|txt|html|xml|yml|yaml)$", "", slug, flags=re.IGNORECASE
+        )
+        return slug.strip("-")
 
     def migrate_all_to_folders(self) -> int:
         """Migrate all file-based issues to folder format.
@@ -459,6 +464,8 @@ class TaskAgent:
             if not status_dir.exists():
                 continue
             for md_file in status_dir.glob("*.md"):
+                if not md_file.is_file():
+                    continue
                 slug = self.slugify(md_file.stem)
                 if self.migrate_to_folder(slug):
                     count += 1
@@ -537,7 +544,7 @@ class TaskAgent:
         search_dirs: List[Path] = [
             d
             for d in self.issues_root.iterdir()
-            if d.is_dir() and d.name != "completed"
+            if d.is_dir() and d.name not in ("completed", ".gwt", ".git")
         ]
 
         if include_completed:
@@ -553,22 +560,22 @@ class TaskAgent:
         for directory in search_dirs:
             # 1. Exact match check (fast)
             issue_file = directory / f"{slug}.md"
-            if issue_file.exists():
+            if issue_file.is_file():
                 return issue_file
 
             issue_dir_file = directory / slug / "README.md"
-            if issue_dir_file.exists():
+            if issue_dir_file.is_file():
                 return issue_dir_file
 
             # 2. Resilient check (slugify existing files)
             for f in directory.glob("*.md"):
-                if self.slugify(f.stem) == target_slug:
+                if f.is_file() and self.slugify(f.stem) == target_slug:
                     return f
 
             for d in directory.iterdir():
                 if d.is_dir():
                     readme = d / "README.md"
-                    if readme.exists() and self.slugify(d.name) == target_slug:
+                    if readme.is_file() and self.slugify(d.name) == target_slug:
                         return readme
 
         return None
@@ -2450,6 +2457,8 @@ class TaskAgent:
                 pass
 
         def _migrate_file_headers(file_path: Path):
+            if not file_path.is_file():
+                return
             try:
                 content = file_path.read_text(encoding="utf-8")
                 changed = False
@@ -2534,6 +2543,8 @@ class TaskAgent:
 
             # File-based
             for issue_file in list(status_dir.glob("*.md")):
+                if not issue_file.is_file():
+                    continue
                 _migrate_file_headers(issue_file)
                 _clean_redundant_blocked_by(issue_file)
                 name = self.extract_title(issue_file)
