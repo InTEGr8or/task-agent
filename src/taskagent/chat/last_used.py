@@ -130,8 +130,8 @@ def _parse_last_user_comment_and_timestamp(
         elif discovered.parser_type == "markdown":
             raw_text = path.read_text(encoding="utf-8", errors="replace")
             text_lines = raw_text.splitlines()
-            user_blocks = []
-            current_block = []
+            user_blocks: List[str] = []
+            current_block: List[str] = []
             in_user = False
             for line in text_lines:
                 if line.startswith("#") or line.startswith("> "):
