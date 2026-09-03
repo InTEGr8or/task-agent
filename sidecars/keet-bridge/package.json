@@ -1,0 +1,17 @@
+{
+  "name": "keet-bridge",
+  "version": "0.1.0",
+  "description": "Task Agent sidecar daemon bridging task-agent inbox messages with Keet group chats",
+  "main": "bridge.js",
+  "type": "module",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "b4a": "^1.8.1",
+    "blind-pairing-core": "^2.10.1",
+    "hypercore": "^11.35.2",
+    "hyperswarm": "^4.17.0",
+    "z32": "^1.1.0"
+  }
+}

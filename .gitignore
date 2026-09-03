@@ -11,6 +11,7 @@ taskhash
 .task-agent
 .pytest_cache/
 pytest-of-*/
+node_modules/
 
 
 # task-agent: human-facing store symlink
