@@ -12,6 +12,7 @@ from multi_agent_registry import (
     discover_agent_chats,
     get_agent_cli_registry,
 )
+from multi_agent_registry.discovery import get_chat_workspace
 from taskagent.store_registry import project_host_root
 
 
@@ -94,6 +95,12 @@ def _parse_last_user_comment_and_timestamp(
                                 and not raw_comment.startswith("<command-name>")
                             ):
                                 user_comment = raw_comment
+                                created_at = data.get("created_at") or data.get("timestamp")
+                                if created_at:
+                                    try:
+                                        file_mtime = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                                    except ValueError:
+                                        pass
                                 break
                 except Exception:
                     continue
@@ -149,50 +156,29 @@ def _parse_last_user_comment_and_timestamp(
     except Exception:
         pass
 
+    import re
+
+    # Unwrap <USER_REQUEST> tag, keeping human prompt text
+    user_comment = re.sub(r"</?USER_REQUEST>", "", user_comment)
+
+    # Strip system context wrappers (e.g. <CONTEXT_SUMMARY>, <PLAN>, <ADDITIONAL_METADATA>)
+    user_comment = re.sub(
+        r"<(CONTEXT_SUMMARY|PLAN|ADDITIONAL_METADATA)>.*?</\1>",
+        "",
+        user_comment,
+        flags=re.DOTALL,
+    )
+    user_comment = re.sub(
+        r"</?(CONTEXT_SUMMARY|PLAN|ADDITIONAL_METADATA)>",
+        "",
+        user_comment,
+    )
     user_comment = " ".join(user_comment.split())
 
     if len(user_comment) > 200:
         user_comment = user_comment[:197] + "..."
 
     return file_mtime, user_comment
-
-
-def get_chat_workspace(chat: DiscoveredChat) -> Optional[Path]:
-    """Best-effort resolution of which project/repo a discovered chat log belongs to."""
-    try:
-        if chat.parser_type == "jsonl":
-            with open(chat.path, "r", encoding="utf-8", errors="replace") as f:
-                for idx, line in enumerate(f):
-                    if idx > 200:
-                        break
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        if isinstance(data, dict):
-                            cwd = (
-                                data.get("cwd")
-                                or data.get("workspace")
-                                or data.get("project")
-                            )
-                            if cwd:
-                                return Path(cwd)
-                    except Exception:
-                        continue
-        elif chat.parser_type == "markdown":
-            return chat.path.parent
-        elif chat.parser_type == "json":
-            with open(chat.path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(10000)
-            import re
-
-            match = re.search(r"Current Workspace Directory \((.*?)\)", content)
-            if match:
-                return Path(match.group(1))
-    except Exception:
-        pass
-    return None
 
 
 def get_last_active_agents(
