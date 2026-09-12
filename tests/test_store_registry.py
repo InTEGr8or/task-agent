@@ -558,11 +558,12 @@ def test_already_migrated_reconciles_stale_branch(tmp_path):
         check=True,
         capture_output=True,
     )
-    subprocess.run(
+    push_result = subprocess.run(
         ["git", "-C", str(dest), "push", "origin", "master"],
-        check=True,
         capture_output=True,
+        text=True,
     )
+    assert push_result.returncode == 0, push_result.stderr
     subprocess.run(
         ["git", "-C", str(bare), "branch", "-D", "master"],
         check=True,

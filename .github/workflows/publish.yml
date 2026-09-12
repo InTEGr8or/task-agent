@@ -7,6 +7,12 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # The committed .env carries this developer's local ejected-store path
+  # (see .env, and _handle_ejected_symlink in discovery.py). load_dotenv()
+  # never overrides an already-set env var, so pinning this here keeps CI
+  # on the safe in-repo default instead of trying to mkdir a path that only
+  # exists on that one machine.
+  TA_EJECT_TASKS: "false"
 
 jobs:
   publish:
