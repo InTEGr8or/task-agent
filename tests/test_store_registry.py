@@ -501,7 +501,9 @@ def test_already_migrated_reconciles_stale_branch(tmp_path):
     # Bare remote whose HEAD is main
     bare = tmp_path / "remote.git"
     subprocess.run(
-        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+        ["git", "init", "--bare", "--initial-branch=main", str(bare)],
+        check=True,
+        capture_output=True,
     )
 
     seed = tmp_path / "seed"
@@ -652,7 +654,9 @@ def test_already_migrated_refuses_unpushed_unique_commits(tmp_path):
 
     bare = tmp_path / "remote.git"
     subprocess.run(
-        ["git", "init", "--bare", str(bare)], check=True, capture_output=True
+        ["git", "init", "--bare", "--initial-branch=main", str(bare)],
+        check=True,
+        capture_output=True,
     )
     seed = tmp_path / "seed"
     seed.mkdir()
