@@ -23,6 +23,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Several tests create real git repos (auto-commit, store migration)
+      # and need a committer identity; the runner has none by default.
+      - name: Configure git identity for tests
+        run: |
+          git config --global user.name "CI Runner"
+          git config --global user.email "ci@task-agent.invalid"
+
       # https://github.com/astral-sh/setup-uv
       - name: Install uv
         uses: astral-sh/setup-uv@v7
