@@ -598,6 +598,129 @@ def fuzzy_match(slug: str, pattern: str) -> bool:
     return pat_clean in slug_clean or slug_clean.startswith(pat_clean)
 
 
+REASON_LABELS = {
+    "recorded": ("recorded", "bold green"),
+    "touched": ("touched", "cyan"),
+    "message": ("message", "yellow"),
+}
+
+
+def cmd_search_commit(
+    console: Console,
+    manager: TaskAgent,
+    ref: str,
+    repo: Optional[str] = None,
+    threshold: float = 0.65,
+    include_completed: bool = True,
+    json_output: bool = False,
+):
+    """Find the tasks a commit belongs to, so lingering ones can be closed."""
+    if repo:
+        # --repo scopes both halves: the commit is resolved in that store's
+        # repository and matched against that store's tasks.
+        try:
+            from taskagent.store_registry import manager_for_repo_query
+
+            manager, _resolved = manager_for_repo_query(repo)
+        except Exception as e:
+            console.print(f"[red]Could not resolve repo '{repo}': {e}[/red]")
+            return
+
+    commit, matches = manager.search_by_commit(
+        ref, repo=repo, include_completed=include_completed, threshold=threshold
+    )
+
+    if not commit:
+        if json_output:
+            print(json.dumps({"ref": ref, "resolved": False, "matches": []}, indent=2))
+        else:
+            console.print(
+                f"[red]Could not resolve '{ref}' to a commit "
+                "in the code or task-store repository.[/red]"
+            )
+        return
+
+    if json_output:
+        print(
+            json.dumps(
+                {
+                    "ref": ref,
+                    "resolved": True,
+                    "commit": {
+                        k: commit[k]
+                        for k in ("full", "short", "subject", "author", "date", "repo")
+                    },
+                    "matches": [
+                        {
+                            "slug": m["issue"].slug,
+                            "name": m["issue"].name,
+                            "status": m["issue"].status,
+                            "reasons": m["reasons"],
+                            "score": m["score"],
+                            "path": str(m["path"]),
+                        }
+                        for m in matches
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return
+
+    console.print(
+        Panel(
+            f"[bold cyan]{commit['short']}[/bold cyan]  {commit['subject']}\n"
+            f"[dim]{commit['author']} · {commit['date'][:10]} · {commit['repo']}[/dim]",
+            title="[bold blue]Commit[/bold blue]",
+            box=theme.panel_box,
+        )
+    )
+
+    if not matches:
+        console.print("[yellow]No tasks matched this commit.[/yellow]")
+        return
+
+    table = Table(
+        box=theme.table_box,
+        show_header=True,
+        header_style=theme.header_style,
+        padding=theme.table_padding,
+    )
+    table.add_column("Score", justify="right", style="dim", width=6)
+    table.add_column("Status", width=10)
+    table.add_column("Signals", width=24)
+    table.add_column("Slug", style="cyan")
+
+    for m in matches:
+        issue = m["issue"]
+        status_style = (
+            "bold green"
+            if issue.status == "active"
+            else ("bold yellow" if issue.status == "pending" else "dim")
+        )
+        signals = " ".join(
+            f"[{REASON_LABELS[r][1]}]{REASON_LABELS[r][0]}[/{REASON_LABELS[r][1]}]"
+            for r in m["reasons"]
+            if r in REASON_LABELS
+        )
+        table.add_row(
+            f"{m['score']:.2f}",
+            f"[{status_style}]{issue.status.upper()}[/{status_style}]",
+            signals,
+            issue.slug,
+        )
+
+    console.print(table)
+
+    lingering = [
+        m for m in matches if m["issue"].status not in ("completed", "unknown")
+    ]
+    if lingering:
+        console.print("\n[bold]Still open — the work may already be committed:[/bold]")
+        for m in lingering:
+            console.print(f"  [dim]ta done[/dim] [cyan]{m['issue'].slug}[/cyan]")
+
+
 def cmd_search(console: Console, manager: TaskAgent, pattern: str):
     """Search for issues by slug pattern (case-insensitive fuzzy match)."""
     pat_norm = normalize(pattern)
@@ -5881,7 +6004,7 @@ def display_overview(console: Console, manager: TaskAgent):
         ("next", "Show the highest priority task (try -t/--text)"),
         ("prior", "Interactively prioritize and promote tasks"),
         ("list", "List all tasks in the queue (try --json or --text)"),
-        ("search", "Search for tasks by slug pattern"),
+        ("search", "Search tasks by slug pattern, or -c/--commit <ref>"),
         ("new", "Create a new task"),
         ("start", "Start a task (creates branch & worktree)"),
         ("done", "Complete a task (moves file & commits)"),
@@ -5951,10 +6074,39 @@ def main():
         "search", nargs="?", help="Optional search query to filter by slug"
     )
     search_parser = subparsers.add_parser(
-        "search", help="Search for tasks by slug pattern"
+        "search", help="Search for tasks by slug pattern or by commit"
     )
     search_parser.add_argument(
-        "pattern", help="Pattern to match against slug (wildcard end)"
+        "pattern",
+        nargs="?",
+        help="Pattern to match against slug (wildcard end)",
+    )
+    search_parser.add_argument(
+        "-c",
+        "--commit",
+        metavar="REF",
+        help="Find the tasks a commit belongs to (hash, tag, branch, HEAD~2)",
+    )
+    search_parser.add_argument(
+        "--repo",
+        help="Store moniker or repository path to resolve the commit against",
+    )
+    search_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.65,
+        help="Commit message match sensitivity, 0.0-1.0 (default: 0.65)",
+    )
+    search_parser.add_argument(
+        "--open-only",
+        action="store_true",
+        help="With --commit, skip completed tasks (show only lingering ones)",
+    )
+    search_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="With --commit, emit machine-readable JSON",
     )
     prior_parser = subparsers.add_parser(
         "prior", help="Interactively prioritize and promote tasks"
@@ -7101,7 +7253,22 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
     elif args.command == "prior":
         cmd_triage(console, manager, search_query=args.search)
     elif args.command == "search":
-        cmd_search(console, manager, args.pattern)
+        if args.commit:
+            cmd_search_commit(
+                console,
+                manager,
+                args.commit,
+                repo=args.repo,
+                threshold=args.threshold,
+                include_completed=not args.open_only,
+                json_output=args.json_output,
+            )
+        elif args.pattern:
+            cmd_search(console, manager, args.pattern)
+        else:
+            console.print(
+                "[yellow]Provide a slug pattern or -c/--commit <ref>.[/yellow]"
+            )
     elif args.command == "restore":
         cmd_restore(console, manager, args.slug, to_status=args.status)
     elif args.command == "report":

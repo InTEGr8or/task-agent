@@ -3190,3 +3190,336 @@ class TaskAgent:
             return e.stderr or f"git log failed with returncode {e.returncode}"
         except Exception as e:
             return f"Error executing git log: {e}"
+
+    # ------------------------------------------------------------------
+    # Commit ↔ task correlation
+    # ------------------------------------------------------------------
+
+    _COMMIT_STOPWORDS = {
+        "a",
+        "an",
+        "the",
+        "to",
+        "of",
+        "for",
+        "and",
+        "or",
+        "in",
+        "on",
+        "with",
+        "is",
+        "are",
+        "be",
+        "by",
+        "at",
+        "from",
+        "into",
+        "as",
+        "that",
+        "this",
+        "it",
+        "its",
+        "when",
+        "so",
+    }
+
+    @staticmethod
+    def _tokenize(text: str) -> set:
+        """Lowercase word tokens with filler words removed."""
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        return {w for w in words if w not in TaskAgent._COMMIT_STOPWORDS and len(w) > 1}
+
+    def _git_repos_for_lookup(self, repo: Optional[str] = None) -> List[Path]:
+        """Candidate git roots to resolve a commit against (code repo first)."""
+        roots: List[Path] = []
+        if repo:
+            try:
+                from taskagent.store_registry import resolve_repo_query
+
+                resolved = resolve_repo_query(repo)
+                if resolved and resolved.store_path:
+                    git_root = self._get_git_root(resolved.store_path)
+                    if git_root:
+                        roots.append(git_root)
+            except Exception:
+                pass
+            candidate = Path(repo).expanduser()
+            if candidate.exists():
+                git_root = self._get_git_root(candidate)
+                if git_root:
+                    roots.append(git_root)
+
+        # An explicit repo scopes the lookup; mixing in the ambient code repo
+        # would resolve a hash against one repo and match tasks from another.
+        if not roots:
+            for root in (self.code_root, self.mission_root):
+                if root and (root / ".git").exists():
+                    roots.append(root)
+
+        seen: set = set()
+        unique: List[Path] = []
+        for root in roots:
+            key = str(root.resolve())
+            if key not in seen:
+                seen.add(key)
+                unique.append(root)
+        return unique
+
+    def resolve_commit(
+        self, ref: str, repo: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve a commit-ish (hash, tag, branch, HEAD~2) to its metadata.
+
+        Returns a dict with ``full``, ``short``, ``subject``, ``body``, ``author``,
+        ``date``, ``files`` and ``repo``, or ``None`` when the ref is unknown in
+        every candidate repository.
+        """
+        if not ref or not ref.strip():
+            return None
+        ref = ref.strip()
+
+        for root in self._git_repos_for_lookup(repo):
+            try:
+                res = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "show",
+                        "-s",
+                        "--format=%H%n%h%n%an%n%aI%n%s%n%b",
+                        f"{ref}^{{commit}}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except Exception:
+                continue
+            if res.returncode != 0 or not res.stdout.strip():
+                continue
+
+            lines = res.stdout.splitlines()
+            if len(lines) < 5:
+                continue
+            full, short, author, date, subject = lines[:5]
+            body = "\n".join(lines[5:]).strip()
+
+            files: List[str] = []
+            try:
+                files_res = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "show",
+                        "--name-only",
+                        "--format=",
+                        full,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if files_res.returncode == 0:
+                    files = [p for p in files_res.stdout.splitlines() if p.strip()]
+            except Exception:
+                pass
+
+            return {
+                "full": full,
+                "short": short,
+                "author": author,
+                "date": date,
+                "subject": subject,
+                "body": body,
+                "files": files,
+                "repo": str(root),
+            }
+        return None
+
+    @staticmethod
+    def _hashes_equal(a: str, b: str) -> bool:
+        """Compare two hashes by common prefix (handles short vs full forms)."""
+        a, b = a.strip().lower(), b.strip().lower()
+        if not a or not b:
+            return False
+        n = min(len(a), len(b))
+        return n >= 4 and a[:n] == b[:n]
+
+    @staticmethod
+    def extract_completion_commit(file_path: Path) -> Optional[str]:
+        """Read the ``**Completed in commit:** `hash`` marker from a task file."""
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return None
+        m = re.search(
+            r"\*\*Completed in commit:\*\*\s*`?([0-9a-fA-F]{4,40})`?", content
+        )
+        return m.group(1) if m else None
+
+    #: ``<state>/[YYYY/[MM/]]<slug>[/…|.md]`` anywhere in a repo-relative path.
+    _TASK_PATH_RE = re.compile(
+        r"(?:^|/)(pending|draft|active|mr|deleted|completed)/"
+        r"(?:\d{4}/(?:\d{2}/)?)?"
+        r"([^/]+?)(?:/|\.md$)"
+    )
+
+    def _slugs_from_paths(self, files: Sequence[str]) -> Dict[str, str]:
+        """Map task slugs → state for any task-store paths the commit touched.
+
+        Commit paths are relative to whichever repo root resolved them, and the
+        store may be nested (``docs/tasks/pending/…``) or *be* the repo root
+        (``pending/…``), so the store prefix is optional. Callers only act on
+        slugs that exist in the store, which keeps the loose match safe.
+        """
+        found: Dict[str, str] = {}
+        for path in files:
+            m = self._TASK_PATH_RE.search(path.replace("\\", "/"))
+            if not m:
+                continue
+            state, slug = m.group(1), m.group(2)
+            if slug.endswith(".md"):
+                slug = slug[:-3]
+            if slug and not slug.startswith("."):
+                found.setdefault(slug, state)
+        return found
+
+    def match_commit_to_tasks(
+        self,
+        commit: Dict[str, Any],
+        include_completed: bool = True,
+        threshold: float = 0.65,
+    ) -> List[Dict[str, Any]]:
+        """Correlate a resolved commit with tasks in the store.
+
+        Three independent signals, strongest first:
+
+        * ``recorded``  — a completed task records this commit hash.
+        * ``touched``   — the commit changed files under that task's directory.
+        * ``message``   — the commit subject/body names the task (slug or title).
+
+        The ``message`` signal is the one that surfaces *lingering* tasks: work
+        that was committed but never moved out of pending/draft/active.
+        """
+        message = f"{commit.get('subject', '')} {commit.get('body', '')}"
+        msg_tokens = self._tokenize(message)
+        msg_norm = re.sub(r"[^a-z0-9]", "", message.lower())
+
+        candidates: List[Tuple[Issue, Path]] = []
+        for issue in self.load_mission():
+            issue_file = self._find_issue_file_by_slug(issue.slug)
+            if issue_file:
+                candidates.append((issue, issue_file))
+
+        known = {i.slug for i, _ in candidates}
+        if include_completed:
+            for path, slug in self.walk_completed():
+                if slug in known:
+                    continue
+                known.add(slug)
+                candidates.append(
+                    (
+                        Issue(
+                            name=self.extract_title(path),
+                            slug=slug,
+                            status="completed",
+                            priority=0,
+                        ),
+                        path,
+                    )
+                )
+
+        # Inverse document frequency over the task corpus: words shared by many
+        # tasks ("add", "command", "ta") must not carry a match on their own.
+        doc_freq: Dict[str, int] = {}
+        token_cache: Dict[str, set] = {}
+        for issue, _ in candidates:
+            tokens = self._tokenize(
+                f"{issue.slug.replace('-', ' ')} {issue.name or ''}"
+            )
+            token_cache[issue.slug] = tokens
+            for token in tokens:
+                doc_freq[token] = doc_freq.get(token, 0) + 1
+
+        def weight(token: str) -> float:
+            return 1.0 / doc_freq.get(token, 1)
+
+        touched = self._slugs_from_paths(commit.get("files", []))
+        results: List[Dict[str, Any]] = []
+
+        for issue, path in candidates:
+            reasons: List[str] = []
+            score = 0.0
+
+            recorded = self.extract_completion_commit(path)
+            if recorded and (
+                self._hashes_equal(recorded, commit["full"])
+                or self._hashes_equal(recorded, commit["short"])
+            ):
+                reasons.append("recorded")
+                score = max(score, 1.0)
+
+            if issue.slug in touched:
+                reasons.append("touched")
+                score = max(score, 0.9)
+
+            slug_norm = re.sub(r"[^a-z0-9]", "", issue.slug.lower())
+            if slug_norm and slug_norm in msg_norm:
+                reasons.append("message")
+                score = max(score, 0.95)
+            else:
+                tokens = token_cache.get(issue.slug) or self._tokenize(
+                    f"{issue.slug.replace('-', ' ')} {issue.name or ''}"
+                )
+                total = sum(weight(t) for t in tokens)
+                if total:
+                    hit = sum(weight(t) for t in tokens & msg_tokens) / total
+                    if hit >= threshold:
+                        reasons.append("message")
+                        score = max(score, hit)
+
+            if reasons:
+                results.append(
+                    {
+                        "issue": issue,
+                        "path": path,
+                        "reasons": reasons,
+                        "score": round(score, 3),
+                    }
+                )
+
+        # Rank by strongest signal first, then score. Exact signals (recorded,
+        # touched) always outrank a message match, however confident it is.
+        results.sort(
+            key=lambda r: (
+                -self._signal_rank(r["reasons"]),
+                -r["score"],
+                r["issue"].slug,
+            )
+        )
+        return results
+
+    @staticmethod
+    def _signal_rank(reasons: Sequence[str]) -> int:
+        order = {"recorded": 3, "touched": 2, "message": 1}
+        return max((order.get(r, 0) for r in reasons), default=0)
+
+    def search_by_commit(
+        self,
+        ref: str,
+        repo: Optional[str] = None,
+        include_completed: bool = True,
+        threshold: float = 0.65,
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Resolve ``ref`` and return ``(commit, matches)``.
+
+        ``commit`` is ``None`` when the ref cannot be resolved in any repo.
+        """
+        commit = self.resolve_commit(ref, repo=repo)
+        if not commit:
+            return None, []
+        return commit, self.match_commit_to_tasks(
+            commit, include_completed=include_completed, threshold=threshold
+        )

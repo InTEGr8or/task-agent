@@ -791,16 +791,14 @@ wheels = [
 [[package]]
 name = "multi-agent-registry"
 version = "0.5.0"
-source = { directory = "/home/mstouffer/repos/multi-agent-registry" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich" },
     { name = "verkit" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "rich", specifier = ">=13.9.4" },
-    { name = "verkit", specifier = ">=0.1.4" },
+sdist = { url = "https://files.pythonhosted.org/packages/74/cb/7647c81617054301169d6dc28d3dd87c2a0e90795bdcd989d227db465f88/multi_agent_registry-0.5.0.tar.gz", hash = "sha256:b755985eee444815a2b2f7012da55693b5ac0ddb2a160f7bb75bc076e9d99b84", size = 16735, upload-time = "2026-09-08T19:24:13.724Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/93/002c5d1cab097fb5bc1215f2289605cf1c88439b5cb16e12cdf9e0ac851e/multi_agent_registry-0.5.0-py3-none-any.whl", hash = "sha256:0ba41c1ca64e0279308f1ebd9a91f9cf6df5c2c7405dc4e7abde18e1aa75b181", size = 16421, upload-time = "2026-09-08T19:24:12.54Z" },
 ]
 
 [[package]]
@@ -1477,7 +1475,7 @@ requires-dist = [
     { name = "githubkit", specifier = ">=0.15.5" },
     { name = "google-genai", specifier = ">=0.1.0" },
     { name = "mcp", specifier = ">=1.26.0,<2.0.0" },
-    { name = "multi-agent-registry", directory = "/home/mstouffer/repos/multi-agent-registry" },
+    { name = "multi-agent-registry", specifier = ">=0.1.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
@@ -1485,7 +1483,7 @@ requires-dist = [
     { name = "questionary", specifier = ">=2.1.1" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "transitions", specifier = ">=0.9.2" },
-    { name = "verkit", directory = "/home/mstouffer/repos/verkit" },
+    { name = "verkit", specifier = ">=0.1.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -1573,13 +1571,14 @@ wheels = [
 [[package]]
 name = "verkit"
 version = "0.1.5"
-source = { directory = "/home/mstouffer/repos/verkit" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "rich", specifier = ">=10.0.0" }]
+sdist = { url = "https://files.pythonhosted.org/packages/37/c4/f179bda37f2c6608d8b456233f849526821efbf4dd0c3d7ff46f458a19e7/verkit-0.1.5.tar.gz", hash = "sha256:70d7b0fa6f18c1fa4e0c0b2f2ca318ff0282a2d006c34d83bd8569034c79ef20", size = 9463, upload-time = "2026-08-25T18:59:25.03Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/99/2ad1b39a694762d1f4bdb22691ac12ba5f5793fe3f84beff336c351c7b92/verkit-0.1.5-py3-none-any.whl", hash = "sha256:3176908e71301d63e544fd6411d2dacba8d11f301b45b187af47513c141bf1be", size = 9792, upload-time = "2026-08-25T18:59:23.792Z" },
+]
 
 [[package]]
 name = "virtualenv"

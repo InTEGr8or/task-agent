@@ -1572,3 +1572,294 @@ def test_format_git_log_rich():
         "[bold blue] 1 file changed, 1 insertion(+), 1 deletion(-)[/bold blue]"
         in formatted
     )
+
+
+# ---------------------------------------------------------------------------
+# Search by commit
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def commit_repo(tmp_path, monkeypatch):
+    """A real git repo whose task store lives at docs/tasks/."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    issues_root = repo / "docs" / "tasks"
+    for subdir in ["pending", "draft", "active", "completed"]:
+        (issues_root / subdir).mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git("init", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    git("config", "commit.gpgsign", "false")
+
+    monkeypatch.chdir(repo)
+    manager = TaskAgent(config_dir=str(issues_root))
+    return manager, repo, git
+
+
+def _commit(git, repo, message, path, content="x"):
+    target = repo / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    git("add", "-A")
+    git("commit", "--no-verify", "-m", message)
+    return git("rev-parse", "--short", "HEAD")
+
+
+def test_search_by_commit_unresolved_ref(commit_repo):
+    manager, repo, git = commit_repo
+    _commit(git, repo, "initial", "README.md")
+
+    commit, matches = manager.search_by_commit("deadbeef")
+    assert commit is None
+    assert matches == []
+
+
+def test_search_by_commit_message_signal(commit_repo):
+    """The lingering case: work committed, task never moved out of pending."""
+    manager, repo, git = commit_repo
+    console = Console()
+    cmd_new(console, manager, "Add Yazi Browser Command", "body", draft=False)
+
+    short = _commit(git, repo, "feat: add yazi browser command", "src/yazi.py")
+
+    commit, matches = manager.search_by_commit(short)
+    assert commit is not None
+    assert commit["short"].startswith(short)
+
+    slugs = {m["issue"].slug: m for m in matches}
+    assert "add-yazi-browser-command" in slugs
+    match = slugs["add-yazi-browser-command"]
+    assert "message" in match["reasons"]
+    assert match["issue"].status == "pending"
+
+
+def test_search_by_commit_ignores_unrelated_commit(commit_repo):
+    manager, repo, git = commit_repo
+    console = Console()
+    cmd_new(console, manager, "Add Yazi Browser Command", "body", draft=False)
+    # Land the task file first, so the commit under test only touches code.
+    _commit(git, repo, "chore: track tasks", "README.md")
+
+    short = _commit(git, repo, "chore: bump lockfile", "uv.lock")
+
+    _commit_obj, matches = manager.search_by_commit(short)
+    assert [m["issue"].slug for m in matches] == []
+
+
+def test_search_by_commit_touched_signal(commit_repo):
+    """A commit that edits the task's own directory correlates by path."""
+    manager, repo, git = commit_repo
+    console = Console()
+    cmd_new(console, manager, "Wire Up Inbox", "body", draft=False)
+
+    short = _commit(
+        git,
+        repo,
+        "chore: unrelated subject",
+        "docs/tasks/pending/wire-up-inbox/notes.md",
+    )
+
+    _commit_obj, matches = manager.search_by_commit(short)
+    slugs = {m["issue"].slug: m for m in matches}
+    assert "touched" in slugs["wire-up-inbox"]["reasons"]
+
+
+def test_search_by_commit_recorded_signal(commit_repo):
+    """A completed task that records the hash matches exactly, short or full."""
+    manager, repo, git = commit_repo
+    completed = manager.issues_root / "completed" / "2026" / "09" / "ship-it"
+    completed.mkdir(parents=True)
+
+    short = _commit(git, repo, "totally unrelated subject", "src/ship.py")
+    full = git("rev-parse", "HEAD")
+
+    (completed / "README.md").write_text(
+        f"# Ship It\n\n---\n**Completed in commit:** `{short}`\n"
+    )
+
+    for ref in (short, full):
+        _commit_obj, matches = manager.search_by_commit(ref)
+        slugs = {m["issue"].slug: m for m in matches}
+        assert "recorded" in slugs["ship-it"]["reasons"]
+        assert slugs["ship-it"]["score"] == 1.0
+
+
+def test_search_by_commit_open_only_filters_completed(commit_repo):
+    manager, repo, git = commit_repo
+    completed = manager.issues_root / "completed" / "2026" / "09" / "ship-it"
+    completed.mkdir(parents=True)
+    (completed / "README.md").write_text("# Ship It\n")
+
+    short = _commit(git, repo, "feat: ship it", "src/ship.py")
+
+    _c, with_completed = manager.search_by_commit(short, include_completed=True)
+    assert "ship-it" in {m["issue"].slug for m in with_completed}
+
+    _c, open_only = manager.search_by_commit(short, include_completed=False)
+    assert "ship-it" not in {m["issue"].slug for m in open_only}
+
+
+def test_extract_completion_commit(tmp_path):
+    f = tmp_path / "README.md"
+    f.write_text("# T\n\n---\n**Completed in commit:** `abc1234`\n")
+    assert TaskAgent.extract_completion_commit(f) == "abc1234"
+
+    f.write_text("# T\nno marker here\n")
+    assert TaskAgent.extract_completion_commit(f) is None
+
+
+def test_hashes_equal_prefix_matching():
+    full = "9d18acdad9d3272c49b704053728cf95edb17edf"
+    assert TaskAgent._hashes_equal("9d18acda", full)
+    assert TaskAgent._hashes_equal(full, "9d18acda")
+    assert TaskAgent._hashes_equal(full, full)
+    assert not TaskAgent._hashes_equal("9d18acdb", full)
+    assert not TaskAgent._hashes_equal("", full)
+    # Too short to be meaningful
+    assert not TaskAgent._hashes_equal("9d1", full)
+
+
+def test_slugs_from_paths_handles_both_store_layouts(manager):
+    found = manager._slugs_from_paths(
+        [
+            "docs/tasks/pending/nested-store/README.md",
+            "active/root-store/README.md",
+            "completed/2026/09/sharded/README.md",
+            "completed/2025/legacy-flat.md",
+            "src/taskagent/cli.py",
+            "docs/tasks/.task-agent/mission.usv",
+        ]
+    )
+    assert found["nested-store"] == "pending"
+    assert found["root-store"] == "active"
+    assert found["sharded"] == "completed"
+    assert found["legacy-flat"] == "completed"
+    assert "cli.py" not in found
+
+
+def test_search_by_commit_idf_favors_distinctive_tokens(commit_repo):
+    """Words shared across the corpus must not carry a match on their own."""
+    manager, repo, git = commit_repo
+    console = Console()
+    # A corpus where "add", "ta" and "command" are common and only the middle
+    # word distinguishes the tasks.
+    for title in [
+        "Add Ta Yazi Command",
+        "Add Ta Path Command",
+        "Add Ta Prompt Command",
+        "Add Ta Report Command",
+    ]:
+        cmd_new(console, manager, title, "body", draft=False)
+    _commit(git, repo, "chore: track tasks", "README.md")
+
+    short = _commit(git, repo, "feat: add ta yazi command", "src/yazi.py")
+    _c, matches = manager.search_by_commit(short)
+
+    assert matches, "the distinctive-token task should still match"
+    assert matches[0]["issue"].slug == "add-ta-yazi-command"
+
+    scores = {m["issue"].slug: m["score"] for m in matches}
+    for generic in ("add-ta-path-command", "add-ta-prompt-command"):
+        assert scores.get(generic, 0) < scores["add-ta-yazi-command"], (
+            f"{generic} must not outrank the task the commit actually names"
+        )
+
+
+def test_search_by_commit_score_is_comparable_to_threshold(commit_repo):
+    """The printed score for a message match is what --threshold gates on."""
+    manager, repo, git = commit_repo
+    console = Console()
+    for title in ["Add Ta Yazi Command", "Add Ta Path Command"]:
+        cmd_new(console, manager, title, "body", draft=False)
+    _commit(git, repo, "chore: track tasks", "README.md")
+
+    short = _commit(git, repo, "feat: add ta path command", "src/path.py")
+
+    _c, matches = manager.search_by_commit(short, threshold=0.99)
+    strict = {m["issue"].slug for m in matches}
+
+    _c, matches = manager.search_by_commit(short, threshold=0.1)
+    loose = {m["issue"].slug: m["score"] for m in matches}
+
+    assert strict <= set(loose)
+    # Every score reported under the loose run is >= the loose threshold, and
+    # anything dropped by the strict run scored below the strict threshold.
+    for slug, score in loose.items():
+        assert score >= 0.1
+        if slug not in strict:
+            assert score < 0.99
+
+
+def test_search_by_commit_exact_signals_outrank_message(commit_repo):
+    manager, repo, git = commit_repo
+    console = Console()
+    cmd_new(console, manager, "Refactor Registry", "body", draft=False)
+    cmd_new(console, manager, "Unrelated Helper", "body", draft=False)
+    _commit(git, repo, "chore: track tasks", "README.md")
+
+    # Subject names 'refactor registry'; the commit body touches the *other*
+    # task's directory, which is the stronger, exact signal.
+    short = _commit(
+        git,
+        repo,
+        "feat: refactor registry",
+        "docs/tasks/pending/unrelated-helper/notes.md",
+    )
+    _c, matches = manager.search_by_commit(short)
+
+    assert matches[0]["issue"].slug == "unrelated-helper"
+    assert "touched" in matches[0]["reasons"]
+
+
+def test_search_by_commit_repo_scopes_the_lookup(commit_repo, tmp_path):
+    """An explicit --repo must not silently fall back to the ambient repo."""
+    import subprocess
+
+    manager, repo, git = commit_repo
+    console = Console()
+    cmd_new(console, manager, "Add Yazi Browser Command", "body", draft=False)
+    _commit(git, repo, "chore: track tasks", "README.md")
+    short = _commit(git, repo, "feat: add yazi browser command", "src/yazi.py")
+
+    # A second, unrelated repository that knows nothing about this commit.
+    other = tmp_path / "other"
+    other.mkdir()
+    for args in (
+        ["init", "-b", "main"],
+        ["config", "user.email", "test@example.com"],
+        ["config", "user.name", "Test"],
+        ["config", "commit.gpgsign", "false"],
+    ):
+        subprocess.run(
+            ["git", "-C", str(other), *args], check=True, capture_output=True
+        )
+    (other / "f.txt").write_text("x")
+    subprocess.run(
+        ["git", "-C", str(other), "add", "-A"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(other), "commit", "--no-verify", "-m", "unrelated"],
+        check=True,
+        capture_output=True,
+    )
+
+    # Unscoped: found in the ambient code repo.
+    commit, _m = manager.search_by_commit(short)
+    assert commit is not None
+
+    # Scoped to a repo that lacks the commit: must report unresolved, not
+    # quietly resolve it against the current directory.
+    commit, matches = manager.search_by_commit(short, repo=str(other))
+    assert commit is None
+    assert matches == []

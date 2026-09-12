@@ -617,6 +617,7 @@ EXPECTED_TOOLS = {
     "mark_task_active",
     "complete_task",
     "search_task",
+    "search_task_by_commit",
     "restore_task",
     "get_task_details",
     "list_task_documents",

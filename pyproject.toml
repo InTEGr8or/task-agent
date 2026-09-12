@@ -92,8 +92,4 @@ replace = "version = \"{new_version}\""
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.uv.sources]
-verkit = { path = "/home/mstouffer/repos/verkit" }
-multi-agent-registry = { path = "/home/mstouffer/repos/multi-agent-registry" }
-
 

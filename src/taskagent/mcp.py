@@ -864,6 +864,95 @@ def search_task(name: str, repo: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+def search_task_by_commit(
+    ref: str,
+    repo: Optional[str] = None,
+    open_only: bool = False,
+    threshold: float = 0.65,
+) -> str:
+    """Find which task(s) a git commit belongs to, to close work that was never marked done.
+
+    Correlates the commit against the store using three signals:
+    ``recorded`` (a completed task records this hash), ``touched`` (the commit
+    changed files under the task's directory), and ``message`` (the commit
+    subject/body names the task). Tasks that match but are still pending, draft,
+    or active are the lingering ones — verify, then call ``complete_task``.
+
+    Args:
+        ref: A commit-ish to resolve — hash (short or full), tag, branch, or HEAD~2.
+        repo: Optional store moniker or repository path to resolve the commit against.
+        open_only: Skip completed tasks and report only still-open matches.
+        threshold: Commit message match sensitivity, 0.0-1.0 (default 0.65).
+    """
+    manager = get_manager_for_repo(repo)
+    try:
+        commit, matches = manager.search_by_commit(
+            ref,
+            repo=repo,
+            include_completed=not open_only,
+            threshold=threshold,
+        )
+    except Exception as e:
+        return f"Error searching by commit: {e}"
+
+    if not commit:
+        return (
+            f"Could not resolve '{ref}' to a commit in the code "
+            "or task-store repository."
+        )
+
+    lines = [
+        f"### Commit `{commit['short']}`",
+        "",
+        f"- **Subject**: {commit['subject']}",
+        f"- **Author**: {commit['author']}",
+        f"- **Date**: {commit['date']}",
+        f"- **Repo**: `{commit['repo']}`",
+        "",
+    ]
+
+    if not matches:
+        lines.append("No tasks matched this commit.")
+        return "\n".join(lines) + "\n"
+
+    lines.extend(
+        [
+            "| Score | Status | Signals | Slug |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for m in matches:
+        issue = m["issue"]
+        lines.append(
+            f"| {m['score']:.2f} | {issue.status} | "
+            f"{', '.join(m['reasons'])} | `{issue.slug}` |"
+        )
+
+    lingering = [
+        m for m in matches if m["issue"].status not in ("completed", "unknown")
+    ]
+    if lingering:
+        lines.extend(
+            [
+                "",
+                "#### Still open — the work may already be committed",
+                "",
+            ]
+        )
+        for m in lingering:
+            lines.append(f"- `{m['issue'].slug}` ({m['issue'].status})")
+        lines.extend(
+            [
+                "",
+                "Verify the commit actually satisfies the task before calling "
+                "`complete_task`.",
+            ]
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+@mcp.tool()
 def rename_task(name: str, new_title: str) -> str:
     """Rename a task slug and update its title, directory, and references across the project.
 
