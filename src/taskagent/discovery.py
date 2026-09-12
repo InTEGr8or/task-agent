@@ -220,6 +220,14 @@ def _handle_ejected_symlink(current_root: Path):
         )
 
     # Determine target_path
+    import sys as _sys
+
+    print(
+        f"DEBUG eject_enabled={eject_enabled!r} target_path_str={target_path_str!r} "
+        f"raw_TA_EJECT_TASKS={os.environ.get('TA_EJECT_TASKS')!r} "
+        f"raw_TA_EJECT_ISSUES={os.environ.get('TA_EJECT_ISSUES')!r}",
+        file=_sys.stderr,
+    )
     if not eject_enabled or not target_path_str:
         target_path = new_target
     else:
