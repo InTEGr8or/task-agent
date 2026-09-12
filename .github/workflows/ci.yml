@@ -10,12 +10,6 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  # The committed .env carries this developer's local ejected-store path
-  # (see .env, and _handle_ejected_symlink in discovery.py). load_dotenv()
-  # never overrides an already-set env var, so pinning this here keeps CI
-  # on the safe in-repo default instead of trying to mkdir a path that only
-  # exists on that one machine.
-  TA_EJECT_TASKS: "false"
 
 jobs:
   lint:
@@ -25,6 +19,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # The committed .env carries this developer's local ejected-store
+      # path (see .env, and _handle_ejected_symlink in discovery.py). A
+      # legacy migration branch there reloads .env with override=True,
+      # so an env var can't reliably countermand it — remove the file
+      # itself so discover() falls back to its safe in-repo default.
+      - name: Remove developer-local .env
+        run: rm -f .env
 
       # Several tests create real git repos (auto-commit, store migration)
       # and need a committer identity; the runner has none by default.
