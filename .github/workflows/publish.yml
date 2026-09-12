@@ -48,6 +48,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Debug eject env
+        run: |
+          echo "shell TA_EJECT_TASKS=$TA_EJECT_TASKS"
+          uv run python -c "import os; print('python TA_EJECT_TASKS=', repr(os.environ.get('TA_EJECT_TASKS')))"
+          cat .env
+
       - name: Run test suite
         run: uv run pytest
 
