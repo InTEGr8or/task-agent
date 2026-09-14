@@ -1669,6 +1669,7 @@ def cmd_done(
     solution: Optional[str] = None,
     no_verify: bool = True,
     metrics: Optional[SubtaskMetric] = None,
+    cached_only: bool = False,
 ):
     """Mark an issue as done."""
     if not slug:
@@ -1699,6 +1700,7 @@ def cmd_done(
             solution_explanation=solution,
             no_verify=no_verify,
             metrics=metrics,
+            cached_only=cached_only,
         )
         console.print(
             f"[bold green]Issue '{issue.slug}' marked as done and "
@@ -7051,6 +7053,15 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         help="Skip running git pre-commit hooks (default)",
     )
     done_parser.add_argument(
+        "--cached-only",
+        action="store_true",
+        help=(
+            "Commit only what's already staged (git add) instead of `git add .` — "
+            "for concurrent agents in the same working tree/branch on unrelated "
+            "files, so one agent's `done` doesn't sweep up the other's changes"
+        ),
+    )
+    done_parser.add_argument(
         "--hooks",
         dest="no_verify",
         action="store_false",
@@ -7456,6 +7467,7 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
             args.solution,
             args.no_verify,
             metrics=done_metrics,
+            cached_only=getattr(args, "cached_only", False),
         )
     elif args.command == "delete":
         cmd_soft_delete(console, manager, args.slug)

@@ -142,7 +142,23 @@ def test_mcp_complete_task(mock_manager):
         commit_message="Done",
         solution_explanation="Implemented feature X",
         metrics=None,
+        cached_only=False,
     )
+
+
+def test_mcp_complete_task_cached_only(mock_manager):
+    """Concurrent-agent case: stage your own files first, then complete
+    with cached_only so the commit can't sweep up another agent's unstaged,
+    in-progress work in the same repo/branch/worktree."""
+    mock_manager.slugify.return_value = "task-1"
+    mock_manager.complete_issue.return_value = (
+        Issue(name="Task 1", slug="task-1", status="completed"),
+        "abc1234",
+    )
+
+    mcp.complete_task("Task 1", solution="Backend work", cached_only=True)
+
+    assert mock_manager.complete_issue.call_args.kwargs["cached_only"] is True
 
 
 def test_mcp_complete_task_with_metrics(mock_manager):

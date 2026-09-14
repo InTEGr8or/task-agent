@@ -1551,6 +1551,26 @@ def test_cli_log(manager, monkeypatch):
             assert "2" in extra_args
 
 
+def test_cli_done_cached_only_flag(manager, monkeypatch):
+    """ta done --cached-only must reach cmd_done as cached_only=True, and
+    plain `ta done` (the default) must not."""
+    from taskagent.cli import main
+    from unittest.mock import patch
+
+    monkeypatch.setattr("sys.argv", ["ta", "done", "some-task", "--cached-only"])
+    with patch("taskagent.cli.cmd_done") as mock_cmd_done:
+        with patch("taskagent.cli.TaskAgent", return_value=manager):
+            main()
+            mock_cmd_done.assert_called_once()
+            assert mock_cmd_done.call_args[1].get("cached_only") is True
+
+    monkeypatch.setattr("sys.argv", ["ta", "done", "some-task"])
+    with patch("taskagent.cli.cmd_done") as mock_cmd_done:
+        with patch("taskagent.cli.TaskAgent", return_value=manager):
+            main()
+            assert mock_cmd_done.call_args[1].get("cached_only") is False
+
+
 def test_format_git_log_rich():
     from taskagent.cli import format_git_log_rich
 

@@ -1305,8 +1305,19 @@ class TaskAgent:
         amend: bool = False,
         files: Optional[List[str]] = None,
         no_verify: bool = True,
+        cached_only: bool = False,
     ) -> str:
-        """Helper to perform a git commit with retry logic for hooks."""
+        """Helper to perform a git commit with retry logic for hooks.
+
+        ``cached_only`` skips every ``git add`` this method would otherwise
+        run (both ``files`` and the ``git add .`` fallback) and commits
+        exactly what's already staged. For two agents editing the same
+        working tree/branch concurrently on unrelated files, this is the
+        difference between "commit my changes" and "commit whatever's lying
+        around" — the latter silently sweeps up the other agent's in-progress
+        work. The caller is expected to have already run their own
+        ``git add`` for exactly what they want committed.
+        """
 
         def _get_git_add_path(f: str) -> str:
             resolved_f = Path(f).resolve()
@@ -1316,7 +1327,9 @@ class TaskAgent:
             except ValueError:
                 return f
 
-        if files:
+        if cached_only:
+            pass
+        elif files:
             for f in files:
                 git_add_path = _get_git_add_path(f)
                 # Force-add so gitignored task paths are included when needed
@@ -1353,7 +1366,7 @@ class TaskAgent:
             ):
                 return "no_changes"
 
-            if not amend:
+            if not amend and not cached_only:
                 # Retry once for pre-commit hooks
                 if files:
                     for f in files:
@@ -1418,12 +1431,19 @@ class TaskAgent:
         solution_explanation: Optional[str] = None,
         no_verify: bool = True,
         metrics: Optional[SubtaskMetric] = None,
+        cached_only: bool = False,
     ) -> Tuple[Issue, str]:
         """Mark an issue as done. Returns (issue, commit_hash).
 
         Optional ``metrics`` captures agent self-reported cost context
         (model, harness, tokens, duration) written into the task README and
         ``meta.json`` for later cost analysis via ``ta report``.
+
+        ``cached_only`` commits only what's already staged in the code repo
+        (no ``git add .``) — for two agents completing tasks in the same
+        working tree/branch at once on unrelated files, so one agent's
+        ``ta done`` never sweeps up the other's untracked or modified-but-
+        unstaged work. The caller must ``git add`` their own files first.
         """
         issues = self.load_mission()
         target_issue = next((i for i in issues if i.slug == slug), None)
@@ -1454,7 +1474,10 @@ class TaskAgent:
                 msg = commit_message or f"feat: complete {target_issue.slug}"
                 if self.code_root:
                     code_hash = self._git_commit(
-                        self.code_root, msg, no_verify=no_verify
+                        self.code_root,
+                        msg,
+                        no_verify=no_verify,
+                        cached_only=cached_only,
                     )
                     if code_hash == "failed":
                         raise RuntimeError(

@@ -720,6 +720,7 @@ def complete_task(
     started_at: Optional[str] = None,
     ended_at: Optional[str] = None,
     metrics_notes: Optional[str] = None,
+    cached_only: bool = False,
 ) -> str:
     """Mark a task as completed and commit the changes.
 
@@ -743,6 +744,11 @@ def complete_task(
         started_at: ISO-8601 start time (optional; derived from duration when omitted).
         ended_at: ISO-8601 end time (defaults to now when metrics are provided).
         metrics_notes: Free-form cost notes (retries, cache hits, tool-loop count, …).
+        cached_only: Commit only what's already staged (git add) instead of
+            `git add .`. Use this when another agent is working in the same
+            repo/branch/worktree on unrelated files at the same time — stage
+            exactly your own files first, then complete with this on, so you
+            never sweep up their in-progress, unstaged work into your commit.
     """
     from taskagent.models.metric import SubtaskMetric
 
@@ -768,6 +774,7 @@ def complete_task(
             commit_message=message,
             solution_explanation=solution,
             metrics=metrics,
+            cached_only=cached_only,
         )
         lines = [
             "### Task Completed Successfully",
