@@ -721,16 +721,40 @@ def complete_task(
     ended_at: Optional[str] = None,
     metrics_notes: Optional[str] = None,
     cached_only: bool = False,
+    repo: Optional[str] = None,
+    code_repo: Optional[str] = None,
+    paths: Optional[List[str]] = None,
+    sweep_host: bool = False,
 ) -> str:
     """Mark a task as completed and commit the changes.
 
     Self-report agent cost context when available so the station can optimize
     spend later (model, harness, tokens, duration). Partial reports are fine.
 
+    If this task belongs to a different git repo than the process working
+    directory, the code commit is made in that repo, not in pwd. Pass
+    ``paths`` for a partial commit. Relative paths are read in the task repo
+    when that repo is not pwd, so a small fix can land there without a new
+    session. Absolute paths, and relative paths that exist only in pwd,
+    partial-commit the checkout you are in. Paths must all be in one repo.
+    An unscoped completion of a task in pwd does not ``git add .`` that
+    checkout. ``sweep_host`` does, and can pick up unrelated pending work.
+
     Args:
         name: The title or partial name of the task to complete.
         solution: Clear explanation of what was implemented or fixed.
         message: Optional git commit message.
+        repo: Optional task-store moniker or host fragment. Omit to use the
+            store discovered from the server's working directory.
+        code_repo: Checkout to commit code into (path or registered moniker).
+            Use this when the edits are not in the task store's host repo.
+        paths: Partial commit. Only these files are staged, and they must
+            share one git repository. Relative paths resolve in the task repo
+            when you are completing a task in another checkout; absolute
+            paths partial-commit whichever repo they are in, including pwd.
+        sweep_host: Commit the whole bound host checkout (``git add .``).
+            Leaves every other checkout alone, but still picks up unrelated
+            pending work in that host.
         model: Primary model id used for most of the work (e.g. 'claude-opus-4', 'grok-4').
         model_version: Model version / snapshot when known.
         provider: Provider name (e.g. 'anthropic', 'openai', 'xai', 'google').
@@ -752,7 +776,10 @@ def complete_task(
     """
     from taskagent.models.metric import SubtaskMetric
 
-    manager = get_manager()
+    try:
+        manager = get_manager_for_repo(repo)
+    except Exception as e:
+        return f"Error resolving repo '{repo}': {e}"
     slug = _resolve_slug(manager, name)
     try:
         metrics = SubtaskMetric.from_completion_args(
@@ -775,6 +802,9 @@ def complete_task(
             solution_explanation=solution,
             metrics=metrics,
             cached_only=cached_only,
+            code_repo=code_repo,
+            code_paths=paths,
+            sweep_host=sweep_host,
         )
         lines = [
             "### Task Completed Successfully",
@@ -783,6 +813,7 @@ def complete_task(
             f"- **Title**: {issue.name}",
             "- **Status**: `completed`",
             f"- **Git Commit SHA**: `{commit_hash}`",
+            f"- **Code commit**: {getattr(manager, 'last_code_commit_note', '')}",
             "",
             "#### Solution Explanation",
             solution,

@@ -21,8 +21,13 @@ class TaskAgent:
             config_dir
         )
         self.ensure_issues_dir()
-        self.code_root = self._get_git_root(Path.cwd())
         self.mission_root = self._get_git_root(self.issues_root)
+        # Host checkout bound to this store. Never the process cwd when that
+        # cwd is a different repository (an MCP server started in one project
+        # must not treat that project as the code root for every store).
+        self.code_root = self._resolve_bound_code_root()
+        self.last_code_commit_note = ""
+        self._extra_git_root: Optional[Path] = None
 
     @contextmanager
     def _atomic_store_operation(self):
@@ -71,6 +76,15 @@ class TaskAgent:
                 ).strip()
             except Exception:
                 pass
+
+        extra_root = getattr(self, "_extra_git_root", None)
+        pre_extra_head = None
+        if (
+            extra_root
+            and extra_root != self.code_root
+            and (extra_root / ".git").exists()
+        ):
+            pre_extra_head = self._read_head(extra_root)
 
         try:
             backup_issues = backup_dir / "issues"
@@ -172,9 +186,13 @@ class TaskAgent:
                     except Exception:
                         pass
 
+                if extra_root and pre_extra_head:
+                    self._reset_mixed(extra_root, pre_extra_head)
+
                 raise
         finally:
             self._in_atomic_op = False
+            self._extra_git_root = None
             if backup_dir.exists():
                 shutil.rmtree(backup_dir, ignore_errors=True)
 
@@ -192,6 +210,358 @@ class TaskAgent:
             return Path(res.stdout.strip())
         except subprocess.CalledProcessError:
             return None
+
+    def _resolve_bound_code_root(self) -> Optional[Path]:
+        """Git toplevel of the code checkout this store is allowed to commit.
+
+        A centralized station is its own git repo (``mission_root``). The code
+        checkout is the registered ``host_paths`` entry, not whichever
+        directory happened to start the process. An in-repo ``docs/tasks``
+        store still resolves to the repo that contains it.
+        """
+        try:
+            store = self.issues_root.resolve()
+        except OSError:
+            store = self.issues_root
+
+        try:
+            from taskagent.store_registry import MachineRegistry
+
+            matched: List[Path] = []
+            for entry in MachineRegistry().load().values():
+                try:
+                    store_path = Path(entry.store_path).expanduser().resolve()
+                except OSError:
+                    continue
+                if store_path != store:
+                    continue
+                for host in entry.host_paths:
+                    top = self._get_git_root(Path(host).expanduser())
+                    if top:
+                        matched.append(top.resolve())
+            unique = list(dict.fromkeys(matched))
+            if len(unique) == 1:
+                return unique[0]
+            if len(unique) > 1:
+                cwd_root = self._get_git_root(Path.cwd())
+                if cwd_root and cwd_root.resolve() in unique:
+                    return cwd_root.resolve()
+                return None
+        except Exception:
+            pass
+
+        cwd_root = self._get_git_root(Path.cwd())
+        if cwd_root:
+            try:
+                store.resolve().relative_to(cwd_root.resolve())
+                return cwd_root.resolve()
+            except (ValueError, OSError):
+                pass
+
+        if self.mission_root:
+            try:
+                store.resolve().relative_to(self.mission_root.resolve())
+            except (ValueError, OSError):
+                return None
+            # The station checkout (store path is the git root, or its
+            # immediate child) is not a code repo.
+            mission = self.mission_root.resolve()
+            if store.resolve() == mission or store.resolve().parent == mission:
+                return None
+            return mission
+        return None
+
+    @staticmethod
+    def _read_head(root: Optional[Path]) -> Optional[str]:
+        if not root or not (root / ".git").exists():
+            return None
+        try:
+            return subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                shell=(os.name == "nt"),
+            ).strip()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _reset_mixed(root: Path, pre_head: str) -> None:
+        try:
+            curr = TaskAgent._read_head(root)
+            if curr and curr != pre_head:
+                subprocess.run(
+                    ["git", "-C", str(root), "reset", "--mixed", pre_head],
+                    capture_output=True,
+                    shell=(os.name == "nt"),
+                )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _git_common_dir(path: Path) -> Optional[Path]:
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(path), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=True,
+                shell=(os.name == "nt"),
+            )
+            common = Path(res.stdout.strip())
+            if not common.is_absolute():
+                common = (path / common).resolve()
+            return common.resolve()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return None
+
+    def _same_git_repo(self, a: Path, b: Path) -> bool:
+        if a.resolve() == b.resolve():
+            return True
+        ca, cb = self._git_common_dir(a), self._git_common_dir(b)
+        return ca is not None and ca == cb
+
+    def _resolve_code_repo_root(self, code_repo: str) -> Path:
+        """Resolve a checkout path or store moniker to a git toplevel."""
+        raw = code_repo.strip()
+        if not raw:
+            raise ValueError("code_repo is empty")
+        candidate = Path(raw).expanduser()
+        if candidate.exists():
+            top = self._get_git_root(candidate)
+            if not top:
+                raise ValueError(f"Not a git checkout: {code_repo}")
+            return top.resolve()
+        from taskagent.store_registry import resolve_repo_query
+
+        resolved = resolve_repo_query(raw)
+        for host in resolved.host_paths:
+            top = self._get_git_root(Path(host).expanduser())
+            if top:
+                return top.resolve()
+        raise ValueError(
+            f"Repo {code_repo!r} matched store '{resolved.moniker}' "
+            "but that store has no host checkout"
+        )
+
+    def _cwd_git_root(self) -> Optional[Path]:
+        root = self._get_git_root(Path.cwd())
+        return root.resolve() if root else None
+
+    def _is_other_repo(self, host: Optional[Path]) -> bool:
+        """True when ``host`` is a different git repo from the process cwd."""
+        if not host:
+            return False
+        cwd_root = self._cwd_git_root()
+        if cwd_root is None:
+            return True
+        return not self._same_git_repo(host, cwd_root)
+
+    def _resolve_code_path(self, raw: str, prefer: Optional[Path]) -> Path:
+        """Locate one completion path.
+
+        Absolute paths stay where they point, so a session in one checkout can
+        partial-commit files in ``pwd`` while closing a task somewhere else.
+        Relative paths prefer the task repo when that repo is not ``pwd``
+        (a small fix in the other checkout). Otherwise they are relative to
+        ``pwd``.
+        """
+        path = Path(raw).expanduser()
+        if path.is_absolute():
+            return path.resolve()
+
+        prefer_hit: Optional[Path] = None
+        if prefer is not None:
+            candidate = prefer / path
+            if candidate.exists():
+                prefer_hit = candidate.resolve()
+        cwd_hit: Optional[Path] = None
+        cwd_candidate = Path.cwd() / path
+        if cwd_candidate.exists():
+            cwd_hit = cwd_candidate.resolve()
+
+        if (
+            prefer_hit
+            and cwd_hit
+            and prefer is not None
+            and self._is_other_repo(prefer)
+        ):
+            return prefer_hit
+        if prefer_hit:
+            return prefer_hit
+        if cwd_hit:
+            return cwd_hit
+        if prefer is not None and self._is_other_repo(prefer):
+            return (prefer / path).resolve()
+        return cwd_candidate.resolve()
+
+    def _one_repo_for_paths(
+        self, paths: Sequence[str], prefer: Optional[Path] = None
+    ) -> Tuple[Path, List[str]]:
+        """Return the single git toplevel that contains every path."""
+        roots: List[Path] = []
+        absolute: List[str] = []
+        for raw in paths:
+            if not raw or not str(raw).strip():
+                continue
+            path = self._resolve_code_path(raw, prefer)
+            probe = path if path.is_dir() else path.parent
+            root = self._get_git_root(probe)
+            if root is None:
+                raise ValueError(f"Path is not inside a git repository: {raw}")
+            roots.append(root.resolve())
+            absolute.append(str(path))
+        if not absolute:
+            raise ValueError("No code paths were given")
+        unique = list(dict.fromkeys(roots))
+        if len(unique) != 1:
+            joined = ", ".join(str(r) for r in unique)
+            raise ValueError("Code paths span more than one git repository: " + joined)
+        return unique[0], absolute
+
+    def _issue_worktree(self, slug: str, repo_root: Optional[Path]) -> Optional[Path]:
+        """Return the ``issue/<slug>`` worktree under ``repo_root``, if any."""
+        if not repo_root:
+            return None
+        branch = f"refs/heads/issue/{slug}"
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True,
+                shell=(os.name == "nt"),
+            )
+            current: Optional[Path] = None
+            for line in res.stdout.splitlines():
+                if line.startswith("worktree "):
+                    current = Path(line[len("worktree ") :].strip())
+                elif (
+                    line.startswith("branch ")
+                    and line[len("branch ") :].strip() == branch
+                ):
+                    if current and current.exists():
+                        return current.resolve()
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            pass
+        gwt = repo_root / ".gwt" / slug
+        if gwt.exists():
+            return gwt.resolve()
+        return None
+
+    def _plan_code_commit(
+        self,
+        slug: str,
+        code_repo: Optional[str],
+        code_paths: Optional[Sequence[str]],
+        cached_only: bool,
+        sweep_host: bool,
+    ) -> Tuple[Optional[Path], Optional[List[str]], bool, bool, str]:
+        """Decide which checkout a completion may commit, and which files.
+
+        Returns ``(root, files, cached_only, skip, note)``.
+
+        A task whose host checkout is a different git repo from the process
+        cwd is committed in that host, not in cwd. ``code_paths`` is a partial
+        commit: relative paths in that other repo land there, and absolute
+        paths (or relative paths that exist only in cwd) partial-commit
+        ``pwd``. An unscoped completion inside the cwd repo does not
+        ``git add .`` that checkout.
+        """
+        paths = [p for p in (code_paths or []) if p and str(p).strip()]
+        if paths:
+            root, files = self._one_repo_for_paths(paths, prefer=self.code_root)
+            if code_repo:
+                wanted = self._resolve_code_repo_root(code_repo)
+                if not self._same_git_repo(wanted, root):
+                    raise ValueError(
+                        f"Code paths are in {root}, which is not {wanted} "
+                        f"(code_repo={code_repo!r})"
+                    )
+            return (
+                root,
+                files,
+                False,
+                False,
+                f"Committing {len(files)} path(s) in {root}.",
+            )
+
+        explicit: Optional[Path] = None
+        if code_repo:
+            explicit = self._resolve_code_repo_root(code_repo)
+        host = explicit or self.code_root
+        worktree = self._issue_worktree(slug, host) if host else None
+
+        if cached_only:
+            target = worktree or host
+            if not target:
+                raise ValueError(
+                    "cached_only needs a code checkout. Pass code_repo, or bind a host to this store."
+                )
+            return (
+                target,
+                None,
+                True,
+                False,
+                f"Committing already-staged files in {target}.",
+            )
+
+        if worktree and not sweep_host:
+            return (
+                worktree,
+                None,
+                False,
+                False,
+                f"Committing task worktree {worktree}.",
+            )
+
+        if explicit and not sweep_host:
+            return (
+                explicit,
+                None,
+                False,
+                False,
+                f"Committing named checkout {explicit}.",
+            )
+
+        if sweep_host:
+            sweep_root = explicit or self.code_root
+            if not sweep_root:
+                return (
+                    None,
+                    None,
+                    False,
+                    True,
+                    "sweep_host was set, but this store has no bound host checkout. Code was not committed.",
+                )
+            return (
+                sweep_root,
+                None,
+                False,
+                False,
+                f"Sweeping the host checkout {sweep_root}. This includes every pending change there.",
+            )
+
+        if self.code_root and self._is_other_repo(self.code_root):
+            return (
+                self.code_root,
+                None,
+                False,
+                False,
+                f"Committing the task repo {self.code_root}. "
+                "The process checkout was not used.",
+            )
+
+        return (
+            None,
+            None,
+            False,
+            True,
+            "No code commit. This task's repo is the process checkout, so "
+            "pending files there were left unstaged. Pass code_paths for a "
+            "partial commit of pwd, or code_paths inside another checkout "
+            "for a small fix there. sweep_host commits the whole cwd repo.",
+        )
 
     @staticmethod
     def _check_dependency_cycle(
@@ -1432,6 +1802,9 @@ class TaskAgent:
         no_verify: bool = True,
         metrics: Optional[SubtaskMetric] = None,
         cached_only: bool = False,
+        code_repo: Optional[str] = None,
+        code_paths: Optional[Sequence[str]] = None,
+        sweep_host: bool = False,
     ) -> Tuple[Issue, str]:
         """Mark an issue as done. Returns (issue, commit_hash).
 
@@ -1439,11 +1812,14 @@ class TaskAgent:
         (model, harness, tokens, duration) written into the task README and
         ``meta.json`` for later cost analysis via ``ta report``.
 
-        ``cached_only`` commits only what's already staged in the code repo
-        (no ``git add .``) — for two agents completing tasks in the same
-        working tree/branch at once on unrelated files, so one agent's
-        ``ta done`` never sweeps up the other's untracked or modified-but-
-        unstaged work. The caller must ``git add`` their own files first.
+        If this task's host checkout is a different git repo from the process
+        cwd, the code commit is made there. It is not made in cwd. Pass
+        ``code_paths`` for a partial commit: relative paths resolve in that
+        other repo, and absolute paths can partial-commit cwd instead. An
+        unscoped completion whose host is cwd does not ``git add .`` cwd.
+        A task worktree (``issue/<slug>``) is committed on its own.
+        ``cached_only`` commits the index the caller already staged.
+        ``sweep_host`` is ``git add .`` of the cwd repo.
         """
         issues = self.load_mission()
         target_issue = next((i for i in issues if i.slug == slug), None)
@@ -1460,6 +1836,18 @@ class TaskAgent:
                 f"Cannot complete task '{slug}' because it has open sub-tasks: {subtask_slugs}"
             )
 
+        commit_root, commit_files, commit_cached, skip_code, note = (
+            self._plan_code_commit(slug, code_repo, code_paths, cached_only, sweep_host)
+        )
+        self.last_code_commit_note = note
+        self._extra_git_root = (
+            commit_root
+            if commit_root
+            and commit_root.resolve()
+            != (self.code_root.resolve() if self.code_root else None)
+            else None
+        )
+
         with self._atomic_store_operation():
             self.migrate_to_folder(target_issue.slug)
             issue_file = self.find_issue_file(target_issue.slug)
@@ -1468,26 +1856,32 @@ class TaskAgent:
                     f"Issue file not found for slug: {target_issue.slug}"
                 )
 
-            # 1. Commit Code Changes (Main Repo) first if needed
+            # 1. Commit code only in the partitioned checkout (never an
+            # unrelated process cwd, and never `git add .` unless the caller
+            # named that checkout or asked to sweep the host).
             code_hash = "unknown"
-            if should_commit:
+            if should_commit and skip_code:
+                code_hash = "no_code_commit"
+            elif should_commit and commit_root:
                 msg = commit_message or f"feat: complete {target_issue.slug}"
-                if self.code_root:
-                    code_hash = self._git_commit(
-                        self.code_root,
-                        msg,
-                        no_verify=no_verify,
-                        cached_only=cached_only,
-                    )
-                    if code_hash == "failed":
-                        raise RuntimeError(
-                            "Failed to commit changes to code repository."
-                        )
-                    if code_hash == "no_changes":
-                        code_hash = self.get_git_commit()
+                code_hash = self._git_commit(
+                    commit_root,
+                    msg,
+                    files=commit_files,
+                    no_verify=no_verify,
+                    cached_only=commit_cached,
+                )
+                if code_hash == "failed":
+                    raise RuntimeError(f"Failed to commit changes to {commit_root}.")
+                if code_hash == "no_changes":
+                    code_hash = self._read_head(commit_root) or "unknown"
+                    if code_hash != "unknown":
+                        code_hash = code_hash[:7]
 
             if code_hash == "unknown":
-                code_hash = self.get_git_commit()
+                head_root = commit_root or self.code_root
+                head = self._read_head(head_root) if head_root else None
+                code_hash = head[:7] if head else self.get_git_commit()
 
             # 2. Prepare Move and format content directly with real code_hash
             is_dir_based = issue_file.name == "README.md"

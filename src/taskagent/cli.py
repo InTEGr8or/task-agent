@@ -1670,6 +1670,9 @@ def cmd_done(
     no_verify: bool = True,
     metrics: Optional[SubtaskMetric] = None,
     cached_only: bool = False,
+    code_repo: Optional[str] = None,
+    code_paths: Optional[list] = None,
+    sweep_host: bool = False,
 ):
     """Mark an issue as done."""
     if not slug:
@@ -1680,7 +1683,16 @@ def cmd_done(
             )
             sys.exit(1)
 
-    worktree_path = find_worktree_path_for_slug(slug)
+    lookup_root = manager.code_root
+    if code_repo:
+        try:
+            lookup_root = manager._resolve_code_repo_root(code_repo)
+        except Exception:
+            pass
+    worktree_path = manager._issue_worktree(slug, lookup_root) if lookup_root else None
+    if worktree_path is None:
+        worktree_path = find_worktree_path_for_slug(slug)
+    git_cwd = str(lookup_root) if lookup_root else None
     abs_worktree = (
         worktree_path.resolve() if worktree_path and worktree_path.exists() else None
     )
@@ -1701,6 +1713,9 @@ def cmd_done(
             no_verify=no_verify,
             metrics=metrics,
             cached_only=cached_only,
+            code_repo=code_repo,
+            code_paths=code_paths,
+            sweep_host=sweep_host,
         )
         console.print(
             f"[bold green]Issue '{issue.slug}' marked as done and "
@@ -1708,6 +1723,10 @@ def cmd_done(
         )
         if commit_hash:
             console.print(f"Commit: {commit_hash}")
+        note = getattr(manager, "last_code_commit_note", "")
+        if note:
+            style = "yellow" if commit_hash == "no_code_commit" else "dim"
+            console.print(f"[{style}]{note}[/{style}]")
 
         # Releases are explicit — do not auto-amend/bump on done (that rewrote
         # history and orphaned tags). Hint when a project version file exists.
@@ -1742,8 +1761,18 @@ def cmd_done(
             console.print(f"[blue]Cleaning up git worktree for '{slug}'...[/blue]")
             try:
                 # Remove worktree
+                remove_cmd = ["git", "worktree", "remove", str(worktree_path)]
+                if git_cwd:
+                    remove_cmd = [
+                        "git",
+                        "-C",
+                        git_cwd,
+                        "worktree",
+                        "remove",
+                        str(worktree_path),
+                    ]
                 subprocess.run(
-                    ["git", "worktree", "remove", str(worktree_path)],
+                    remove_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -1755,8 +1784,11 @@ def cmd_done(
                 # Delete branch
                 branch_name = f"issue/{slug}"
                 console.print(f"[blue]Deleting local branch '{branch_name}'...[/blue]")
+                delete_cmd = ["git", "branch", "-d", branch_name]
+                if git_cwd:
+                    delete_cmd = ["git", "-C", git_cwd, "branch", "-d", branch_name]
                 subprocess.run(
-                    ["git", "branch", "-d", branch_name],
+                    delete_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -1775,15 +1807,27 @@ def cmd_done(
         # If worktree doesn't exist, we still try to delete the branch if it exists
         branch_name = f"issue/{slug}"
         try:
+            show_cmd = ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"]
+            delete_cmd = ["git", "branch", "-d", branch_name]
+            if git_cwd:
+                show_cmd = [
+                    "git",
+                    "-C",
+                    git_cwd,
+                    "show-ref",
+                    "--verify",
+                    f"refs/heads/{branch_name}",
+                ]
+                delete_cmd = ["git", "-C", git_cwd, "branch", "-d", branch_name]
             result = subprocess.run(
-                ["git", "show-ref", "--verify", f"refs/heads/{branch_name}"],
+                show_cmd,
                 capture_output=True,
                 text=True,
             )
             if result.returncode == 0:
                 console.print(f"[blue]Deleting local branch '{branch_name}'...[/blue]")
                 subprocess.run(
-                    ["git", "branch", "-d", branch_name],
+                    delete_cmd,
                     check=True,
                     capture_output=True,
                     text=True,
@@ -7062,6 +7106,32 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         ),
     )
     done_parser.add_argument(
+        "--code-repo",
+        default=None,
+        help=(
+            "Checkout to commit code into (path or registered moniker). "
+            "Use when the edits are not in this task store's host repo."
+        ),
+    )
+    done_parser.add_argument(
+        "--path",
+        action="append",
+        dest="code_paths",
+        default=None,
+        help=(
+            "File to include in the code commit. Repeat for several files. "
+            "All paths must be in the same git repository. Nothing else is staged."
+        ),
+    )
+    done_parser.add_argument(
+        "--sweep-host",
+        action="store_true",
+        help=(
+            "git add . in the bound host checkout. Can pick up unrelated "
+            "pending work in that host. Other checkouts are not touched."
+        ),
+    )
+    done_parser.add_argument(
         "--hooks",
         dest="no_verify",
         action="store_false",
@@ -7468,6 +7538,9 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
             args.no_verify,
             metrics=done_metrics,
             cached_only=getattr(args, "cached_only", False),
+            code_repo=getattr(args, "code_repo", None),
+            code_paths=getattr(args, "code_paths", None),
+            sweep_host=getattr(args, "sweep_host", False),
         )
     elif args.command == "delete":
         cmd_soft_delete(console, manager, args.slug)

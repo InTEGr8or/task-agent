@@ -53,12 +53,16 @@ Prints a fast, lightweight one-liner for shell prompt integration (e.g. bash, zs
 Marks a task as completed.
 - **Flags**:
   - `-m`, `--message`: Custom git commit message.
+  - `--code-repo`: Checkout to commit (path or moniker) when the edits are not in the task store's host.
+  - `--path`: File to commit. Repeat for several files. All paths must be in one git repository.
+  - `--sweep-host`: `git add .` in the bound host checkout. Can include unrelated pending work in that host.
+  - `--cached-only`: Commit only what is already staged.
   - `--no-commit`: Skip the automatic git commit.
+- **Code commits follow the task's repo.** If that repo is not the one your shell is in, `ta done` commits there. It does not `git add .` the shell's repo. `--path` is a partial commit: a relative path is read in the task repo, and an absolute path can partial-commit `pwd` instead. Repeat `--path` for several files in the same git repo.
 - **Process**:
   1. Moves the file to `completed/{year}/`.
-  2. Commits changes to the repository.
+  2. Commits the partitioned checkout when one was named, or the task worktree.
   3. Appends the resulting commit hash to the task file.
-  4. Increments the project patch version (if `pyproject.toml` or `package.json` is present).
 
 ### `ta promote <slug>`
 Moves a task from `draft/` to `pending/`.

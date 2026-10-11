@@ -81,7 +81,7 @@ def test_complete_issue_dual_repo_flow(tmp_path, manager):
     with patch.object(TaskAgent, "_git_commit") as mock_commit:
         mock_commit.return_value = "hash123"
 
-        manager.complete_issue("test-task", should_commit=True)
+        manager.complete_issue("test-task", should_commit=True, sweep_host=True)
 
         # Should call commit twice (once for code, once for mission)
         # Plus the amend call
@@ -251,3 +251,321 @@ def test_git_commit_clean_tree(manager):
 
         result = manager._git_commit(Path("/repo"), "feat: test")
         assert result == "no_changes"
+
+
+def _init_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "master"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "t@example.com"], check=True
+    )
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True)
+    (path / "README").write_text("init\n")
+    subprocess.run(["git", "-C", str(path), "add", "README"], check=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"], check=True)
+
+
+def _porcelain(repo: Path) -> str:
+    res = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return res.stdout
+
+
+def test_code_root_is_registered_host_not_process_cwd(tmp_path, monkeypatch):
+    """A store opened from another checkout commits the registered host."""
+    from taskagent.store_registry import StoreEntry
+
+    host = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(host)
+    store = tmp_path / "store"
+    store.mkdir()
+    entry = StoreEntry(
+        moniker="bizkite-co/gtm-telemetry-wizard",
+        store_path=str(store),
+        host_paths=[str(host)],
+    )
+    monkeypatch.setattr(
+        "taskagent.store_registry.MachineRegistry.load",
+        lambda self: {entry.moniker: entry},
+    )
+
+    bound = TaskAgent(config_dir=str(store))
+    assert bound.code_root == host.resolve()
+
+
+def test_complete_in_pwd_does_not_sweep_that_checkout(tmp_path, manager, monkeypatch):
+    """A task in the session repo does not git add . pwd."""
+    pwd = tmp_path / "company-cli"
+    _init_repo(pwd)
+    (pwd / "Makefile").write_text("unrelated\n")
+    (pwd / "testimonials_stack.py").write_text("pending\n")
+    monkeypatch.chdir(pwd)
+
+    manager.code_root = pwd.resolve()
+    manager.create_issue("gtw audit")
+    issue, commit = manager.complete_issue("gtw-audit", commit_message="gtw audit")
+
+    assert issue.status == "completed"
+    assert commit == "no_code_commit"
+    status = _porcelain(pwd)
+    assert "Makefile" in status
+    assert "testimonials_stack.py" in status
+
+
+def test_complete_task_in_other_repo_commits_that_repo(tmp_path, manager, monkeypatch):
+    """Operating in one checkout and completing a task in another commits the other."""
+    pwd = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(pwd)
+    _init_repo(other)
+    (pwd / "Makefile").write_text("unrelated\n")
+    (other / "audit.py").write_text("def run_audit():\n    return []\n")
+    monkeypatch.chdir(pwd)
+
+    manager.code_root = other.resolve()
+    manager.create_issue("gtw audit")
+    _issue, commit = manager.complete_issue(
+        "gtw-audit", commit_message="feat: gtw audit"
+    )
+
+    assert commit != "no_code_commit"
+    assert "Makefile" in _porcelain(pwd)
+    assert _porcelain(other) == ""
+    subject = subprocess.run(
+        ["git", "-C", str(other), "log", "-1", "--format=%s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert subject == "feat: gtw audit"
+    assert "task repo" in manager.last_code_commit_note
+
+
+def test_partial_commit_of_pwd(tmp_path, manager, monkeypatch):
+    pwd = tmp_path / "company-cli"
+    _init_repo(pwd)
+    (pwd / "ship.py").write_text("ship\n")
+    (pwd / "keep.py").write_text("keep\n")
+    monkeypatch.chdir(pwd)
+    manager.code_root = pwd.resolve()
+    manager.create_issue("Partial pwd")
+
+    manager.complete_issue(
+        "partial-pwd", commit_message="feat: ship", code_paths=["ship.py"]
+    )
+
+    assert "keep.py" in _porcelain(pwd)
+    committed = subprocess.run(
+        ["git", "-C", str(pwd), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["ship.py"]
+
+
+def test_partial_commit_of_the_other_repo(tmp_path, manager, monkeypatch):
+    pwd = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(pwd)
+    _init_repo(other)
+    (pwd / "local.py").write_text("local\n")
+    # Same relative name in pwd must not steal a partial commit of the task repo.
+    (pwd / "audit.py").write_text("pwd copy\n")
+    (other / "audit.py").write_text("audit\n")
+    (other / "leave.py").write_text("leave\n")
+    monkeypatch.chdir(pwd)
+    manager.code_root = other.resolve()
+    manager.create_issue("gtw audit")
+
+    manager.complete_issue(
+        "gtw-audit", commit_message="feat: audit only", code_paths=["audit.py"]
+    )
+
+    assert "local.py" in _porcelain(pwd)
+    assert "audit.py" in _porcelain(pwd)
+    assert "leave.py" in _porcelain(other)
+    committed = subprocess.run(
+        ["git", "-C", str(other), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["audit.py"]
+
+
+def test_absolute_pwd_path_partial_commits_pwd_while_task_is_elsewhere(
+    tmp_path, manager, monkeypatch
+):
+    pwd = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(pwd)
+    _init_repo(other)
+    (pwd / "ship.py").write_text("ship\n")
+    (pwd / "keep.py").write_text("keep\n")
+    (other / "audit.py").write_text("audit\n")
+    monkeypatch.chdir(pwd)
+    manager.code_root = other.resolve()
+    manager.create_issue("Small pwd fix")
+
+    manager.complete_issue(
+        "small-pwd-fix",
+        commit_message="fix: pwd only",
+        code_paths=[str(pwd / "ship.py")],
+    )
+
+    assert "keep.py" in _porcelain(pwd)
+    assert "audit.py" in _porcelain(other)
+    committed = subprocess.run(
+        ["git", "-C", str(pwd), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["ship.py"]
+
+
+def test_complete_paths_commit_the_other_checkout_only(tmp_path, manager):
+    """Files passed in are committed in their own repo, not the task host."""
+    host = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(host)
+    _init_repo(other)
+    (host / "app.py").write_text("unrelated signups wiring\n")
+    audit = other / "audit.py"
+    audit.write_text("def run_audit():\n    return []\n")
+
+    manager.code_root = host
+    manager.create_issue("gtw audit")
+    _issue, commit = manager.complete_issue(
+        "gtw-audit",
+        commit_message="feat: gtw audit",
+        code_paths=[str(audit)],
+    )
+
+    assert commit != "no_code_commit"
+    assert "app.py" in _porcelain(host)
+    names = subprocess.run(
+        ["git", "-C", str(other), "show", "--name-only", "--format=%s", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "feat: gtw audit" in names
+    assert "audit.py" in names
+    committed = subprocess.run(
+        ["git", "-C", str(other), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["audit.py"]
+
+
+def test_complete_paths_spanning_two_repos_are_rejected(tmp_path, manager):
+    host = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(host)
+    _init_repo(other)
+    a = host / "a.py"
+    b = other / "b.py"
+    a.write_text("a\n")
+    b.write_text("b\n")
+    manager.code_root = host
+    manager.create_issue("Split work")
+
+    with pytest.raises(ValueError, match="more than one git repository"):
+        manager.complete_issue("split-work", code_paths=[str(a), str(b)])
+
+    task_files = [
+        p
+        for p in manager.issues_root.rglob("split-work*")
+        if "completed" not in p.parts
+    ]
+    assert task_files, [str(p) for p in manager.issues_root.rglob("*")]
+    assert "a.py" in _porcelain(host)
+    assert "b.py" in _porcelain(other)
+
+
+def test_complete_code_repo_does_not_touch_the_store_host(tmp_path, manager):
+    host = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(host)
+    _init_repo(other)
+    (host / "pending.py").write_text("leave me\n")
+    (other / "audit.py").write_text("audit\n")
+    manager.code_root = host
+    manager.create_issue("gtw audit")
+
+    manager.complete_issue(
+        "gtw-audit",
+        commit_message="feat: gtw audit",
+        code_repo=str(other),
+    )
+
+    assert "pending.py" in _porcelain(host)
+    assert _porcelain(other) == ""
+    subject = subprocess.run(
+        ["git", "-C", str(other), "log", "-1", "--format=%s"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert subject == "feat: gtw audit"
+
+
+def test_complete_worktree_does_not_include_main_checkout(tmp_path, manager):
+    host = tmp_path / "repo"
+    _init_repo(host)
+    wt = host / ".gwt" / "my-task"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(host),
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "issue/my-task",
+            str(wt),
+        ],
+        check=True,
+    )
+    (host / "unrelated.py").write_text("main checkout\n")
+    (wt / "feature.py").write_text("worktree\n")
+    manager.code_root = host
+    manager.create_issue("My Task")
+
+    manager.complete_issue("my-task", commit_message="feat: my task")
+
+    assert "unrelated.py" in _porcelain(host)
+    wt_status = _porcelain(wt)
+    assert "feature.py" not in wt_status
+    committed = subprocess.run(
+        ["git", "-C", str(wt), "show", "--name-only", "--format=", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    assert committed == ["feature.py"]
+
+
+def test_sweep_host_commits_only_the_bound_host(tmp_path, manager):
+    host = tmp_path / "company-cli"
+    other = tmp_path / "gtm-telemetry-wizard"
+    _init_repo(host)
+    _init_repo(other)
+    (host / "Makefile").write_text("target\n")
+    (other / "audit.py").write_text("audit\n")
+    manager.code_root = host
+    manager.create_issue("Host sweep")
+
+    manager.complete_issue("host-sweep", sweep_host=True, commit_message="chore: sweep")
+
+    assert _porcelain(host) == ""
+    assert "audit.py" in _porcelain(other)

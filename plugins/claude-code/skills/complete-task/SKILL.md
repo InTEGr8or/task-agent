@@ -41,6 +41,14 @@ are actually satisfied.
 3. **Complete via task-agent (required)**
    - MCP: `complete_task` with `name` + `solution` (and optional commit `message`)
    - CLI: `ta done <slug>` (with project flags as needed)
+   - **Commit in the task's repo.** If `repo` is a different checkout from
+     the session `pwd`, the code commit goes there, not into `pwd`.
+   - **Partial commits.** Pass `paths` to stage only those files. Relative
+     paths resolve in the task repo when it is not `pwd` (a small fix in the
+     other repo, no new session). Absolute paths partial-commit `pwd` or any
+     other checkout they point at. All paths in one call must share one git
+     repo. `sweep_host` commits the whole cwd repo and can pick up unrelated
+     files.
 4. **Self-report cost metrics when known** (cost optimization)
    - Model name / version, provider
    - Agent harness (e.g. `claude-code`, `antigravity`, `grok`, `opencode`)

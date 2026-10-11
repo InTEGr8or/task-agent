@@ -143,6 +143,9 @@ def test_mcp_complete_task(mock_manager):
         solution_explanation="Implemented feature X",
         metrics=None,
         cached_only=False,
+        code_repo=None,
+        code_paths=None,
+        sweep_host=False,
     )
 
 
@@ -159,6 +162,30 @@ def test_mcp_complete_task_cached_only(mock_manager):
     mcp.complete_task("Task 1", solution="Backend work", cached_only=True)
 
     assert mock_manager.complete_issue.call_args.kwargs["cached_only"] is True
+
+
+def test_mcp_complete_task_passes_partition_args(mock_manager):
+    mock_manager.slugify.return_value = "gtw-audit"
+    mock_manager.complete_issue.return_value = (
+        Issue(name="gtw audit", slug="gtw-audit", status="completed"),
+        "abc1234",
+    )
+    mock_manager.last_code_commit_note = (
+        "Committing 1 path(s) in /repos/gtm-telemetry-wizard."
+    )
+
+    result = mcp.complete_task(
+        "gtw audit",
+        solution="audit command",
+        code_repo="bizkite-co/gtm-telemetry-wizard",
+        paths=["/repos/gtm-telemetry-wizard/audit.py"],
+    )
+
+    assert "Committing 1 path(s)" in result
+    kwargs = mock_manager.complete_issue.call_args.kwargs
+    assert kwargs["code_repo"] == "bizkite-co/gtm-telemetry-wizard"
+    assert kwargs["code_paths"] == ["/repos/gtm-telemetry-wizard/audit.py"]
+    assert kwargs["sweep_host"] is False
 
 
 def test_mcp_complete_task_with_metrics(mock_manager):
