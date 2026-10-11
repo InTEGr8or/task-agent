@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 import sys
 
-from taskagent.theme import DEFAULT as theme
+from verkit.theme import DEFAULT as theme  # type: ignore[import-untyped]
 
 # Removed invalid NO_BORDER definition
 import argparse
@@ -1842,6 +1842,44 @@ def cmd_done(
             console.print(
                 f"[yellow]Run 'git branch -D {branch_name}' to force delete it.[/yellow]"
             )
+
+    # After standard cleanup, check for any orphaned loosely matching branches or worktrees
+    if not is_cwd_inside_worktree:
+        try:
+            loose_wts = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                capture_output=True,
+                text=True,
+            ).stdout
+            for line in loose_wts.splitlines():
+                if line.startswith("worktree "):
+                    wt_path = line[len("worktree ") :].strip()
+                    if slug in Path(wt_path).name and (
+                        not worktree_path or str(worktree_path) != wt_path
+                    ):
+                        console.print(
+                            f"[yellow]Found loosely matching orphaned worktree: {wt_path}[/yellow]"
+                        )
+                        console.print(
+                            f"  [yellow]Consider removing it: git worktree remove {wt_path}[/yellow]"
+                        )
+
+            loose_brs = subprocess.run(
+                ["git", "branch", "--list", "--format=%(refname:short)"],
+                capture_output=True,
+                text=True,
+            ).stdout
+            for br in loose_brs.splitlines():
+                br = br.strip()
+                if slug in br and br != f"issue/{slug}":
+                    console.print(
+                        f"[yellow]Found loosely matching orphaned branch: {br}[/yellow]"
+                    )
+                    console.print(
+                        f"  [yellow]Consider deleting it: git branch -D {br}[/yellow]"
+                    )
+        except Exception:
+            pass
 
 
 def cmd_push(console: Console, manager: TaskAgent):
@@ -5166,6 +5204,77 @@ def cmd_worktree(console: Console, manager: TaskAgent, args):
         except subprocess.CalledProcessError as e:
             console.print(f"[red]Error pruning worktrees: {e.stderr}[/red]")
 
+    elif args.action == "cleanup":
+        console.print("[blue]Finding orphaned task worktrees/branches...[/blue]")
+        try:
+            active_issues = {i.slug for i in manager.load_mission()}
+
+            # 1. Clean up orphaned .gwt/ worktrees
+            wt_res = subprocess.run(
+                ["git", "worktree", "list", "--porcelain"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            worktrees = []
+            for line in wt_res.stdout.splitlines():
+                if line.startswith("worktree "):
+                    worktrees.append(Path(line[len("worktree ") :].strip()))
+
+            cwd_gwt = Path.cwd().resolve() / ".gwt"
+            for wt in worktrees:
+                try:
+                    resolved_wt = wt.resolve()
+                    if resolved_wt.is_relative_to(cwd_gwt):
+                        slug = resolved_wt.name
+                        if slug not in active_issues:
+                            console.print(
+                                f"  [yellow]Found orphaned worktree: {wt}[/yellow]"
+                            )
+                            subprocess.run(
+                                ["git", "worktree", "remove", "--force", str(wt)],
+                                capture_output=True,
+                                text=True,
+                                check=True,
+                            )
+                            console.print("    [green]Removed[/green]")
+                except ValueError:
+                    pass  # Not relative to .gwt
+                except subprocess.CalledProcessError as e:
+                    console.print(
+                        f"    [red]Failed to remove: {e.stderr.strip() if hasattr(e, 'stderr') and e.stderr else str(e)}[/red]"
+                    )
+
+            # 2. Clean up orphaned issue/ branches
+            br_res = subprocess.run(
+                ["git", "branch", "--list", "--format=%(refname:short)"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for br in br_res.stdout.splitlines():
+                br = br.strip()
+                if br.startswith("issue/"):
+                    slug = br[len("issue/") :]
+                    if slug not in active_issues:
+                        console.print(f"  [yellow]Found orphaned branch: {br}[/yellow]")
+                        try:
+                            subprocess.run(
+                                ["git", "branch", "-D", br],
+                                capture_output=True,
+                                text=True,
+                                check=True,
+                            )
+                            console.print("    [green]Deleted[/green]")
+                        except subprocess.CalledProcessError as e:
+                            console.print(
+                                f"    [red]Failed to delete: {e.stderr.strip() if hasattr(e, 'stderr') and e.stderr else str(e)}[/red]"
+                            )
+
+            console.print("[green]Cleanup complete.[/green]")
+        except Exception as e:
+            console.print(f"[red]Error during cleanup: {e}[/red]")
+
 
 def cmd_github(console: Console, manager: TaskAgent, args):
     """Sync with GitHub Issues."""
@@ -6350,7 +6459,7 @@ def main():
     worktree_parser.add_argument(
         "action",
         nargs="?",
-        choices=["add", "list", "remove", "prune"],
+        choices=["add", "list", "remove", "prune", "cleanup"],
         help="Worktree action to perform (shows help if omitted)",
     )
     worktree_parser.add_argument(
@@ -6361,6 +6470,12 @@ def main():
     )
     worktree_parser.add_argument(
         "--commit", action="store_true", help="Create worktree from specific commit SHA"
+    )
+    worktree_parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        help="Days back to check for completed tasks (for cleanup action)",
     )
     worktree_parser.add_argument(
         "--copy",

@@ -20,3 +20,5 @@ docks/tasks
 
 # task-agent: human-facing store symlink
 docs/tasks
+.map/
+.ma/prompt/
