@@ -1121,6 +1121,92 @@ def test_cmd_triage_activate_task(manager, monkeypatch):
     mock_live_instance.stop.assert_not_called()
 
 
+def test_cmd_triage_copy_slug_with_y(manager):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Copy Test Task")
+    mock_console = MagicMock()
+
+    keys = ["y", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    mock_live_instance = MagicMock()
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live", return_value=mock_live_instance),
+        patch("taskagent.cli.pyperclip.copy") as mock_pyperclip,
+    ):
+        cmd_triage(mock_console, manager)
+        mock_pyperclip.assert_called_once_with("copy-test-task")
+        mock_live_instance.stop.assert_not_called()
+
+
+def test_cmd_triage_copy_slug_with_c(manager):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Copy With C Task")
+    mock_console = MagicMock()
+
+    keys = ["c", "q"]
+
+    def mock_get_key():
+        if keys:
+            return keys.pop(0)
+        return "q"
+
+    mock_live_instance = MagicMock()
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live", return_value=mock_live_instance),
+        patch("taskagent.cli.pyperclip.copy") as mock_pyperclip,
+    ):
+        cmd_triage(mock_console, manager)
+        mock_pyperclip.assert_called_once_with("copy-with-c-task")
+        mock_live_instance.stop.assert_not_called()
+
+
+def test_cmd_triage_help_text_contains_active_and_copy(manager):
+    from taskagent.cli import cmd_triage
+    from unittest.mock import MagicMock, patch
+
+    manager.create_issue("Help Text Task")
+    mock_console = MagicMock()
+    mock_console.size.width = 80
+
+    panels = []
+
+    def mock_update(panel, *args, **kwargs):
+        panels.append(panel)
+
+    mock_live = MagicMock()
+    mock_live.update = mock_update
+
+    keys = ["q"]
+
+    def mock_get_key():
+        return keys.pop(0) if keys else "q"
+
+    with (
+        patch("taskagent.cli.get_key", mock_get_key),
+        patch("taskagent.cli.Live", return_value=mock_live),
+    ):
+        mock_live.__enter__.return_value = mock_live
+        cmd_triage(mock_console, manager)
+
+    assert len(panels) >= 1
+    subtitle = panels[0].subtitle
+    assert "A: active" in subtitle
+    assert "y/c: copy" in subtitle
+
+
 def test_cmd_triage_move_priority_cursor_tracking(manager, monkeypatch):
     from taskagent.cli import cmd_triage
     from unittest.mock import MagicMock, patch

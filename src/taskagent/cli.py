@@ -949,7 +949,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                     str(absolute_idx + 1), date_str, f"{prefix}{slug}", style=style
                 )
 
-            help_text = "[dim]v/l: view | c: copy slug | q: exit[/dim]"
+            help_text = "[dim]v/l: view | c/y: copy slug | q: exit[/dim]"
 
             live.update(
                 Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
@@ -976,7 +976,7 @@ def cmd_history(console: Console, manager: TaskAgent, limit: int = 20):
                 except Exception:
                     pass
                 live.start()
-            elif key in ["c"]:
+            elif key in ["c", "y"]:
                 # Copy slug to clipboard
                 _, slug = all_completed[cursor]
                 try:
@@ -5695,6 +5695,7 @@ def cmd_triage(
     indexed_issues = [(issue, depth) for issue, depth in hierarchy]
     cursor = 0
     last_key = ""
+    status_message: Optional[str] = None
 
     with Live(auto_refresh=False, console=console, screen=True) as live:
         while True:
@@ -5781,10 +5782,21 @@ def cmd_triage(
                     style=style,
                 )
 
-            help_text = "[dim]j/k: move | G/gg: bottom/top | ctrl+k/j: prio | p: prom | d: dem | v: view | e: edit | a: add | D: done | A: active | l/h: link/unlink | /: search | y: copy | q: exit[/dim]"
+            if show_completed:
+                if term_width >= 100:
+                    help_text = "[dim]j/k: move | r: restore | y/c: copy | v/e: view/edit | C: active-list | /: search | q: exit[/dim]"
+                else:
+                    help_text = "[dim]j/k: move | r: restore | y/c: copy | v: view | C: back | q: exit[/dim]"
+            else:
+                if term_width >= 130:
+                    help_text = "[dim]j/k: move | ctrl+k/j: prio | A: active | y/c: copy | D: done | p/d: prom/dem | v/e: view/edit | a: add | l/h: link | /: search | C: done-list | q: exit[/dim]"
+                elif term_width >= 100:
+                    help_text = "[dim]j/k: move | ctrl+k/j: prio | A: active | y/c: copy | D: done | v/e: view/edit | a: add | q: exit[/dim]"
+                else:
+                    help_text = "[dim]j/k: move | ctrl+k/j: prio | A: active | y/c: copy | D: done | v: view | q: exit[/dim]"
 
             live.update(
-                Panel(table, subtitle=help_text, box=theme.panel_box), refresh=True
+                Panel(table, title=status_message, subtitle=help_text, box=theme.panel_box), refresh=True
             )
 
             # Input
@@ -5797,36 +5809,43 @@ def cmd_triage(
             elif key == "\r":  # enter (return)
                 break
             elif key == "G":  # shift+g: jump to bottom
+                status_message = None
                 cursor = len(indexed_issues) - 1
             elif key == "g":  # gg: jump to top
+                status_message = None
                 if prev_key == "g":
                     cursor = 0
                 else:
                     last_key = "g"
                 continue
             elif key in ["k", "\x1b[A"]:  # up
+                status_message = None
                 cursor = max(0, cursor - 1)
             elif key in ["j", "\x1b[B"]:  # down
+                status_message = None
                 cursor = min(len(indexed_issues) - 1, cursor + 1)
             elif key == "/":
+                status_message = None
                 live.stop()
                 search_query = questionary.text("Search slug:").ask()
                 issues = get_display_issues(search_query, show_completed)
                 indexed_issues = build_hierarchy(issues)
                 cursor = 0
                 live.start()
-            elif key == "y":
-                slug = indexed_issues[cursor][0].slug
-                pyperclip.copy(slug)
-                console.print(
-                    f"[bold green]Copied slug to clipboard: {slug}[/bold green]"
-                )
-                questionary.press_any_key_to_continue().ask()
-            elif key == "c":
+            elif key in ["y", "c"]:
+                if indexed_issues and 0 <= cursor < len(indexed_issues):
+                    slug = indexed_issues[cursor][0].slug
+                    try:
+                        pyperclip.copy(slug)
+                        status_message = f"[bold green]Copied slug to clipboard: {slug}[/bold green]"
+                    except Exception as e:
+                        status_message = f"[yellow]Failed to copy to clipboard: {e}[/yellow]"
+            elif key == "C":
                 show_completed = not show_completed
                 issues = get_display_issues(search_query, show_completed)
                 indexed_issues = build_hierarchy(issues)
                 cursor = 0
+                status_message = f"[dim]Showing {'completed' if show_completed else 'active/pending'} tasks[/dim]"
 
             elif key == "v":
                 live.stop()
@@ -5938,17 +5957,24 @@ def cmd_triage(
                         cursor = min(len(indexed_issues) - 1, cursor)
                 except Exception:
                     pass
-            elif key == "A" and not show_completed:  # active
-                issue = indexed_issues[cursor][0]
-                try:
-                    manager.move_to_active(issue.slug)
-                    issues = get_display_issues(search_query, show_completed)
-                    indexed_issues = build_hierarchy(issues)
-                    new_idx = find_slug_index(issue.slug, indexed_issues)
-                    if new_idx is not None:
-                        cursor = new_idx
-                except Exception:
-                    pass
+            elif key == "A":  # active
+                if show_completed:
+                    status_message = "[yellow]Completed tasks cannot be marked active directly (press 'r' to restore)[/yellow]"
+                elif indexed_issues and 0 <= cursor < len(indexed_issues):
+                    issue = indexed_issues[cursor][0]
+                    if issue.status == "active":
+                        status_message = f"[yellow]Task '{issue.slug}' is already active[/yellow]"
+                    else:
+                        try:
+                            manager.move_to_active(issue.slug)
+                            issues = get_display_issues(search_query, show_completed)
+                            indexed_issues = build_hierarchy(issues)
+                            new_idx = find_slug_index(issue.slug, indexed_issues)
+                            if new_idx is not None:
+                                cursor = new_idx
+                            status_message = f"[bold green]Task '{issue.slug}' marked as active[/bold green]"
+                        except Exception as e:
+                            status_message = f"[red]Failed to activate '{issue.slug}': {e}[/red]"
             elif key == "D" and not show_completed:  # done
                 live.stop()
                 issue = indexed_issues[cursor][0]
