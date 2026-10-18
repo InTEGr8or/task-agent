@@ -1516,8 +1516,24 @@ def test_cmd_list_table_columns(manager, monkeypatch):
     # Verify column specifications
     assert cols[0].width == 3  # Pri
     assert cols[1].width == 5  # Date
-    assert cols[2].width == 6  # Status
+    assert cols[2].width == 7  # Status (must be at least 7 so PENDING is not truncated)
     assert cols[3].width == 8  # Blocked
+
+
+def test_cmd_list_pending_status_not_truncated(manager, capsys):
+    """Verify that PENDING status is rendered in full without truncation or ellipsis."""
+    from taskagent.cli import cmd_list
+    from rich.console import Console
+
+    manager.create_issue("Pending Task Sample")
+    test_console = Console(force_terminal=False, width=120)
+
+    cmd_list(test_console, manager, output_format="table")
+
+    captured = capsys.readouterr().out
+    assert "PENDING" in captured
+    assert "PENDI…" not in captured
+    assert "PENDI\u2026" not in captured
 
 
 def test_cmd_triage_table_columns(manager, monkeypatch):

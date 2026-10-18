@@ -3461,7 +3461,7 @@ def cmd_list(
     )
     table.add_column("Pri", justify="right", style="cyan", width=3)
     table.add_column("Date", style="dim", width=5)
-    table.add_column("Status", width=6)
+    table.add_column("Status", width=7)
     table.add_column("Blocked", style="yellow", width=8)
     table.add_column("Slug")
 
@@ -3484,8 +3484,8 @@ def cmd_list(
         prefix_plain = "└─ " if depth > 0 else ""
         prefix = "[dim cyan]└─[/dim cyan] " if depth > 0 else ""
 
-        # Fixed columns width: Pri (~4) + Date (5) + Status (6) + Blocked (8) + borders/padding (~12)
-        available_width = max(10, term_width - 35)
+        # Fixed columns width: Pri (~4) + Date (5) + Status (7) + Blocked (8) + borders/padding (~12)
+        available_width = max(10, term_width - 36)
         prefix_len = len(indent) + len(prefix_plain)
         max_slug_len = max(5, available_width - prefix_len)
 
@@ -5796,7 +5796,10 @@ def cmd_triage(
                     help_text = "[dim]j/k: move | ctrl+k/j: prio | A: active | y/c: copy | D: done | v: view | q: exit[/dim]"
 
             live.update(
-                Panel(table, title=status_message, subtitle=help_text, box=theme.panel_box), refresh=True
+                Panel(
+                    table, title=status_message, subtitle=help_text, box=theme.panel_box
+                ),
+                refresh=True,
             )
 
             # Input
@@ -5837,9 +5840,13 @@ def cmd_triage(
                     slug = indexed_issues[cursor][0].slug
                     try:
                         pyperclip.copy(slug)
-                        status_message = f"[bold green]Copied slug to clipboard: {slug}[/bold green]"
+                        status_message = (
+                            f"[bold green]Copied slug to clipboard: {slug}[/bold green]"
+                        )
                     except Exception as e:
-                        status_message = f"[yellow]Failed to copy to clipboard: {e}[/yellow]"
+                        status_message = (
+                            f"[yellow]Failed to copy to clipboard: {e}[/yellow]"
+                        )
             elif key == "C":
                 show_completed = not show_completed
                 issues = get_display_issues(search_query, show_completed)
@@ -5963,7 +5970,9 @@ def cmd_triage(
                 elif indexed_issues and 0 <= cursor < len(indexed_issues):
                     issue = indexed_issues[cursor][0]
                     if issue.status == "active":
-                        status_message = f"[yellow]Task '{issue.slug}' is already active[/yellow]"
+                        status_message = (
+                            f"[yellow]Task '{issue.slug}' is already active[/yellow]"
+                        )
                     else:
                         try:
                             manager.move_to_active(issue.slug)
@@ -5974,7 +5983,9 @@ def cmd_triage(
                                 cursor = new_idx
                             status_message = f"[bold green]Task '{issue.slug}' marked as active[/bold green]"
                         except Exception as e:
-                            status_message = f"[red]Failed to activate '{issue.slug}': {e}[/red]"
+                            status_message = (
+                                f"[red]Failed to activate '{issue.slug}': {e}[/red]"
+                            )
             elif key == "D" and not show_completed:  # done
                 live.stop()
                 issue = indexed_issues[cursor][0]
