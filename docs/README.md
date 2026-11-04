@@ -14,6 +14,8 @@ Welcome to the comprehensive documentation for **Task Agent**, a prioritized, fi
   - Information on project setup, testing, and release processes.
 - [**Station Map**](./STATION-MAP.md)
   - Formal declaration of task-agent as a typed file-path station system: stations, transitions, edge roles, and conformance gaps.
+- [**ADR 0001: store sync**](./adr/0001-sync-task-stores-with-an-operation-log.md)
+  - Git carries an append-only per-writer operation log. The station tree is a projection.
 
 ## 🚀 Quick Start
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 import re
 import subprocess
+import sys
 import os
 import shutil
 import stat
@@ -1106,6 +1107,12 @@ class TaskAgent:
             issues.append(new_issue)
             self.save_mission(issues)
             self.sync_mission()
+            self._record_op(
+                "move",
+                slug,
+                station=to_status,
+                from_station="completed",
+            )
             res = self._commit_task_store(f"task: restore {slug} → {to_status}")
             if res == "failed":
                 raise RuntimeError("Failed to commit changes to task store.")
@@ -1379,6 +1386,14 @@ class TaskAgent:
         # Reload to get the issue with proper priority from mission.usv
         issues = self.load_mission()
         created = next(i for i in issues if i.slug == slug)
+        self._record_op(
+            "create",
+            created.slug,
+            name=created.name,
+            station=created.status,
+            blocked_by=list(created.blocked_by),
+            subtask_of=created.subtask_of,
+        )
         res = self._commit_task_store(f"task: create {created.slug}")
         if res == "failed":
             raise RuntimeError("Failed to commit changes to task store.")
@@ -1419,6 +1434,13 @@ class TaskAgent:
 
             self.sync_mission()
             target.status = "pending"
+            for promoted_slug in promoted:
+                self._record_op(
+                    "move",
+                    promoted_slug,
+                    station="pending",
+                    from_station="draft",
+                )
             res = self._commit_task_store(f"task: promote {slug}")
             if res == "failed":
                 raise RuntimeError("Failed to commit changes to task store.")
@@ -1439,6 +1461,7 @@ class TaskAgent:
             if not target:
                 raise ValueError(f"Pending or active issue '{slug}' not found.")
 
+            from_station = target.status
             to_status = "pending" if target.status == "active" else "draft"
 
             def demote_single(s: str):
@@ -1463,6 +1486,14 @@ class TaskAgent:
 
             self.sync_mission()
             target.status = to_status
+            demoted = [target.slug, *children]
+            for demoted_slug in demoted:
+                self._record_op(
+                    "move",
+                    demoted_slug,
+                    station=to_status,
+                    from_station=from_station,
+                )
             res = self._commit_task_store(f"task: demote {slug} → {to_status}")
             if res == "failed":
                 raise RuntimeError("Failed to commit changes to task store.")
@@ -1479,6 +1510,7 @@ class TaskAgent:
             if target.status == "active":
                 return target
 
+            from_station = target.status
             if target.status not in ["pending", "draft"]:
                 raise ValueError(
                     f"Issue '{slug}' cannot be marked as active from status '{target.status}'."
@@ -1496,6 +1528,12 @@ class TaskAgent:
             shutil.move(str(source), str(dest))
             self.sync_mission()
             target.status = "active"
+            self._record_op(
+                "move",
+                slug,
+                station="active",
+                from_station=from_station,
+            )
             res = self._commit_task_store(f"task: active {slug}")
             if res == "failed":
                 raise RuntimeError("Failed to commit changes to task store.")
@@ -1545,6 +1583,7 @@ class TaskAgent:
                 updated_issue = issue
                 break
         self.save_mission(issues)
+        self._record_op("edges", slug, blocked_by=new_blocked_by)
         self._commit_task_store(f"task: add blocked_by on {slug}")
 
         if updated_issue:
@@ -1587,6 +1626,7 @@ class TaskAgent:
                 updated_issue = issue
                 break
         self.save_mission(issues)
+        self._record_op("edges", slug, blocked_by=new_blocked_by)
         self._commit_task_store(f"task: remove blocked_by on {slug}")
 
         if updated_issue:
@@ -1598,12 +1638,28 @@ class TaskAgent:
             status="completed",
         )
 
+    def _record_op(self, verb: str, slug: str, **payload: Any) -> None:
+        """Append one operation to this machine's store log.
+
+        The file lands under ``issues_root`` so the following
+        ``_commit_task_store`` includes it. Recording still happens when
+        auto-commit is off. See ADR 0001.
+        """
+        from taskagent.oplog import append_op
+
+        append_op(self.issues_root, verb=verb, slug=slug, payload=dict(payload))
+
     def _commit_task_store(self, message: str, no_verify: bool = True) -> str:
         """Commit task-store changes to the mission git root only.
 
         Targets ``mission_root`` (the store's git repo when dual/centralized).
         Uses ``git add -f`` so single-repo setups still capture gitignored
         ``.task-agent/tasks`` paths. Never creates empty commits.
+
+        After a real commit, when this git root is the task store and not the
+        subject repo, sync it to ``origin`` (fetch, merge, push). A sync
+        failure does not undo the local commit. Set ``TA_NO_AUTO_SYNC=1`` to
+        skip. Stores with no ``origin`` are left local.
 
         Returns short hash, ``no_changes``, ``no_git``, or ``failed``.
         """
@@ -1659,14 +1715,78 @@ class TaskAgent:
             return "failed"
 
         try:
-            return subprocess.check_output(
+            short = subprocess.check_output(
                 ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
                 stderr=subprocess.DEVNULL,
                 text=True,
                 shell=(os.name == "nt"),
             ).strip()
         except Exception:
-            return "unknown"
+            short = "unknown"
+        self._auto_sync_store()
+        return short
+
+    def _auto_sync_store(self) -> None:
+        """Publish the store repo after a local commit.
+
+        Runs only when ``mission_root`` is the store itself. A store that
+        still lives inside the subject repo is not pushed, because that git
+        root is the code checkout.
+        """
+        if os.environ.get("TA_NO_AUTO_SYNC", "").lower() in ("1", "true", "yes"):
+            return
+        if getattr(self, "_in_auto_sync", False):
+            return
+        if not self.mission_root or not self.issues_root:
+            return
+        store = self.mission_root.resolve()
+        if self.issues_root.resolve() != store:
+            return
+        if self.code_root and self.code_root.resolve() == store:
+            return
+
+        from taskagent.store_sync import sync_store
+
+        self._in_auto_sync = True
+        try:
+            try:
+                result = sync_store(store)
+            except Exception as exc:
+                self._abort_sync_merge(store)
+                self.last_store_sync = {
+                    "ok": False,
+                    "mode": "failed",
+                    "detail": str(exc),
+                }
+                print(
+                    f"task store saved locally; sync skipped: {exc}",
+                    file=sys.stderr,
+                )
+                return
+            self.last_store_sync = result
+            mode = result.get("mode")
+            if mode in {"pushed", "fast_forward", "merged"}:
+                print(f"task store sync: {mode}", file=sys.stderr)
+        finally:
+            self._in_auto_sync = False
+
+    @staticmethod
+    def _abort_sync_merge(store: Path) -> None:
+        """Drop a merge that sync started and could not finish."""
+        try:
+            merging = subprocess.run(
+                ["git", "-C", str(store), "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                capture_output=True,
+                shell=(os.name == "nt"),
+            )
+            if merging.returncode == 0:
+                subprocess.run(
+                    ["git", "-C", str(store), "merge", "--abort"],
+                    capture_output=True,
+                    shell=(os.name == "nt"),
+                )
+        except Exception:
+            return
 
     def _git_commit(
         self,
@@ -1929,6 +2049,12 @@ class TaskAgent:
             # 4. Commit Mission / Task Store
             if should_commit:
                 mission_msg = f"task: finalize {target_issue.slug}"
+                self._record_op(
+                    "move",
+                    target_issue.slug,
+                    station="completed",
+                    from_station="active",
+                )
                 mission_hash = self._commit_task_store(mission_msg, no_verify=no_verify)
                 if mission_hash == "failed":
                     raise RuntimeError(
@@ -2219,6 +2345,13 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._record_op(
+            "edges",
+            slug,
+            blocked_by=blocked_by,
+            subtask_of=subtask_of,
+            name=self.extract_title(issue_file),
+        )
         self._commit_task_store(f"task: update {slug}")
 
         # Return the issue object
@@ -2274,6 +2407,7 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._record_op("edges", slug, blocked_by=new_deps)
         self._commit_task_store(f"task: set blocked_by on {slug}")
 
         # Return the updated issue object
@@ -2326,6 +2460,7 @@ class TaskAgent:
 
         if updated:
             self.save_mission(issues)
+        self._record_op("edges", slug, subtask_of=subtask_of)
         self._commit_task_store(f"task: set subtask_of on {slug}")
 
         # Return the updated issue object
@@ -2474,6 +2609,12 @@ class TaskAgent:
                     i.subtask_of = new_slug
 
             self.save_mission(issues)
+            self._record_op(
+                "rename",
+                actual_old_slug,
+                new_slug=new_slug,
+                name=new_title.strip(),
+            )
             res = self._commit_task_store(
                 f"task: rename {actual_old_slug} to {new_slug}"
             )
@@ -3429,6 +3570,12 @@ class TaskAgent:
             self._set_writable(issue_file.parent, True)
             self._set_writable(lease_file, True)
             lease_file.write_text(json.dumps(lease_data, indent=2), encoding="utf-8")
+            self._record_op(
+                "lease",
+                slug,
+                worker_id=worker,
+                expires_at=exp_dt.isoformat(),
+            )
             self._commit_task_store(f"task: acquire lease on {slug} for {worker}")
         except (PermissionError, OSError):
             pass
@@ -3450,6 +3597,7 @@ class TaskAgent:
             self._set_writable(issue_file.parent, True)
             self._set_writable(lease_file, True)
             lease_file.unlink()
+            self._record_op("release", slug)
             self._commit_task_store(f"task: release lease on {slug}")
             return True
         except Exception:

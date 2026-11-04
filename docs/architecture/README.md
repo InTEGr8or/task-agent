@@ -2,6 +2,8 @@
 
 Task Agent is designed with a "filesystem-as-a-database" philosophy. This ensures that the task queue is highly portable, version-controlled by git, and easily readable by both humans and machines.
 
+Multi-writer sync of a store is an append-only operation log under `.task-agent/ops/<writer-id>/`. Git transports that log. `mission.usv` and the station directories are a projection. See [ADR 0001](../adr/0001-sync-task-stores-with-an-operation-log.md).
+
 ## 📂 Data Storage
 
 All task data is stored within the `docs/tasks/` directory.

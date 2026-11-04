@@ -33,6 +33,56 @@ _STORE_MARKERS = (
 )
 
 
+def is_wsl() -> bool:
+    """True when this process is Linux running inside WSL."""
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8").lower()
+    except OSError:
+        return False
+
+
+def drvfs_to_windows(path: Path) -> Optional[str]:
+    """Map ``/mnt/c/Users/...`` to ``C:\\Users\\...``. None for Linux-native paths."""
+    parts = path.expanduser().resolve().parts
+    if len(parts) < 3 or parts[1] != "mnt" or len(parts[2]) != 1:
+        return None
+    drive = parts[2].upper()
+    rest = "\\".join(parts[3:])
+    return f"{drive}:\\{rest}" if rest else f"{drive}:\\"
+
+
+def linux_to_wsl_unc(path: Path) -> Optional[str]:
+    """Map a Linux path to the ``\\\\wsl$\\<distro>\\...`` path Windows can open.
+
+    Returns None for drvfs paths (``/mnt/<drive>``) and when not running in WSL.
+    Stores stay on the Linux filesystem; this UNC is how Windows points
+    ``TA_DATA_ROOT`` at that same directory.
+    """
+    if not is_wsl():
+        return None
+    distro = os.environ.get("WSL_DISTRO_NAME", "").strip()
+    if not distro:
+        return None
+    resolved = path.expanduser().resolve()
+    text = str(resolved)
+    if text == "/mnt" or text.startswith("/mnt/"):
+        return None
+    tail = text.lstrip("/").replace("/", "\\")
+    return f"\\\\wsl$\\{distro}\\{tail}"
+
+
+def host_path_aliases(host: Path) -> List[str]:
+    """Paths that should resolve to one host: the Linux path, plus Windows if drvfs."""
+    resolved = str(host.expanduser().resolve())
+    aliases = [resolved]
+    windows = drvfs_to_windows(host)
+    if windows and windows not in aliases:
+        aliases.append(windows)
+    return aliases
+
+
 def get_data_root() -> Path:
     """Return the machine-level task-agent data root.
 
@@ -1965,7 +2015,7 @@ def migrate_store(
                 StoreEntry(
                     moniker=plan.moniker,
                     store_path=str(dest.resolve()),
-                    host_paths=[str(host.resolve())],
+                    host_paths=host_path_aliases(host),
                     remote=git_remote_url(dest),
                 )
             )
@@ -2070,7 +2120,7 @@ def migrate_store(
             StoreEntry(
                 moniker=plan.moniker,
                 store_path=str(dest.resolve()),
-                host_paths=[str(host.resolve())],
+                host_paths=host_path_aliases(host),
                 remote=git_remote_url(dest) if plan.kind == "nested_git" else None,
             )
         )

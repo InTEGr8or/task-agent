@@ -2112,6 +2112,10 @@ def cmd_store_help(console: Console) -> None:
             "rebind [moniker]",
             "Rebind after subject repo rename (moniker, pointers, registry)",
         ),
+        (
+            "sync",
+            "Fetch the store remote, merge, replay the op log, and push",
+        ),
     ]
     for cmd, desc in commands:
         table.add_row(cmd, desc)
@@ -2182,7 +2186,21 @@ def cmd_store(console: Console, args) -> None:
         return
 
     if sub == "data-root":
-        console.print(str(get_data_root()))
+        from taskagent.store_registry import linux_to_wsl_unc
+
+        root = get_data_root()
+        if getattr(args, "windows", False):
+            unc = linux_to_wsl_unc(root)
+            if not unc:
+                console.print(
+                    "[red]No Windows UNC for this data root.[/red] "
+                    "Run inside WSL, with the store on the Linux filesystem "
+                    "(not under /mnt)."
+                )
+                raise SystemExit(1)
+            console.print(unc)
+            return
+        console.print(str(root))
         return
 
     if sub == "path":
@@ -2879,6 +2897,48 @@ def cmd_store(console: Console, args) -> None:
 
     if sub == "yazi":
         cmd_yazi(console, None, args)
+        return
+
+    if sub == "sync":
+        from taskagent.store_sync import StoreSyncError, sync_store
+
+        host = _store_host_from_args(console, args)
+        report = inspect_host(host)
+        store_path = Path(
+            report["canonical_store_path"]
+            if report.get("canonical_store_exists")
+            else (report.get("legacy_store_path") or report["canonical_store_path"])
+        )
+        if not store_path.is_dir():
+            console.print(f"[red]No store at {store_path}[/red]")
+            raise SystemExit(1)
+        try:
+            result = sync_store(
+                store_path,
+                push=not bool(getattr(args, "no_push", False)),
+                dry_run=bool(getattr(args, "dry_run", False)),
+            )
+        except StoreSyncError as exc:
+            console.print(f"[red]Store sync failed:[/red] {exc}")
+            raise SystemExit(1) from exc
+        if getattr(args, "json", False):
+            console.print_json(data=result)
+            return
+        console.print(f"[bold]Mode[/bold]:  {result.get('mode')}")
+        console.print(f"[bold]Store[/bold]: {result.get('store')}")
+        if result.get("remote_ref"):
+            console.print(
+                f"[bold]Remote[/bold]: {result['remote_ref']} "
+                f"(behind {result.get('behind', 0)}, ahead {result.get('ahead', 0)})"
+            )
+        if result.get("detail"):
+            console.print(f"[dim]{result['detail']}[/dim]")
+        if result.get("materialized"):
+            console.print(
+                f"[bold]Materialized[/bold]: {result['materialized']} op(s) applied"
+            )
+        if result.get("pushed"):
+            console.print("[green]Pushed.[/green]")
         return
 
     if sub == "migrate":
@@ -6915,9 +6975,17 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         help="Inspect machine-level task store layout (data root, moniker, registry)",
     )
     store_sub = store_parser.add_subparsers(dest="store_command")
-    store_sub.add_parser(
+    data_root_p = store_sub.add_parser(
         "data-root",
         help="Print the machine-wide task-agent data home (~/.local/share/task-agent)",
+    )
+    data_root_p.add_argument(
+        "--windows",
+        action="store_true",
+        help=(
+            "On WSL, print the \\\\wsl$\\<distro>\\... UNC for TA_DATA_ROOT "
+            "so Windows uses this Linux directory instead of a second copy"
+        ),
     )
     path_p = store_sub.add_parser(
         "path",
@@ -7017,6 +7085,34 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         help="Plan only; do not move data or rewrite pointers",
     )
     migrate_p.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    sync_p = store_sub.add_parser(
+        "sync",
+        help="Fetch the store remote, merge the op log into the tree, and push",
+    )
+    sync_p.add_argument(
+        "--repo",
+        default=None,
+        help="Fuzzy moniker/host match (e.g. nvim)",
+    )
+    sync_p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Host project path (default: current directory)",
+    )
+    sync_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch and report ahead/behind without merging or pushing",
+    )
+    sync_p.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Integrate the remote and materialize, but do not push",
+    )
+    sync_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
     remote_parser = store_sub.add_parser(
