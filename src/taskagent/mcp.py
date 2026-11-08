@@ -1562,18 +1562,46 @@ def import_agent_tasks(
 def get_last_active_agent(
     path: str = "",
     limit: int = 5,
+    global_sessions: bool = False,
+    agent: str = "",
 ) -> str:
-    """Find and rank most recently active AI coding agent CLIs in a project repository.
+    """Find and rank most recently active AI coding agent CLIs in a project repository or globally.
 
     Args:
         path: Target repository directory path (defaults to working directory if empty).
-        limit: Maximum number of active agents to return (default: 5).
+        limit: Maximum number of active agents/sessions to return (default: 5).
+        global_sessions: If True, search across all workspaces globally for recent sessions.
+        agent: Optional filter for a specific agent CLI (e.g. grok, agy, claude, opencode).
 
     Returns:
-        Formatted summary list of recently active AI agent CLIs, sorted descending by last active date,
-        including description and first 200 characters of the last user comment.
+        Formatted summary list of recently active AI agent CLIs or sessions, sorted descending by last active date.
     """
     from pathlib import Path
+
+    if global_sessions:
+        from taskagent.chat.last_used import get_global_recent_sessions
+
+        sessions = get_global_recent_sessions(
+            limit=limit, agent_id=agent if agent.strip() else None
+        )
+        if not sessions:
+            filter_msg = f" for agent '{agent}'" if agent.strip() else ""
+            return f"No recent agent sessions found{filter_msg}."
+
+        lines = ["### 🤖 Global Recent Agent Sessions\n"]
+        for idx, sess in enumerate(sessions, start=1):
+            rel_time = sess.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
+            topic = sess.title or sess.last_user_comment or "(no topic logged)"
+            cwd_str = str(sess.cwd) if sess.cwd else "(unknown directory)"
+            lines.append(f"{idx}. **{sess.agent_name}** (`{sess.agent_id}`)")
+            lines.append(f"   - **Directory**: `{cwd_str}`")
+            lines.append(f"   - **Session ID**: `{sess.session_id}`")
+            lines.append(f"   - **Last Active**: {rel_time}")
+            lines.append(f"   - **Topic/Comment**: {topic}")
+            lines.append(f"   - **Reopen**: `{sess.reopen_command}`")
+            lines.append("")
+        return "\n".join(lines).strip()
+
     from taskagent.chat.last_used import get_last_active_agents
 
     target_path = Path(path).resolve() if path and path.strip() else Path.cwd()

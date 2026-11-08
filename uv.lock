@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -790,15 +790,15 @@ wheels = [
 
 [[package]]
 name = "multi-agent-registry"
-version = "0.5.0"
+version = "0.6.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich" },
     { name = "verkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/74/cb/7647c81617054301169d6dc28d3dd87c2a0e90795bdcd989d227db465f88/multi_agent_registry-0.5.0.tar.gz", hash = "sha256:b755985eee444815a2b2f7012da55693b5ac0ddb2a160f7bb75bc076e9d99b84", size = 16735, upload-time = "2026-09-08T19:24:13.724Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/15/375c6a1bd93c879bb2316b8b82921b95ee78fe765ab04e686cea87f513ae/multi_agent_registry-0.6.2.tar.gz", hash = "sha256:7ff6c2829dfc726ae09962ed9a251ccdc75446f4635a82697a809849026ad1d3", size = 47293, upload-time = "2026-11-08T05:00:25.458Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/93/002c5d1cab097fb5bc1215f2289605cf1c88439b5cb16e12cdf9e0ac851e/multi_agent_registry-0.5.0-py3-none-any.whl", hash = "sha256:0ba41c1ca64e0279308f1ebd9a91f9cf6df5c2c7405dc4e7abde18e1aa75b181", size = 16421, upload-time = "2026-09-08T19:24:12.54Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/78/307e34516548fa4c58784a9daef03330e9eae259ade4750dbd8d9ce96bb8/multi_agent_registry-0.6.2-py3-none-any.whl", hash = "sha256:4f7cd03ddece4df1093a411bc3fe4dec4b1e2a01d6d99ce5787b43e3738d1d2d", size = 41060, upload-time = "2026-11-08T05:00:24.04Z" },
 ]
 
 [[package]]
@@ -1442,7 +1442,7 @@ wheels = [
 
 [[package]]
 name = "task-agent"
-version = "1.3.11"
+version = "1.3.12"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },

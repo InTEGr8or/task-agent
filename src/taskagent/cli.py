@@ -4842,14 +4842,106 @@ def cmd_agent_import(
 def cmd_agent_last_used(
     console: Console,
     path_arg: Optional[str] = None,
-    limit: int = 5,
+    limit: Optional[int] = None,
     json_format: bool = False,
+    global_sessions: bool = False,
+    agent_filter: Optional[str] = None,
 ) -> None:
-    """Handler for 'ta agent last-used' subcommand."""
+    """Handler for 'ta agent last-used' and 'ta agent recent' subcommands."""
+    if global_sessions:
+        from taskagent.chat.last_used import get_global_recent_sessions
+
+        effective_limit = limit if limit is not None else 10
+        sessions = get_global_recent_sessions(
+            limit=effective_limit, agent_id=agent_filter
+        )
+
+        if json_format:
+            output = [
+                {
+                    "agent_id": item.agent_id,
+                    "agent_name": item.agent_name,
+                    "session_id": item.session_id,
+                    "cwd": str(item.cwd) if item.cwd else None,
+                    "last_active": item.last_active.isoformat(),
+                    "title": item.title,
+                    "last_user_comment": item.last_user_comment,
+                    "reopen_command": item.reopen_command,
+                    "log_path": str(item.log_path),
+                }
+                for item in sessions
+            ]
+            print(json.dumps(output, indent=2))
+            return
+
+        if not sessions:
+            filter_msg = f" for agent '{agent_filter}'" if agent_filter else ""
+            console.print(
+                f"[yellow]No recent agent sessions found{filter_msg}.[/yellow]"
+            )
+            return
+
+        header_title = (
+            "\n[bold green]🤖 Global Recent Agent Sessions[/bold green]"
+            + (f" [dim](filtered by: {agent_filter})[/dim]" if agent_filter else "")
+            + "\n"
+        )
+        console.print(header_title)
+
+        table = Table(
+            box=None,
+            padding=(0, 2, 0, 0),
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Agent CLI", style="bold yellow")
+        table.add_column("Last Active (UTC)", style="green")
+        table.add_column("Working Directory", style="bold blue")
+        table.add_column("Session ID", style="dim cyan")
+        table.add_column("Topic / Title", style="white")
+
+        for idx, sess in enumerate(sessions, start=1):
+            rel_time = sess.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
+            topic = (
+                sess.title
+                if sess.title
+                else (
+                    sess.last_user_comment
+                    if sess.last_user_comment
+                    else "[dim](no topic logged)[/dim]"
+                )
+            )
+            if len(topic) > 60:
+                topic = topic[:57] + "..."
+            cwd_disp = str(sess.cwd) if sess.cwd else "[dim](unknown)[/dim]"
+            sid_disp = (
+                sess.session_id[:16] + "..."
+                if len(sess.session_id) > 19
+                else sess.session_id
+            )
+            table.add_row(
+                str(idx),
+                sess.agent_name,
+                rel_time,
+                cwd_disp,
+                sid_disp,
+                topic,
+            )
+
+        console.print(table)
+
+        console.print("\n[bold cyan]💡 Commands to Reopen Sessions:[/bold cyan]")
+        for idx, sess in enumerate(sessions, start=1):
+            console.print(f"  [dim][{idx}][/dim] [green]{sess.reopen_command}[/green]")
+        console.print()
+        return
+
     from taskagent.chat.last_used import get_last_active_agents
 
+    effective_limit = limit if limit is not None else 5
     target_path = Path(path_arg).resolve() if path_arg else Path.cwd()
-    results = get_last_active_agents(project_dir=target_path, limit=limit)
+    results = get_last_active_agents(project_dir=target_path, limit=effective_limit)
 
     if json_format:
         output = [
@@ -6825,12 +6917,13 @@ Start working on a task. This command automates the following workflow:
     agents_parser = subparsers.add_parser(
         "agents",
         help="Inspect installed agent CLIs and task-agent MCP/plugin integration status",
+        description="Inspect installed agent CLIs on the local system and their task-agent MCP/plugin integration status.",
     )
     agents_parser.add_argument(
         "agent_name",
         nargs="?",
         default=None,
-        help="Specific agent CLI ID to inspect (e.g. claude, agy, opencode, copilot)",
+        help="Specific agent CLI ID to inspect (e.g. claude, agy, opencode, copilot) or 'all' to inspect all",
     )
     agents_parser.add_argument(
         "--json",
@@ -6842,9 +6935,26 @@ Start working on a task. This command automates the following workflow:
     agent_parser = subparsers.add_parser(
         "agent",
         help="Agent management and task integration",
+        description="Agent management and task integration for AI coding agent CLIs.",
     )
     agent_sub = agent_parser.add_subparsers(
         dest="agent_subcommand", help="Agent subcommand"
+    )
+    agent_list_p = agent_sub.add_parser(
+        "list",
+        aliases=["inspect", "status"],
+        help="Inspect installed agent CLIs and task-agent MCP/plugin integration status",
+    )
+    agent_list_p.add_argument(
+        "agent_name",
+        nargs="?",
+        default=None,
+        help="Specific agent CLI ID to inspect (e.g. claude, agy, opencode, copilot)",
+    )
+    agent_list_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output inspection data as JSON",
     )
     agent_import_p = agent_sub.add_parser(
         "import",
@@ -6873,7 +6983,7 @@ Start working on a task. This command automates the following workflow:
     agent_recent_p = agent_sub.add_parser(
         "recent",
         aliases=["last-used"],
-        help="List AI coding agents recently active in this repository",
+        help="List AI coding agents recently active in this repository or globally",
     )
     agent_recent_p.add_argument(
         "path",
@@ -6882,10 +6992,23 @@ Start working on a task. This command automates the following workflow:
         help="Target repository directory (defaults to cwd)",
     )
     agent_recent_p.add_argument(
+        "-g",
+        "--global",
+        dest="global_sessions",
+        action="store_true",
+        help="Show a global list of recent sessions across all repositories for registered agents",
+    )
+    agent_recent_p.add_argument(
+        "-a",
+        "--agent",
+        default=None,
+        help="Filter sessions to a specific registered agent (e.g. grok, agy, claude, opencode)",
+    )
+    agent_recent_p.add_argument(
         "--limit",
         type=int,
-        default=5,
-        help="Maximum number of active agents to return (default: 5)",
+        default=None,
+        help="Maximum number of active sessions to return (default: 10 global, 5 local)",
     )
     agent_recent_p.add_argument(
         "--json",
@@ -7718,8 +7841,32 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
         extra = unknown_args + (args.extra_args if hasattr(args, "extra_args") else [])
         cmd_log(console, manager, extra_args=extra, repo=args.repo)
     elif args.command == "agents":
-        cmd_agents_list(console, agent_id=args.agent_name, json_format=args.json)
+        if not getattr(args, "agent_name", None) and not getattr(args, "json", False):
+            agents_parser.print_help()
+            return
+        if getattr(args, "agent_name", None) in ("recent", "last-used"):
+            cmd_agent_last_used(
+                console,
+                path_arg=None,
+                limit=getattr(args, "limit", None),
+                json_format=getattr(args, "json", False),
+                global_sessions=getattr(args, "global_sessions", False),
+                agent_filter=getattr(args, "agent", None),
+            )
+        elif getattr(args, "agent_name", None) in ("all", "list"):
+            cmd_agents_list(
+                console, agent_id=None, json_format=getattr(args, "json", False)
+            )
+        else:
+            cmd_agents_list(
+                console,
+                agent_id=args.agent_name,
+                json_format=getattr(args, "json", False),
+            )
     elif args.command == "agent":
+        if not getattr(args, "agent_subcommand", None):
+            agent_parser.print_help()
+            return
         if args.agent_subcommand == "import":
             cmd_agent_import(
                 console,
@@ -7735,11 +7882,17 @@ TA_STRATEGY_COOLDOWN_HOURS environment variable.
                 path_arg=args.path,
                 limit=args.limit,
                 json_format=args.json,
+                global_sessions=getattr(args, "global_sessions", False),
+                agent_filter=getattr(args, "agent", None),
+            )
+        elif args.agent_subcommand in ("list", "inspect", "status"):
+            cmd_agents_list(
+                console,
+                agent_id=getattr(args, "agent_name", None),
+                json_format=getattr(args, "json", False),
             )
         else:
-            console.print(
-                "[yellow]Unknown agent subcommand. Use 'ta agent import' or 'ta agent recent'.[/yellow]"
-            )
+            agent_parser.print_help()
     elif args.command == "push":
         cmd_push(console, manager)
     elif args.command == "plan":
